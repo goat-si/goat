@@ -146,6 +146,8 @@ pub(crate) struct Inner {
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
     engine_groups_hook: Mutex<Option<EngineGroupsHook>>,
+    /// Actor and background tasks, aborted on shutdown so the host (and the store lock) drops.
+    tasks: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 type EngineGroupsHook = Box<dyn Fn(Vec<i32>) + Send + Sync>;
@@ -188,6 +190,7 @@ impl Host {
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
                 engine_groups_hook: Mutex::new(None),
+                tasks: Mutex::new(Vec::new()),
             }),
         };
         Ok(host)
@@ -226,9 +229,11 @@ impl Host {
 
     /// Settle runs, wake parents, load bots (creating GOAT on first start), resume queues, start
     /// the memory sampler. Must run inside a tokio runtime.
-    pub async fn start(&self) -> StoreResult<()> {
+    /// `settled`: threads whose runs the store settled when it opened (`StartupReport.settled`).
+    pub async fn start(&self, settled: &[ThreadId]) -> StoreResult<()> {
         let started = Instant::now();
-        settle::settle_and_resume(self).await?;
+        settle::settle_and_resume(self, settled).await?;
+        self.spawn_flusher();
         commands::load_bots(self)?;
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
@@ -252,6 +257,20 @@ impl Host {
             session.shutdown().await;
         }
         self.engine_groups_changed();
+        for task in self.inner.tasks.lock().expect("tasks").drain(..) {
+            task.abort();
+        }
+        self.inner.actors.lock().expect("actors").clear();
+        let store = self.inner.store.clone();
+        let _ = tokio::task::spawn_blocking(move || store.flush()).await;
+    }
+
+    pub(crate) fn track(&self, task: &tokio::task::JoinHandle<()>) {
+        self.inner
+            .tasks
+            .lock()
+            .expect("tasks")
+            .push(task.abort_handle());
     }
 
     /// The actor mailbox for a thread, spawning the actor if needed. `None` if the thread is
@@ -293,11 +312,9 @@ impl Host {
         events: Vec<LogEvent>,
         durable: bool,
     ) -> StoreResult<Appended> {
-        let appended = if durable {
-            self.inner.store.append_durable(id, events)?
-        } else {
-            self.inner.store.append(id, events)?
-        };
+        // Lane A syncs send-boundary batches (run.started) before append returns.
+        let _ = durable;
+        let appended = self.inner.store.append(id, events)?;
         self.publish(id, &appended);
         Ok(appended)
     }
@@ -545,9 +562,25 @@ impl Host {
             .cloned()
     }
 
+    /// Lane A batches in-run card writes until `flush`.
+    fn spawn_flusher(&self) {
+        let host = self.clone();
+        let task = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                let store = host.inner.store.clone();
+                if let Ok(Err(err)) = tokio::task::spawn_blocking(move || store.flush()).await {
+                    tracing::warn!(%err, "card flush failed");
+                }
+            }
+        });
+        self.track(&task);
+    }
+
     fn spawn_memory_sampler(&self) {
         let host = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut tick = tokio::time::interval(host.inner.opts.memory_sample);
             tick.tick().await;
             loop {
@@ -555,6 +588,7 @@ impl Host {
                 host.sample_memory();
             }
         });
+        self.track(&task);
     }
 
     /// Sample every live engine group once (idle-stopped processes have no session).

@@ -14,7 +14,7 @@ use crate::engine::EngineFactory;
 use crate::engine::codex::CodexFactory;
 use crate::engine::fake::{FakeEngine, FakeScript};
 use crate::stall::StallRecorder;
-use crate::store::FsStore;
+use crate::store::LaneAStore;
 
 /// `<dataDir>/host.json`, mode 0600.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -135,13 +135,32 @@ pub async fn start_with_engine(
     if let Some(previous) = &previous {
         kill_leftovers(previous);
     }
-    let generation = previous.as_ref().map_or(0, |p| p.generation) + 1;
     let generated_token = cfg.ui_token.is_none();
     let ui_token = cfg.ui_token.clone().unwrap_or_else(crate::util::new_token);
 
     let stall = StallRecorder::open(&data_dir).map_err(|e| format!("stall log: {e}"))?;
     let ticker = stall.spawn_ticker();
-    let store = Arc::new(FsStore::open(&data_dir).map_err(|e| format!("thread store: {e}"))?);
+    let (store, report) = LaneAStore::open(&data_dir).map_err(|e| format!("thread store: {e}"))?;
+    stall.note(
+        "store_open",
+        serde_json::to_value(&report).unwrap_or_default(),
+    );
+    let settled: Vec<goat2_contracts::ThreadId> = report
+        .settled
+        .iter()
+        .map(|s| goat2_contracts::ThreadId::new(s.thread_id.clone()))
+        .collect();
+    let store = Arc::new(store);
+    // Bumped only once this host holds the store lock (a refused start changes nothing).
+    // The generation outlives host.json (removed on a clean exit): `<dataDir>/generation`.
+    let generation_path = data_dir.join("generation");
+    let stored = std::fs::read_to_string(&generation_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    let generation = stored.max(previous.as_ref().map_or(0, |p| p.generation)) + 1;
+    std::fs::write(&generation_path, format!("{generation}\n"))
+        .map_err(|e| format!("generation file: {e}"))?;
     let engine: Arc<dyn EngineFactory> = match engine {
         Some(engine) => engine,
         None => match cfg.engine {
@@ -182,7 +201,9 @@ pub async fn start_with_engine(
         });
     }
 
-    host.start().await.map_err(|e| format!("startup: {e}"))?;
+    host.start(&settled)
+        .await
+        .map_err(|e| format!("startup: {e}"))?;
 
     let health_generation = generation;
     let app = Router::new()

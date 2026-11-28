@@ -184,5 +184,39 @@ async fn ui_and_agent_paths_through_the_real_server() {
         refused["result"]["structuredContent"]["error"]["reason"],
         "no_active_run"
     );
+    ws.close(None).await.unwrap();
+    drop(ws);
     running.shutdown().await;
+
+    // The next start on the same folder is a new generation, and the GOAT bot is not duplicated.
+    // Connection tasks wind down after the client closed; the store lock goes with them.
+    let started = std::time::Instant::now();
+    let again = loop {
+        let cfg = HostConfig {
+            data_dir: dir.path().to_path_buf(),
+            port: 0,
+            ui_token: Some("ui-secret".into()),
+            engine: EngineChoice::Fake,
+            exit_on_stdin_close: false,
+        };
+        match goat2_host::server::start_with_engine(cfg, Some(Arc::new(fake.clone()))).await {
+            Ok(running) => break running,
+            Err(err) if err.contains("locked") && started.elapsed() < Duration::from_secs(5) => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Err(err) => panic!("{err}"),
+        }
+    };
+    assert_eq!(again.ready.generation, ready.generation + 1);
+    assert_eq!(
+        again
+            .host
+            .store()
+            .cards()
+            .iter()
+            .filter(|c| c.kind == goat2_contracts::ThreadKind::Bot)
+            .count(),
+        1
+    );
+    again.shutdown().await;
 }

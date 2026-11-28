@@ -37,7 +37,7 @@ fn refusal(r: Refusal) -> crate::api::CommandError {
 
 fn store_error(e: StoreError) -> crate::api::CommandError {
     match e {
-        StoreError::NotFound(id) => {
+        StoreError::ThreadMissing(id) => {
             command_error(Reason::ThreadNotFound, format!("thread {id} not found"))
         }
         other => command_error(Reason::Internal, other.to_string()),

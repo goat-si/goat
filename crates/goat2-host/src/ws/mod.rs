@@ -176,31 +176,25 @@ async fn connection(socket: WebSocket, app: App) {
 async fn cards(host: Arc<dyn WsHost>, tx: Tx, sub_id: String, after: Option<CardCursor>) {
     let mut rx = host.watch_cards();
     let store = host.store();
-    let epoch = store.index_epoch();
-    let cards = store.cards();
-    let mut last = 0;
-    if let Some(cursor) = after {
-        // A deletion after the cursor cannot be sent as a delta (no tombstones): reset.
-        let reason = if cursor.epoch != epoch {
-            Some(ResetReason::EpochChanged)
-        } else if store.last_deletion_card_seq() > cursor.card_seq {
-            Some(ResetReason::InvalidCursor)
-        } else {
-            None
-        };
-        match reason {
-            Some(reason) => send(
-                &tx,
-                HostFrame::CardsReset {
-                    sub_id: sub_id.clone(),
-                    reason,
-                    epoch: epoch.clone(),
-                },
-            ),
-            None => last = cursor.card_seq,
-        }
+    // The store's cursor contract: other epoch, past the end, or before a deletion (no
+    // tombstones in Part 1) answers every card plus a reset.
+    let read = store.cards_after(after.as_ref());
+    let epoch = read.cursor.epoch.clone();
+    let mut last = match (&read.reset, &after) {
+        (None, Some(cursor)) => cursor.card_seq,
+        _ => 0,
+    };
+    if let (Some(reason), Some(_)) = (read.reset, &after) {
+        send(
+            &tx,
+            HostFrame::CardsReset {
+                sub_id: sub_id.clone(),
+                reason,
+                epoch: epoch.clone(),
+            },
+        );
     }
-    for card in cards {
+    for card in read.cards {
         if card.card_seq > last {
             last = card.card_seq;
             send(
@@ -333,10 +327,10 @@ fn replay(
 ) -> Result<Replay, StoreError> {
     let epoch = store
         .thread_epoch(id)
-        .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
     let last = store
         .last_seq(id)
-        .ok_or_else(|| StoreError::NotFound(id.clone()))?;
+        .ok_or_else(|| StoreError::ThreadMissing(id.to_string()))?;
     let mut reset = forced;
     let mut start = match after {
         Some(cursor) if reset.is_none() && cursor.epoch != epoch => {
@@ -403,7 +397,7 @@ async fn do_replay(
         tokio::task::spawn_blocking(move || replay(store.as_ref(), &read_id, after, forced)).await;
     let replay = match result {
         Ok(Ok(r)) => r,
-        Ok(Err(StoreError::NotFound(_))) => {
+        Ok(Err(StoreError::ThreadMissing(_))) => {
             send(
                 tx,
                 HostFrame::ThreadReset {
@@ -539,7 +533,7 @@ mod tests {
         api::{
             BotProfile, Command, CommandReply, CommandValue, Reason, StreamingItem, command_error,
         },
-        store::FsStore,
+        store::LaneAStore,
     };
     use async_trait::async_trait;
     use goat2_contracts::{
@@ -551,7 +545,7 @@ mod tests {
     };
     type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
     struct Fake {
-        store: Arc<FsStore>,
+        store: Arc<LaneAStore>,
         cards: broadcast::Sender<CardUpdate>,
         lines: broadcast::Sender<ThreadLive>,
         inject_line: std::sync::atomic::AtomicBool,
@@ -630,7 +624,7 @@ mod tests {
     }
     async fn setup() -> (tempfile::TempDir, Arc<Fake>, String) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(FsStore::open(dir.path()).unwrap());
+        let store = Arc::new(LaneAStore::open(dir.path()).unwrap().0);
         store.create(&ThreadId::from("t"), created()).unwrap();
         let (cards, _) = broadcast::channel(256);
         let (lines, _) = broadcast::channel(256);
@@ -752,7 +746,8 @@ mod tests {
             .send(CardUpdate::BotRemoved { bot_id: "b".into() })
             .unwrap();
         assert_eq!(read(&mut ws).await["botId"], "b");
-        let card_seq = host.store.delete(&ThreadId::from("t")).unwrap();
+        let card_seq = host.store.cards_after(None).cursor.card_seq + 1;
+        host.store.delete(&ThreadId::from("t")).unwrap();
         host.cards
             .send(CardUpdate::Removed {
                 thread_id: "t".into(),
@@ -769,7 +764,8 @@ mod tests {
         .await;
         let reset = read(&mut again).await;
         assert_eq!(reset["type"], "cards_reset");
-        assert_eq!(reset["reason"], "invalid_cursor");
+        // The store's reason for a cursor older than a deletion (lane A DESIGN.md cursor table).
+        assert_eq!(reset["reason"], "thread_missing");
     }
     #[tokio::test]
     async fn thread_replay_cursors_stream_resync_and_page() {
@@ -932,27 +928,43 @@ mod tests {
         host.store
             .append(&id, vec![LogEvent::ThreadChanged(ThreadChanged::default())])
             .unwrap();
-        let checkpoint = goat2_contracts::Checkpoint {
-            card: host.store.card(&id).unwrap(),
-            fold: host.store.fold(&id).unwrap(),
-        };
+        // The store writes a checkpoint after every run.finished (seq 6 here).
+        let run: goat2_contracts::RunId = "run_1".into();
         host.store
             .append(
                 &id,
-                vec![
-                    LogEvent::Checkpoint(checkpoint),
-                    LogEvent::ThreadChanged(ThreadChanged::default()),
-                ],
+                vec![LogEvent::RunStarted(goat2_contracts::RunStarted {
+                    run_id: run.clone(),
+                    input_ids: vec![],
+                    generation: 1,
+                    engine_ref: None,
+                })],
             )
             .unwrap();
+        host.store
+            .append(
+                &id,
+                vec![LogEvent::RunFinished(goat2_contracts::RunFinished {
+                    run_id: run,
+                    outcome: goat2_contracts::RunOutcome::Completed,
+                    reason: None,
+                })],
+            )
+            .unwrap();
+        host.store
+            .append(&id, vec![LogEvent::ThreadChanged(ThreadChanged::default())])
+            .unwrap();
+        let checkpoint = host.store.latest_checkpoint_seq(&id).unwrap().unwrap();
         let mut ws = connect(&url).await;
         write(
             &mut ws,
             json!({"type":"subscribe_thread","subId":"s","threadId":"t"}),
         )
         .await;
-        assert_eq!(read(&mut ws).await["line"]["seq"], 3);
-        assert_eq!(read(&mut ws).await["line"]["seq"], 4);
+        let first = read(&mut ws).await;
+        assert_eq!(first["line"]["seq"], checkpoint);
+        assert_eq!(first["line"]["type"], "checkpoint");
+        assert_eq!(read(&mut ws).await["line"]["seq"], checkpoint + 1);
         assert_eq!(read(&mut ws).await["type"], "thread_caught_up");
     }
     #[tokio::test]

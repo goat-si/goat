@@ -14,7 +14,7 @@ use goat2_host::core::{Host, HostOptions};
 use goat2_host::engine::fake::{FakeCall, FakeEngine, FakeScript};
 use goat2_host::engine::{SteerResult, TurnStartResult};
 use goat2_host::stall::StallRecorder;
-use goat2_host::store::FsStore;
+use goat2_host::store::LaneAStore;
 
 struct T {
     host: Host,
@@ -45,11 +45,17 @@ async fn open_at(
     fake: FakeEngine,
     generation: u64,
 ) -> T {
-    let store = Arc::new(FsStore::open(path).unwrap());
+    let (store, report) = LaneAStore::open(path).unwrap();
+    let settled: Vec<ThreadId> = report
+        .settled
+        .iter()
+        .map(|s| ThreadId::new(s.thread_id.clone()))
+        .collect();
+    let store = Arc::new(store);
     let stall = StallRecorder::open(path).unwrap();
     let host = Host::open(opts(path, generation), store, Arc::new(fake.clone()), stall).unwrap();
     host.set_mcp_url("http://127.0.0.1:1/mcp".into());
-    host.start().await.unwrap();
+    host.start(&settled).await.unwrap();
     T {
         host,
         fake,
@@ -189,7 +195,18 @@ async fn caller(t: &T, id: &ThreadId) -> Caller {
         })
         .expect("engine started");
     let grant = t.host.grant(&token).expect("token valid");
-    t.host.caller(&grant).await.expect("active run")
+    // The engine turn starts a moment before the host records the run as active.
+    let start = Instant::now();
+    loop {
+        match t.host.caller(&grant).await {
+            Ok(caller) => return caller,
+            Err(err) if start.elapsed() < Duration::from_secs(5) => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(err) => panic!("no active run: {err:?}"),
+        }
+    }
 }
 
 fn child_id(result: &SurfaceResult) -> ThreadId {
@@ -726,71 +743,88 @@ async fn queue_edit_cancel_reorder_and_promote() {
 async fn restart_settles_runs_and_wakes_parents() {
     let keep = tempfile::tempdir().unwrap();
     let path = keep.path().to_path_buf();
-    let (unknown_thread, accepted_thread, bot, child, held_input);
-    {
-        let t = open_at(&path, None, FakeEngine::new(manual()), 1).await;
-        bot = main_bot(&t);
-        // A run that reached the engine.
-        accepted_thread = start_user_thread(&t, "acc", Some("x")).await;
-        eventually("running", || running(&t, &accepted_thread)).await;
-        // A run that never got an answer: the fake hangs before answering turn/start.
-        unknown_thread = start_user_thread(&t, "unk", None).await;
-        // A bot with a running child.
-        send(&t, &bot, "b", "go", InputMode::Followup).await;
-        eventually("bot running", || running(&t, &bot)).await;
-        let me = caller(&t, &bot).await;
-        child = child_id(
-            &t.host
-                .thread_start(
-                    &me,
-                    ThreadStartArgs {
-                        task: "child".into(),
-                        ..Default::default()
-                    },
+    // First host generation on its own runtime: dropping the runtime drops the host and the
+    // store, which releases the data folder lock (lane A store.lock).
+    let phase1_path = path.clone();
+    let (unknown_thread, accepted_thread, bot, child, held_input) = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt.block_on(async move {
+            let path = phase1_path;
+            let t = open_at(&path, None, FakeEngine::new(manual()), 1).await;
+            let bot = main_bot(&t);
+            // A run that reached the engine.
+            let accepted_thread = start_user_thread(&t, "acc", Some("x")).await;
+            eventually("running", || running(&t, &accepted_thread)).await;
+            // A run that never got an answer: the fake hangs before answering turn/start.
+            let unknown_thread = start_user_thread(&t, "unk", None).await;
+            // A bot with a running child.
+            send(&t, &bot, "b", "go", InputMode::Followup).await;
+            eventually("bot running", || running(&t, &bot)).await;
+            let me = caller(&t, &bot).await;
+            let child = child_id(
+                &t.host
+                    .thread_start(
+                        &me,
+                        ThreadStartArgs {
+                            task: "child".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await,
+            );
+            eventually("child running", || running(&t, &child)).await;
+            t.fake.finish_turn(&bot, "ok");
+            eventually("bot idle", || !running(&t, &bot)).await;
+            // Simulate a crash between run.started and the engine's answer.
+            let store = t.host.store().clone();
+            let accepted = store
+                .append(
+                    &unknown_thread,
+                    vec![LogEvent::InputAccepted(goat2_contracts::InputAccepted {
+                        input_id: "in_held".into(),
+                        from: InputSource::User,
+                        mode: InputMode::Followup,
+                        text: "maybe sent".into(),
+                        attachments: vec![],
+                        client_request_id: "held-1".into(),
+                    })],
                 )
-                .await,
-        );
-        eventually("child running", || running(&t, &child)).await;
-        t.fake.finish_turn(&bot, "ok");
-        eventually("bot idle", || !running(&t, &bot)).await;
-        // Simulate a crash between run.started and the engine's answer.
-        let store = t.host.store().clone();
-        let accepted = store
-            .append(
-                &unknown_thread,
-                vec![LogEvent::InputAccepted(goat2_contracts::InputAccepted {
-                    input_id: "in_held".into(),
-                    from: InputSource::User,
-                    mode: InputMode::Followup,
-                    text: "maybe sent".into(),
-                    attachments: vec![],
-                    client_request_id: "held-1".into(),
-                })],
-            )
-            .unwrap();
-        assert_eq!(accepted.fold.queued_inputs.len(), 1);
-        store
-            .append_durable(
-                &unknown_thread,
-                vec![LogEvent::RunStarted(goat2_contracts::RunStarted {
-                    run_id: "run_lost".into(),
-                    input_ids: vec!["in_held".into()],
-                    generation: 1,
-                    engine_ref: None,
-                })],
-            )
-            .unwrap();
-        held_input = goat2_contracts::InputId::new("in_held");
-        t.host.shutdown().await;
-    }
+                .unwrap();
+            assert_eq!(accepted.fold.queued_inputs.len(), 1);
+            store
+                .append(
+                    &unknown_thread,
+                    vec![LogEvent::RunStarted(goat2_contracts::RunStarted {
+                        run_id: "run_lost".into(),
+                        input_ids: vec!["in_held".into()],
+                        generation: 1,
+                        engine_ref: None,
+                    })],
+                )
+                .unwrap();
+            let held_input = goat2_contracts::InputId::new("in_held");
+            t.host.shutdown().await;
+            (unknown_thread, accepted_thread, bot, child, held_input)
+        });
+        drop(rt);
+        out
+    })
+    .join()
+    .unwrap();
     // Next host generation on the same folder.
     let t = {
-        let store = Arc::new(FsStore::open(&path).unwrap());
+        let (store, report) = LaneAStore::open(&path).unwrap();
+        let settled: Vec<ThreadId> = report
+            .settled
+            .iter()
+            .map(|s| ThreadId::new(s.thread_id.clone()))
+            .collect();
+        let store = Arc::new(store);
         let stall = StallRecorder::open(&path).unwrap();
         let fake = FakeEngine::new(manual());
         let host = Host::open(opts(&path, 2), store, Arc::new(fake.clone()), stall).unwrap();
         host.set_mcp_url("http://127.0.0.1:1/mcp".into());
-        host.start().await.unwrap();
+        host.start(&settled).await.unwrap();
         (host, fake)
     };
     let (host, fake) = t;

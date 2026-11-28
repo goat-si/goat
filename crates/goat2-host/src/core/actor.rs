@@ -19,11 +19,11 @@ use std::time::Instant;
 use goat2_contracts::limits::CHILD_SUMMARY_MAX_BYTES;
 use goat2_contracts::text::clamp_bytes;
 use goat2_contracts::{
-    AssistantMessagePhase, ChatAttachment, Checkpoint, ChildReported, ChildResultStatus,
-    DeliveredAs, DeliveryOutcome, EngineTurnRef, FollowUpMode, InputAccepted, InputChanged,
-    InputDelivered, InputId, InputMode, InputSource, ItemCompleted, LogEvent, QueuedInput,
-    RequestId, RequestKind, RequestOpened, RequestOutcome, RequestResolved, RunAccepted,
-    RunFinished, RunId, RunOutcome, RunStarted, ThreadCard, ThreadCursor, ThreadId, TurnItemBody,
+    AssistantMessagePhase, ChatAttachment, ChildReported, ChildResultStatus, DeliveredAs,
+    DeliveryOutcome, EngineTurnRef, FollowUpMode, InputAccepted, InputChanged, InputDelivered,
+    InputId, InputMode, InputSource, ItemCompleted, LogEvent, QueuedInput, RequestId, RequestKind,
+    RequestOpened, RequestOutcome, RequestResolved, RunAccepted, RunFinished, RunId, RunOutcome,
+    RunStarted, ThreadCard, ThreadCursor, ThreadId, TurnItemBody,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -181,6 +181,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         rt.kind = Some(card.kind);
         rt.parent = parent.clone();
     });
+    let tracker = host.clone();
     let mut actor = Actor {
         host,
         id: card.id.clone(),
@@ -193,7 +194,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         idle_gen: 0,
         tx: tx.clone(),
     };
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let started = Instant::now();
             let label = format!("{msg:?}");
@@ -209,6 +210,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
             }
         }
     });
+    tracker.track(&task);
     tx
 }
 
@@ -965,18 +967,8 @@ impl Actor {
             RunOutcome::Unknown => ChildResultStatus::Unknown,
         };
         self.after_run(Some(run_id), status).await;
-        self.write_checkpoint();
         self.arm_idle();
         self.maybe_start();
-    }
-
-    fn write_checkpoint(&self) {
-        let store = &self.host.inner.store;
-        let (Some(mut card), Some(fold)) = (store.card(&self.id), store.fold(&self.id)) else {
-            return;
-        };
-        card.applied_seq += 1;
-        self.append(vec![LogEvent::Checkpoint(Checkpoint { card, fold })]);
     }
 
     /// After a run of a worker: report to the parent (waiters first, then the parent's log).
