@@ -53,6 +53,43 @@ test("an uncertain steer cannot be silently resent as a later turn", async () =>
   } finally { await session.shutdown(); }
 });
 
+test("an uncertain steer followed by native idle terminates the turn visibly", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal((await session.steer(turn.turnId, [{ inputId: "unknown", text: "fail-prompt", attachments: [] }])).status, "unknown");
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const terminal = events.find((event) => event.type === "turn_finished");
+    assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+    assert.equal(events.filter((event) => event.type === "steer_updated").length, 0);
+  } finally { await session.shutdown(); }
+});
+
+test("idle before an uncertain steer reply is reconciled after the reply", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = fake.holdPrompt();
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "unknown", text: "fail-prompt", attachments: [] }]); await gate.reached;
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); gate.release();
+      assert.equal((await steering).status, "unknown"); await finished.promise;
+      const terminal = events.find((event) => event.type === "turn_finished");
+      assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+      assert.equal(events.filter((event) => event.type === "steer_updated").length, 0);
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});
+
 test("accepted steers settle before the turn finishes, including unread cancellation", async () => {
   for (const read of [true, false]) {
     fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
@@ -158,6 +195,59 @@ test("turn usage uses the last owned step and ignores malformed or unrelated usa
     assert.deepEqual(usage, [{ type: "token_usage", turnId: turn.turnId, usage: { usedTokens: 22, inputTokens: 14, cachedInputTokens: 3, outputTokens: 8, reasoningOutputTokens: 2 } }]);
     assert.ok(events.indexOf(usage[0]!) < events.findIndex((event) => event.type === "turn_finished"));
   } finally { await session.shutdown(); }
+});
+
+test("usage respects native step order, unresolved ownership, and compaction", async () => {
+  for (const scenario of ["delayed-owner", "unresolved-owner", "compaction"] as const) {
+    fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+    const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    const session = await opencodeEngine.start(params, host);
+    try {
+      const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+      assert.equal(turn.status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+      const prompt = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
+      const info = (id: string) => ({ id, sessionID: session.engineRef, role: "assistant", parentID: prompt.messageID, time: {} });
+      const step = (id: string, messageID: string, input: number) => ({ id, sessionID: session.engineRef, messageID, type: "step-finish", reason: "stop", cost: 0, tokens: { input, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } });
+      if (scenario !== "delayed-owner") await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: info("old") });
+      await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step("step-old", "old", 10) });
+      if (scenario !== "compaction") {
+        if (scenario === "delayed-owner") await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: info("new") });
+        await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step("step-new", "new", 20) });
+        if (scenario === "delayed-owner") await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: info("old") });
+      } else await fake.sendEvent("session.compacted", { sessionID: session.engineRef });
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+      const usage = events.find((event) => event.type === "token_usage");
+      if (scenario === "delayed-owner") assert.equal(usage?.type === "token_usage" && usage.usage.usedTokens, 20);
+      else assert.equal(usage, undefined, scenario);
+    } finally { await session.shutdown(); }
+  }
+});
+
+test("context usage includes the model input limit from the catalog", async () => {
+  fake.reset(); fake.setModelLimits({ input: 1000, context: 2000 });
+  const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hello", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); await finished.promise;
+    const usage = events.find((event) => event.type === "token_usage");
+    assert.equal(usage?.type === "token_usage" && usage.usage.maxTokens, 1000);
+  } finally { await session.shutdown(); }
+});
+
+test("a provider failure is not delayed by a stalled usage catalog", async () => {
+  fake.reset(); const gate = fake.holdProvider(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hello", attachments: [] }], settings); assert.equal(turn.status, "accepted");
+    await gate.reached;
+    await fake.sendEvent("session.error", { sessionID: session.engineRef, error: { name: "UnknownError", data: { message: "synthetic" } } });
+    await finished.promise;
+    const terminal = events.find((event) => event.type === "turn_finished"); assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+    const count = events.length; gate.release(); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(events.length, count);
+  } finally { gate.release(); await session.shutdown(); }
 });
 
 test("a late steer success during descendant cleanup remains unknown after failure", async () => {
@@ -455,6 +545,17 @@ test("native child sessions retain their restrictions while receiving the parent
     assert.ok(update.permission.some((rule) => rule.permission === "read" && rule.action === "allow"));
     assert.ok(!update.permission.some((rule) => rule.permission === "bash" && rule.action === "allow"));
     assert.deepEqual(update.permission.at(-1), { permission: "edit", pattern: "/private/*", action: "deny" });
+  } finally { await session.shutdown(); }
+});
+
+test("resumed children retain native approval requirements", async () => {
+  fake.reset(); fake.setChildren("session-fake", ["child-1"]);
+  fake.setNativePermission("child-1", [{ permission: "read", pattern: "/private/*", action: "ask" }]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try {
+    const update = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "child-1")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(update.permission.some((rule) => rule.permission === "read" && rule.pattern === "/private/*" && rule.action === "ask"));
   } finally { await session.shutdown(); }
 });
 

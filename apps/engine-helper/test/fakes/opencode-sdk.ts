@@ -5,6 +5,9 @@ let sequence = 0;
 let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let modelLimits: { input?: number; context: number } | undefined;
+let providerGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let providerReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let ignorePromptAbort = false;
 let historyGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
@@ -22,7 +25,9 @@ const nativePermissions = new Map<string, Array<{ permission: string; pattern: s
 const nativeMetadata = new Map<string, Record<string, unknown>>();
 const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function setModelLimits(limits: { input?: number; context: number }) { modelLimits = limits; }
+export function holdProvider() { providerGate = Promise.withResolvers<void>(); providerReached = Promise.withResolvers<void>(); return { reached: providerReached.promise, release: () => providerGate?.resolve() }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
 export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
@@ -129,6 +134,6 @@ export function createOpencodeClient() {
     mcp: { async add(args: unknown) { calls.push({ method: "mcp.add", args }); return data(mcpStatus === "missing" ? {} : { goat: mcpStatus === "failed" ? { status: mcpStatus, error: "synthetic failure" } : { status: mcpStatus } }); } },
     permission: { async reply(args: { requestID: string }) { calls.push({ method: "permission.reply", args }); emitFinish("session-fake", "answer"); return data(true); } },
     question: { async reply(args: unknown) { calls.push({ method: "question.reply", args }); emitFinish("session-fake", "question-answer"); return data(true); }, async reject(args: unknown) { calls.push({ method: "question.reject", args }); return data(true); } },
-    provider: { async list() { return data({ all: [{ id: "test", name: "Test", models: { model: { id: "model", name: "Test model" } } }], connected: ["test"], default: { test: "model" } }); } },
+    provider: { async list() { providerReached?.resolve(); if (providerGate) await providerGate.promise; return data({ all: [{ id: "test", name: "Test", models: { model: { id: "model", name: "Test model", ...(modelLimits ? { limit: modelLimits } : {}) } } }], connected: ["test"], default: { test: "model" } }); } },
   };
 }

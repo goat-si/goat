@@ -22,7 +22,7 @@ export function permissionRules(mode: RuntimeMode): PermissionRuleset {
   ];
 }
 
-// permissionRules.ts:500-532: preserve child denies, never broaden the parent policy with child allows.
+// permissionRules.ts:500-532: preserve child restrictions, never broaden the parent policy with child allows.
 export function ownsSubagentDeny(native: PermissionRuleset, metadata?: Record<string, unknown>): boolean {
   const last = native.at(-1);
   return metadata?.goatSubagentDeny === true && last?.permission === "task" && last.pattern === "*" && last.action === "deny";
@@ -38,7 +38,7 @@ export function childPermissionRules(mode: RuntimeMode, native: PermissionRulese
     if (inheritedBlock) offset += inheritedBlock.length;
     else local.push(native[offset++]!);
   }
-  const child = local.filter((rule) => rule.action === "deny" && !inherited.some((base) => base.permission === rule.permission && base.pattern === rule.pattern && base.action === rule.action));
+  const child = local.filter((rule) => (rule.action === "deny" || rule.action === "ask") && !inherited.some((base) => base.permission === rule.permission && base.pattern === rule.pattern && base.action === rule.action));
   return [...parent, ...child, ...(subagentsDenied ? [{ permission: "task", pattern: "*", action: "deny" as const }] : [])];
 }
 

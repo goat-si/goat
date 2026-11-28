@@ -15,7 +15,8 @@ type Client = ReturnType<typeof client>;
 type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Record<string, unknown> | undefined; parentBases: PermissionRuleset[] };
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
 type SteerReceipt = { inputIds: string[]; accepted: boolean; ready: boolean; observed: boolean };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; promptIds: Set<string>; usageOwners: Map<string, boolean>; usagePending: Map<string, Map<string, Usage>>; usagePartIds: Set<string>; lastUsage?: Usage; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
+type OrderedUsage = { usage: Usage; order: number };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; promptIds: Set<string>; usageOwners: Map<string, boolean>; usagePending: Map<string, Map<string, OrderedUsage>>; usagePartIds: Set<string>; usageOrder: number; lastUsage?: OrderedUsage; usageLookup?: boolean; usageLookupDone?: boolean; maxTokens?: number; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -163,6 +164,19 @@ export class OpenCodeSession implements EngineSession {
       }
       return;
     }
+    const usage = turn.lastUsage && ![...turn.usagePending.values()].some((pending) => [...pending.values()].some((entry) => entry.order > turn.lastUsage!.order)) ? turn.lastUsage.usage : undefined;
+    if (usage && outcome.type === "done" && !turn.usageLookupDone) {
+      turn.heldOutcome = outcome;
+      if (!turn.usageLookup) {
+        turn.usageLookup = true;
+        void this.contextLimit(turn).then((maxTokens) => {
+          if (this.active !== turn) return;
+          turn.usageLookupDone = true; if (maxTokens !== undefined) turn.maxTokens = maxTokens;
+          const final = turn.heldOutcome ?? outcome; delete turn.heldOutcome; this.finish(turn, final);
+        });
+      }
+      return;
+    }
     for (const part of turn.parts.values()) this.finishPart(turn, part);
     if (turn.todos) {
       const id = `${turn.id}:todo`;
@@ -171,9 +185,21 @@ export class OpenCodeSession implements EngineSession {
     }
     for (const key of this.requests.keys()) { this.requests.delete(key); this.host.emit({ type: "request_closed", key }); }
     for (const [id, receipt] of turn.steers) this.settleSteer(turn, id, receipt.observed);
-    if (turn.lastUsage) this.host.emit({ type: "token_usage", turnId: turn.id, usage: turn.lastUsage });
+    if (usage) this.host.emit({ type: "token_usage", turnId: turn.id, usage: { ...usage, ...(turn.maxTokens === undefined ? {} : { maxTokens: turn.maxTokens }) } });
     this.active = undefined;
     this.host.emit({ type: "turn_finished", turnId: turn.id, outcome });
+  }
+  private async contextLimit(turn: Turn): Promise<number | undefined> {
+    const model = parsedModel(turn.settings.modelSelection.model); if (!model) return undefined;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<undefined>((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(undefined); }, 10_000); timer.unref(); });
+      const result = await Promise.race([this.api.provider.list({}, { throwOnError: true, signal: controller.signal }), timeout]);
+      const limit = result?.data?.all.find((provider) => provider.id === model.providerID)?.models[model.modelID]?.limit;
+      const value = limit?.input ?? limit?.context;
+      return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+    } catch { return undefined; } finally { if (timer) clearTimeout(timer); }
   }
   private settleSteer(turn: Turn, id: string, observed: boolean) {
     const receipt = turn.steers.get(id); if (!receipt?.accepted || !receipt.ready) return;
@@ -252,6 +278,7 @@ export class OpenCodeSession implements EngineSession {
     const a = turn.admission; if (!a.pending || this.active !== turn) return;
     if (signal === "idle") {
       a.idle = true;
+      if (!a.accepted && this.uncertain && !turn.interrupted) { this.finish(turn, { type: "failed", reason: "OpenCode steering admission could not be confirmed" }); return; }
       // A steer already accepted by OpenCode can be cancelled if a fresh native status confirms idle.
       if (!a.accepted || !turn.steers.get(a.id)?.accepted) return;
     }
@@ -319,7 +346,7 @@ export class OpenCodeSession implements EngineSession {
         if (msg.role === "assistant" && msg.parentID) {
           const owned = turn.promptIds.has(msg.parentID); turn.usageOwners.set(msg.id, owned);
           const pending = turn.usagePending.get(msg.id);
-          if (owned && pending) for (const [id, usage] of pending) if (!turn.usagePartIds.has(id)) { turn.usagePartIds.add(id); turn.lastUsage = usage; }
+          if (owned && pending) for (const [id, entry] of pending) if (!turn.usagePartIds.has(id)) { turn.usagePartIds.add(id); if (!turn.lastUsage || entry.order > turn.lastUsage.order) turn.lastUsage = entry; }
           turn.usagePending.delete(msg.id);
         }
         if (msg.role === "user") { const receipt = turn.steers.get(msg.id); if (receipt) { receipt.observed = true; if (receipt.ready) this.settleSteer(turn, msg.id, true); } }
@@ -337,8 +364,8 @@ export class OpenCodeSession implements EngineSession {
           const usage = contextUsage(part);
           if (usage && !turn.usagePartIds.has(part.id)) {
             const owner = turn.usageOwners.get(part.messageID);
-            if (owner === true) { turn.usagePartIds.add(part.id); turn.lastUsage = usage; }
-            else if (owner === undefined) { const pending = turn.usagePending.get(part.messageID) ?? new Map<string, Usage>(); pending.set(part.id, usage); turn.usagePending.set(part.messageID, pending); }
+            if (owner === true) { turn.usagePartIds.add(part.id); turn.lastUsage = { usage, order: ++turn.usageOrder }; }
+            else if (owner === undefined) { const pending = turn.usagePending.get(part.messageID) ?? new Map<string, OrderedUsage>(); const order = pending.get(part.id)?.order ?? ++turn.usageOrder; pending.set(part.id, { usage, order }); turn.usagePending.set(part.messageID, pending); }
           }
           return;
         }
@@ -384,7 +411,7 @@ export class OpenCodeSession implements EngineSession {
       case "session.idle":
         if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
-      case "session.compacted": turn.overflow = false; return;
+      case "session.compacted": turn.overflow = false; delete turn.lastUsage; turn.usagePending.clear(); return;
       case "session.error": {
         if (event.properties.error?.name === "ContextOverflowError") { turn.overflow = true; return; }
         const auth = event.properties.error?.name === "ProviderAuthError";
@@ -449,7 +476,7 @@ export class OpenCodeSession implements EngineSession {
     if (this.active) return { status: "declined" as const, reason: "a turn is already running" };
     if (!parsedModel(settings.modelSelection.model)) return { status: "declined" as const, reason: "OpenCode model must use provider/model format" };
     if (!promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode requires text or an attachment" };
-    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, stopPending: false, stopIdle: false, steers: new Map(), promptIds: new Set(), usageOwners: new Map(), usagePending: new Map(), usagePartIds: new Set(), controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
+    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, stopPending: false, stopIdle: false, steers: new Map(), promptIds: new Set(), usageOwners: new Map(), usagePending: new Map(), usagePartIds: new Set(), usageOrder: 0, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
     this.active = turn;
     this.ownedMessages.add(turn.admission.id);
     turn.promptIds.add(turn.admission.id);
@@ -505,7 +532,9 @@ export class OpenCodeSession implements EngineSession {
     } catch (error) {
       turn.steers.delete(id); setImmediate(() => this.releaseSteer(turn, id));
       if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; }
-      this.uncertain = true; return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" };
+      this.uncertain = true;
+      if (this.active === turn && turn.admission.id === id && turn.admission.idle && !turn.interrupted) setImmediate(() => { void this.admission(turn, "idle"); });
+      return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" };
     }
   }
   async interrupt(turnId: string) {
