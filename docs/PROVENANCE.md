@@ -218,3 +218,12 @@ Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.t
 | `apps/engine-helper/test/server.test.ts` | none | new: inject a failing loader for the pre-existing unavailable test after Muse registration. |
 
 Not lifted: usage and limits, account pools, text generation, cloud and checkpoints; attachment blob resolution and v1's provider-host runtime instructions are not exposed by this helper seam. V1 background workflow wake offers and runless child approvals are not mapped by the current helper session protocol; these fail the helper visibly. Windows launcher resolution and workspace path canonicalization are not lifted.
+## P2-S opencode
+
+| GOAT 2 path | v1 path at 916b5ccc1b2 | Kind and note |
+|---|---|---|
+| `apps/engine-helper/src/engines/opencode/goatMcpConfig.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:1-10` | adapted: remote GOAT MCP configuration shape. |
+| `apps/engine-helper/src/engines/opencode/openCodeConfigContent.ts` | `packages/provider-opencode/src/server/openCodeConfigContent.ts:1-10` | adapted: launch and inherited config precedence. |
+| `apps/engine-helper/test/opencode.test.ts` | `packages/provider-opencode/src/server/goatMcpConfig.ts:5-10`, `openCodeConfigContent.ts:1-10` | new: isolated checks of the lifted configuration rules. |
+
+Not lifted yet: adapter, server lifecycle, probe, usage/limits, account pools, text generation, cloud, checkpoints, and OpenCode 2 generation.

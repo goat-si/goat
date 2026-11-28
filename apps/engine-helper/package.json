@@ -4,8 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Runs SDK-only GOAT engines (Cursor, OpenCode, Muse) behind one stdio JSONL shape for goat2-engine-sdk.",
-  "exports": { ".": "./src/main.ts" },
-  "engines": { "node": ">=22.18" },
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "start": "node src/main.ts",
     "test": "node --test test/*.test.ts",
@@ -13,7 +17,8 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@muse-code/sdk": "1.4.6"
+    "@muse-code/sdk": "1.4.6",
+    "@opencode-ai/sdk": "1.15.13"
   },
   "devDependencies": {
     "@goat2/contracts-rs": "workspace:*",
