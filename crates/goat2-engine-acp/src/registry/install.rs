@@ -306,15 +306,20 @@ pub(crate) async fn run_command(
             cmd.env_clear().envs(env);
         }
         let mut child = cmd.spawn().map_err(|_| could_not_run())?;
-        let _group = crate::probe::support::GroupGuard { pgid: child.id() };
+        let mut group = crate::probe::support::GroupGuard { pgid: child.id() };
         let mut stdout = child.stdout.take().ok_or_else(could_not_run)?;
         let mut stderr = child.stderr.take().ok_or_else(could_not_run)?;
         let max = options.max_stdout;
-        let (out, err, status) = tokio::join!(
+        // The leader's exit is observed without reaping it (WNOWAIT), the group is killed while
+        // its id is still surely ours (an unreaped leader keeps it), and only then is the leader
+        // reaped: the guard never signals a pgid the system may have reused (final review 8B).
+        let (out, err, ()) = tokio::join!(
             read_capped(&mut stdout, max),
             read_clean_tail(&mut stderr, &homes),
-            child.wait()
+            exited_unreaped(child.id())
         );
+        group.kill_now();
+        let status = child.wait().await;
         let (out, truncated) = out.map_err(|_| could_not_run())?;
         let err = err.map_err(|_| could_not_run())?;
         let status = status.map_err(|_| could_not_run())?;
@@ -362,6 +367,43 @@ pub(crate) async fn run_command(
 
 /// Read `reader` to its end, keeping at most `max` bytes; true when more arrived. A read error
 /// fails the command (v1 AcpRegistrySupport.ts:742-758 fails when a stream fails).
+/// Resolves once the child `pid` has exited, leaving it unreaped (`waitid` with `WNOWAIT`), so
+/// its process group id cannot be reused yet. Async: woken by SIGCHLD and checked without blocking
+/// (a blocking-pool wait would also stop a paused test clock from advancing). Subscribed before
+/// the first check, so an exit before the subscription is still seen.
+async fn exited_unreaped(pid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        let exited = || {
+            // SAFETY: siginfo_t is plain data; waitid only writes into it.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: plain syscall on our own child; WNOWAIT leaves the reaping to child.wait().
+            let rc = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                )
+            };
+            // With WNOHANG, si_pid stays 0 while the child runs. An error (ECHILD: already
+            // reaped elsewhere) also ends the wait.
+            rc != 0 || unsafe { info.si_pid() } != 0
+        };
+        let Ok(mut sigchld) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())
+        else {
+            return;
+        };
+        while !exited() {
+            if sigchld.recv().await.is_none() {
+                return;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     reader: &mut R,
     max: usize,

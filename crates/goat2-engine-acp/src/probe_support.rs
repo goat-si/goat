@@ -214,6 +214,13 @@ impl GroupGuard {
             }
         }
     }
+
+    /// Kill the group now and disarm: for a caller that kills before it reaps the leader, so
+    /// nothing signals the pgid once the system may hand it to another group.
+    pub(crate) fn kill_now(&mut self) {
+        self.kill();
+        self.pgid = None;
+    }
 }
 
 impl Drop for GroupGuard {
