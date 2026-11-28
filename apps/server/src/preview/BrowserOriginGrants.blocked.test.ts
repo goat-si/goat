@@ -97,3 +97,74 @@ it.effect("a previously granted origin is not republished after it becomes block
     assert.notInclude(published.at(-1) ?? [], "https://example.test");
   }),
 );
+
+it.effect(
+  "admitClaimCall and judgeClaimCall refuse non-web schemes and resolve relative URLs against tab origin",
+  () =>
+    Effect.gen(function* () {
+      const blockedHosts = ["blocked.test"];
+      const service = yield* makeTestBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        blockedHostsNow: () => blockedHosts,
+        publish: () => Effect.void,
+        bind: (request) =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab-1",
+            title: "Site",
+            url: request.origin,
+            driverGeneration: 1,
+          }),
+      });
+      const claimed = yield* service.claim(input);
+      if (claimed.agentResult.status !== "attached") return assert.fail("expected attached");
+      const claim = claimed.agentResult.claim;
+      const baseArgs = {
+        tab_id: "tab-1",
+        target_id: "target-1",
+        session: `goat-claim:${claim.claimId}`,
+        origin_scope: ["https://example.test"],
+      };
+      const relativeAllowed = yield* service.admitClaimCall(
+        input.threadId,
+        "browser_navigate",
+        { ...baseArgs, url: "/dashboard" },
+        blockedHosts,
+      );
+      assert.equal(relativeAllowed.status, "admit");
+      const relativeBlocked = yield* service.admitClaimCall(
+        input.threadId,
+        "browser_navigate",
+        { ...baseArgs, url: "//blocked.test/private" },
+        blockedHosts,
+      );
+      assert.equal(relativeBlocked.status, "blocked");
+      const judgeBlocked = yield* service.judgeClaimCall(input.threadId, "browser_navigate", {
+        ...baseArgs,
+        url: "//blocked.test/private",
+      });
+      assert.equal(judgeBlocked, "blocked");
+      for (const badUrl of [
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,hi",
+        "file:///etc/passwd",
+        "chrome://settings",
+        "blob:https://example.test/1234",
+      ]) {
+        const admitted = yield* service.admitClaimCall(
+          input.threadId,
+          "browser_navigate",
+          { ...baseArgs, url: badUrl },
+          blockedHosts,
+        );
+        assert.equal(admitted.status, "outside");
+        const judged = yield* service.judgeClaimCall(input.threadId, "browser_navigate", {
+          ...baseArgs,
+          url: badUrl,
+        });
+        assert.equal(judged, "outside");
+      }
+    }),
+);

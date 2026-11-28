@@ -234,3 +234,64 @@ it.effect("names the tab an open made whose page never connected", () =>
     }),
   ),
 );
+
+it.effect("preserves pre-input click refusal diagnostics and bounds interceptedBy", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const host = makeHost({ clientId, supportedOperations: ["click"] });
+      const requests = requestsFrom(yield* broker.connect(host, SERVER_BROWSER));
+      const longCover = `<div> ${"x".repeat(350)}`;
+      const responses: ReadonlyArray<Record<string, unknown>> = [
+        { beforeInput: true, clickRefusal: "occluded_refused", interceptedBy: longCover },
+        { beforeInput: true, kind: "special_element_refused" },
+        { beforeInput: true, kind: "unknown_kind", interceptedBy: "<div> #banner" },
+      ];
+      let index = 0;
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationExecutionError",
+            message: "Target refused before input.",
+            detail: responses[index++],
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const occluded = yield* broker
+        .invoke<void>({ scope, operation: "click", input: { locator: "#save" } })
+        .pipe(Effect.flip);
+      expect(occluded).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        dispatched: false,
+        clickRefusal: "occluded_refused",
+        interceptedBy: longCover.slice(0, 300),
+      });
+
+      const special = yield* broker
+        .invoke<void>({ scope, operation: "click", input: { locator: "select" } })
+        .pipe(Effect.flip);
+      expect(special).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        dispatched: false,
+        clickRefusal: "special_element_refused",
+      });
+
+      const unknownKind = yield* broker
+        .invoke<void>({ scope, operation: "click", input: { locator: "#other" } })
+        .pipe(Effect.flip);
+      expect(unknownKind).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        dispatched: false,
+        interceptedBy: "<div> #banner",
+      });
+      expect(unknownKind).not.toHaveProperty("clickRefusal");
+    }),
+  ),
+);

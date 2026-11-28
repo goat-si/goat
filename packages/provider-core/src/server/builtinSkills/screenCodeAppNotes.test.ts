@@ -2,10 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 import { computerUseAppNote, screenCodeAppNote } from "./computerUseSkillFiles.ts";
 
 const browsers = [
+  ["Safari", "com.apple.safari"],
   ["Google Chrome", "com.google.Chrome"],
   ["Brave Browser", "com.brave.Browser"],
   ["Microsoft Edge", "com.microsoft.edgemac"],
   ["Arc", "company.thebrowser.Browser"],
+  ["Firefox", "org.mozilla.firefox"],
+  ["Chromium", "org.chromium.chromium"],
 ] as const;
 
 const apps = [
@@ -14,19 +17,20 @@ const apps = [
   ["KakaoTalk", "com.kakao.KakaoTalkMac"],
   ["TextEdit", "com.apple.textedit"],
   ["Preview", "com.apple.preview"],
-  ["Safari", "com.apple.safari"],
   ...browsers,
 ] as const;
 
 describe("screen-code app notes", () => {
-  it("routes web pages in Chrome-family browsers to GOAT's browser instead of the app target, by name and bundle id", () => {
+  it("routes web pages in browsers to GOAT's browser instead of the app target, by name and bundle id", () => {
     for (const [name, bundle] of browsers) {
       const screenNote = screenCodeAppNote("darwin", name);
       expect(screenCodeAppNote("darwin", bundle)).toBe(screenNote);
       expect(screenNote).toContain("screen.tab()");
+      expect(screenNote).not.toContain("Open Location");
       const computerNote = computerUseAppNote("darwin", name);
       expect(computerUseAppNote("darwin", bundle)).toBe(computerNote);
       expect(computerNote).toContain("GOAT's browser");
+      expect(computerNote).not.toContain("Open Location");
     }
   });
 

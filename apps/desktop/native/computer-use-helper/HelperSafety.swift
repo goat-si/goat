@@ -64,4 +64,42 @@ enum HelperSafety {
   static func isOnScreen(_ info: [String: Any]) -> Bool {
     info[kCGWindowIsOnscreen as String] as? Bool == true
   }
+
+  static let sessionSecureInputPidKey = "kCGSSessionSecureInputPID"
+
+  static func sessionSecureInputPid(_ sessionInfo: [String: Any]?) -> Int? {
+    guard let sessionInfo,
+      let pid = (sessionInfo[sessionSecureInputPidKey] as? Int)
+        ?? (sessionInfo[sessionSecureInputPidKey] as? NSNumber)?.intValue,
+      pid > 0
+    else { return nil }
+    return pid
+  }
+
+  static func isSecureTextField(role: String?, subrole: String?) -> Bool {
+    role == "AXSecureTextField" || subrole == (kAXSecureTextFieldSubrole as String)
+  }
+
+  static func postCaptureWindowRefusal(
+    windowInfo: [String: Any]?,
+    expectedPid: Int,
+    expectedWindowId: Int? = nil,
+    isOwnedByHost: (Int) -> Bool
+  ) -> String? {
+    guard let windowInfo else { return "windowGone" }
+    if let expectedWindowId,
+      let listedId = (windowInfo[kCGWindowNumber as String] as? Int)
+        ?? (windowInfo[kCGWindowNumber as String] as? NSNumber)?.intValue,
+      listedId != expectedWindowId
+    {
+      return "windowGone"
+    }
+    guard
+      let ownerPid = (windowInfo[kCGWindowOwnerPID as String] as? Int)
+        ?? (windowInfo[kCGWindowOwnerPID as String] as? NSNumber)?.intValue
+    else { return "windowGone" }
+    if isOwnedByHost(ownerPid) { return "appNotApproved" }
+    guard ownerPid == expectedPid else { return "windowGone" }
+    return nil
+  }
 }

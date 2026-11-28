@@ -1,4 +1,8 @@
-import type { DesktopCuaFrame, DesktopCuaPrivateModeReport } from "@goat/contracts";
+import type {
+  DesktopCuaFrame,
+  DesktopCuaPersonStopReport,
+  DesktopCuaPrivateModeReport,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -21,8 +25,10 @@ type Followed = Pick<
 export const makeHelperFollowers = Effect.fn("makeHelperFollowers")(function* (deps: {
   readonly publisher: DesktopTelemetryPublisher.DesktopTelemetryPublisher["Service"];
   readonly newWatchId: () => string;
+  readonly generation?: () => number;
+  readonly onWatch?: (active: boolean) => void;
 }) {
-  const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport>();
+  const safety = yield* Queue.unbounded<DesktopCuaPrivateModeReport | DesktopCuaPersonStopReport>();
   // Only the newest frame matters to a viewer.
   const frames = yield* Queue.sliding<DesktopCuaFrame>(4);
   const retries = yield* Queue.unbounded<() => void>();
@@ -31,6 +37,7 @@ export const makeHelperFollowers = Effect.fn("makeHelperFollowers")(function* (d
     publish: (report) => Queue.offerUnsafe(safety, report),
     newWatchId: deps.newWatchId,
     retryLater,
+    ...(deps.generation === undefined ? {} : { generation: deps.generation }),
   });
   const capture = makeFrameFollower({
     publish: (frame) => Queue.offerUnsafe(frames, frame),
@@ -48,7 +55,10 @@ export const makeHelperFollowers = Effect.fn("makeHelperFollowers")(function* (d
     }),
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(deps.publisher.cuaWatch, (active) =>
-        Effect.sync(() => void privateMode.setWatching(active)),
+        Effect.sync(() => {
+          deps.onWatch?.(active);
+          void privateMode.setWatching(active);
+        }),
       ).pipe(Effect.forkScoped);
       yield* Stream.runForEach(deps.publisher.cuaFrames, (request) =>
         Effect.sync(() => void capture.setRequest(request)),

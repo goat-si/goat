@@ -38,6 +38,9 @@ namespace Goat.ComputerUse
         public const uint JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x400;
         public const int WTSConnectState = 8;
         public const uint HANDLE_FLAG_INHERIT = 1;
+        public const uint ES_SYSTEM_REQUIRED = 0x00000001;
+        public const uint ES_DISPLAY_REQUIRED = 0x00000002;
+        public const uint ES_CONTINUOUS = 0x80000000;
         public static readonly IntPtr PROC_THREAD_ATTRIBUTE_HANDLE_LIST = (IntPtr)0x00020002;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -193,6 +196,9 @@ namespace Goat.ComputerUse
 
         [DllImport("kernel32.dll", SetLastError = true)]
         public static extern bool GetProcessTimes(IntPtr process, out long creation, out long exit, out long kernel, out long user);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint SetThreadExecutionState(uint esFlags);
 
         [DllImport("advapi32.dll", SetLastError = true)]
         public static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);

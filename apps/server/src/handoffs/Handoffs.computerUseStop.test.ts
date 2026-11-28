@@ -207,7 +207,7 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         // Stopping takes only the authority to stop agents, as Stop all does.
         const handlers = yield* makeComputerUseRpcHandlers(operator.sessionId);
         const result = yield* handlers[WS_METHODS.computerUseStop]({ threadId });
-        assert.deepEqual(result, { stopped: true });
+        assert.deepEqual(result, { stopped: true, failed: 0 });
 
         assert.isTrue(Option.isNone(yield* leases.holder(otherThread, [app])));
         // The stopped card stays listed as stopped until a person closes it.
@@ -511,6 +511,17 @@ it.effect("a thread's Stop keeps it off its approval even when that approval can
           threadId,
         );
         assert.deepEqual(result, { stopped: true, failed: 1 });
+        const rpcHandlers = yield* makeComputerUseRpcHandlers(operator.sessionId).pipe(
+          Effect.provideService(Handoffs.Handoffs, failing),
+        );
+        assert.deepEqual(yield* rpcHandlers[WS_METHODS.computerUseStop]({ threadId }), {
+          stopped: false,
+          failed: 1,
+        });
+        assert.deepEqual(yield* rpcHandlers[WS_METHODS.computerUseStopAll]({}), {
+          stopped: 0,
+          failed: 1,
+        });
         assert.equal(
           (yield* service.read({ threadId, handoffId: held.handoffId })).state,
           "completed",

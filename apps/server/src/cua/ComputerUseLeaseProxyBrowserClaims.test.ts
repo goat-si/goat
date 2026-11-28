@@ -801,3 +801,117 @@ effectIt.effect(
       ]);
     }),
 );
+
+describe("claimed browser URL scheme and origin enforcement", () => {
+  const claims = [
+    {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      targetId: "target-1",
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+      blockedHosts: ["blocked.test"],
+    },
+  ];
+
+  it("refuses non-web URL schemes including mixed-case variants before dispatch", () => {
+    for (const url of [
+      "javascript:alert(1)",
+      "JavaScript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+      "DATA:text/plain,hello",
+      "file:///etc/passwd",
+      "FILE:///etc/hosts",
+      "chrome://settings",
+      "ChRoMe://extensions",
+      "blob:https://example.test/1234",
+      "BLOB:https://example.test/5678",
+      "about:blank",
+    ]) {
+      const result = scopeBrowserCall("browser_navigate", { tab_id: "tab-1", url }, claims);
+      expect(result, url).toMatchObject({ refused: true, reason: "disallowed_scheme" });
+    }
+    expect(scopeBrowserCall("browser_navigate", { tab_id: "tab-1", url: "   " }, claims)).toEqual({
+      refused: true,
+      reason: "invalid_url",
+    });
+  });
+
+  it("resolves relative URLs against the claimed tab origin before checking scheme, blocked hosts, and origin scope", () => {
+    const allowed = scopeBrowserCall(
+      "browser_navigate",
+      { tab_id: "tab-1", url: "/settings?tab=security" },
+      claims,
+    );
+    expect("args" in allowed).toBe(true);
+    expect(
+      scopeBrowserCall(
+        "browser_navigate",
+        { tab_id: "tab-1", url: "//blocked.test/secret" },
+        claims,
+      ),
+    ).toEqual({
+      refused: true,
+      reason: "blocked_url",
+    });
+    expect(
+      scopeBrowserCall("browser_navigate", { tab_id: "tab-1", url: "//other.test/page" }, claims),
+    ).toEqual({
+      refused: true,
+      reason: "origin_outside_scope",
+    });
+    expect(
+      browserReplyOutsideClaim(
+        { structuredContent: { tab_id: "tab-1", url: "blob:https://example.test/abc" } },
+        claims[0]!,
+      ),
+    ).toBe(true);
+  });
+
+  effectIt.effect(
+    "the proxy refuses disallowed URL schemes on claimed browser calls without sending to the driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push({
+          ...active(),
+          browserClaims: [
+            {
+              claimId: "claim-1",
+              claimGeneration: 1,
+              pid: 42,
+              windowId: 7,
+              targetId: "target-1",
+              tabId: "tab-1",
+              origins: ["https://example.test"],
+            },
+          ],
+        });
+        yield* h.applied;
+        yield* supportedDriver(h);
+        for (const [index, url] of [
+          "javascript:alert(1)",
+          "JavaScript:void(0)",
+          "data:text/html,hi",
+          "file:///etc/passwd",
+          "chrome://settings",
+          "blob:https://example.test/id",
+        ].entries()) {
+          yield* h.send(call(100 + index, "browser_navigate", { tab_id: "tab-1", url }));
+          const reply = yield* h.nextToProvider;
+          assert.equal(reply.id, 100 + index);
+          assert.equal(yield* h.driverQueued, 0);
+          const structured = (
+            reply.result as { structuredContent?: { safety?: { possibleCommit?: boolean } } }
+          )?.structuredContent;
+          assert.equal(structured?.safety?.possibleCommit, false);
+          assert.include(JSON.stringify(reply), "disallowed scheme");
+        }
+        yield* h.send(call(200, "browser_navigate", { tab_id: "tab-1", url: "/inbox" }));
+        const forwarded = yield* h.nextToDriver;
+        assert.equal(forwarded.id, 200);
+      }),
+  );
+});

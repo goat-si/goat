@@ -115,44 +115,64 @@ export const makeComputerUseStanding = (deps: {
       list: ReadonlyArray<string>,
       enabled: boolean,
       strict: boolean,
+      denied: ReadonlyArray<string>,
     ) => Effect.Effect<A, HandoffError>,
   ) =>
     Option.isSome(settings)
       ? (settings.value.withStoredSettingsSnapshot ?? settings.value.withSettingsSnapshot)(
           (snapshot) =>
-            use(snapshot.cuaAllowedApps, snapshot.enableCua, snapshot.cuaStrictInputGuards),
+            use(
+              snapshot.cuaAllowedApps,
+              snapshot.enableCua,
+              snapshot.cuaStrictInputGuards,
+              snapshot.cuaDeniedApps,
+            ),
         ).pipe(Effect.mapError(unavailable))
-      : use([], false, true);
-  // Protected apps (credential stores, GOAT) stay out only under strict input guards.
-  const strictNow = Option.isSome(settings)
-    ? settings.value.getSettings.pipe(
-        Effect.map((current) => current.cuaStrictInputGuards),
-        Effect.mapError(unavailable),
-      )
-    : Effect.succeed(true);
-  const validate = Effect.fn("Handoffs.validateComputerUseScope")((
+      : use([], false, true, []);
+  const validate = Effect.fn("Handoffs.validateComputerUseScope")(function* (
     input: HandoffRespondInput,
     record: Handoff,
-  ): Effect.Effect<void, HandoffError> => {
-    if (input.computerUseScope === undefined) return Effect.void;
+  ) {
+    if (input.computerUseScope !== undefined) {
+      if (
+        record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
+        input.action !== "completed" ||
+        !isHandoffPending(record.state) ||
+        record.apps === undefined ||
+        record.apps.length === 0 ||
+        record.computerUseForeground !== undefined
+      )
+        return yield* new HandoffError({ reason: "invalid_request" });
+      if (input.computerUseScope === "always" && Option.isNone(settings))
+        return yield* new HandoffError({ reason: "unavailable" });
+    }
     if (
       record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
       input.action !== "completed" ||
-      !isHandoffPending(record.state) ||
-      record.apps === undefined ||
-      record.apps.length === 0 ||
-      record.computerUseForeground !== undefined
+      !isHandoffPending(record.state)
     )
-      return Effect.fail(new HandoffError({ reason: "invalid_request" }));
-    if (input.computerUseScope === "always" && Option.isNone(settings))
-      return Effect.fail(new HandoffError({ reason: "unavailable" }));
-    const apps = record.apps;
-    if (!apps.some(isExcludedCuaApplication)) return Effect.void;
-    return strictNow.pipe(
-      Effect.flatMap((strict) =>
-        strict ? Effect.fail(new HandoffError({ reason: "invalid_request" })) : Effect.void,
-      ),
-    );
+      return;
+    const current = Option.isSome(settings)
+      ? yield* settings.value.getSettings.pipe(Effect.mapError(unavailable))
+      : undefined;
+    if (current !== undefined && !current.enableCua)
+      return yield* new HandoffError({
+        reason: "conflict",
+        detail: "Computer use is turned off in settings.",
+      });
+    const apps = record.apps ?? [];
+    if (apps.length === 0) return;
+    if (current !== undefined && current.cuaDeniedApps.length > 0) {
+      const denied = new Set(current.cuaDeniedApps.map(cuaAppKey));
+      if (apps.some((app) => denied.has(cuaAppKey(app))))
+        return yield* new HandoffError({
+          reason: "conflict",
+          detail: "One or more requested apps are blocked in computer use settings.",
+        });
+    }
+    const strict = current === undefined || current.cuaStrictInputGuards;
+    if (strict && apps.some(isExcludedCuaApplication))
+      return yield* new HandoffError({ reason: "invalid_request" });
   });
   const clear = Effect.fn("Handoffs.clearComputerUseSessions")(
     (threadId?: ThreadId, cutoff?: number) =>
@@ -201,17 +221,19 @@ export const makeComputerUseStanding = (deps: {
     Effect.mapError((cause) => (isHandoffError(cause) ? cause : unavailable(cause))),
   );
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
-    const attempt = withAllowedSettings((list, enabled, strict) =>
+    const attempt = withAllowedSettings((list, enabled, strict, deniedApps) =>
       Effect.gen(function* () {
         if (!enabled) return yield* new HandoffError({ reason: "unavailable" });
         yield* deps.expirePending(input.requestedBy.threadId);
         yield* reconcileAllowed(list, strict);
         const apps = input.apps;
+        const denied = new Set(deniedApps.map(cuaAppKey));
         if (
           input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
           apps === undefined ||
           apps.length === 0 ||
           input.computerUseForeground !== undefined ||
+          apps.some((app) => denied.has(cuaAppKey(app))) ||
           (strict && apps.some(isExcludedCuaApplication))
         )
           return Option.none();

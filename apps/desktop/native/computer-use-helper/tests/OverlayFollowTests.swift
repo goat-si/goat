@@ -55,6 +55,7 @@ struct OverlayFollowTests {
     var frames: [String] = []
     var steadyTicks = 0
     var borders: [Bool] = []
+    var cursorHides = 0
   }
 
   static func main() {
@@ -76,7 +77,8 @@ struct OverlayFollowTests {
         frame: { state.bounds[$0] },
         onFrame: { state.frames.append($0.map(NSStringFromRect) ?? "nil") },
         onSteady: { state.steadyTicks += 1 },
-        onBorder: { state.borders.append($0) })
+        onBorder: { state.borders.append($0) },
+        onHideCursor: { state.cursorHides += 1 })
       body(controller, scheduler, state)
     }
 
@@ -101,8 +103,9 @@ struct OverlayFollowTests {
       controller.show(windowId: 1, phase: .resting)
       let idleFired = scheduler.fire(1)
       check(
-        "resting idle retires only the border and leaves no scheduled work",
-        idleFired && state.borders == [true, false] && scheduler.activeCount == 0
+        "resting idle retires the border and cursor and leaves no scheduled work",
+        idleFired && state.borders == [true, false] && state.cursorHides == 1
+          && scheduler.activeCount == 0
           && state.frames.isEmpty && scheduler.hasJob(0, every: 0.25, repeats: true)
           && scheduler.hasJob(1, every: 2, repeats: false))
     }
@@ -127,8 +130,8 @@ struct OverlayFollowTests {
       controller.show(windowId: 2, phase: .resting)
       scheduler.fire(1, evenIfCancelled: true)
       check(
-        "an old idle timer cannot hide a new target's border",
-        state.borders == [true] && scheduler.activeCount == 2)
+        "an old idle timer cannot hide a new target's border or cursor",
+        state.borders == [true] && state.cursorHides == 0 && scheduler.activeCount == 2)
     }
 
     harness { controller, scheduler, state in
@@ -143,7 +146,8 @@ struct OverlayFollowTests {
       check(
         "a phase change on the same window keeps its follow timer, frame and visible border",
         state.frames == [NSStringFromRect(rect(10, 20))] && state.steadyTicks == 1
-          && state.borders == [true] && scheduler.jobs.count == 2 && scheduler.activeCount == 1)
+          && state.borders == [true] && state.cursorHides == 0
+          && scheduler.jobs.count == 2 && scheduler.activeCount == 1)
     }
 
     harness { controller, scheduler, state in

@@ -1,9 +1,8 @@
-import { MAC_PERMISSION_SETTINGS_URLS } from "../permissions/MacPermission.ts";
+import { MAC_PERMISSION_SETTINGS_URLS, type MacPermission } from "../permissions/MacPermission.ts";
 import {
   isLocalEditorFileUrl,
   REMOTE_CAPABLE_EDITOR_IDS,
   remoteSchemeForEditor,
-  type SystemSettingsPane,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -59,7 +58,7 @@ export class ElectronShell extends Context.Service<
   ElectronShell,
   {
     readonly openExternal: (rawUrl: unknown) => Effect.Effect<boolean>;
-    readonly openSystemSettings: (pane: SystemSettingsPane) => Effect.Effect<boolean>;
+    readonly openSystemSettings: (pane: MacPermission) => Effect.Effect<boolean>;
     readonly copyText: (text: string) => Effect.Effect<void>;
   }
 >()("@goat/desktop/electron/ElectronShell") {}

@@ -185,11 +185,13 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
     action: "opened" | "completed" | "declined" | "cancelled",
     computerUseScope?: "session" | "always",
   ) => {
+    const targetRequired = isProvider && !(isComputerUse && action === "cancelled");
     if (
       inFlight.current ||
       offline ||
       (isBrowserClaim && action === "completed" && !canWriteSettings) ||
-      (isProvider && (!canTarget || !(action === "opened" ? canOpen : allowed)))
+      (targetRequired && !canTarget) ||
+      (isProvider && !(action === "opened" ? canOpen : allowed))
     )
       return;
     inFlight.current = true;
@@ -262,7 +264,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
               <Button
                 tone="secondary"
                 label="End computer use"
-                disabled={busy || offline || !allowed || !canTarget}
+                disabled={busy || offline || !allowed}
                 onPress={() => void act("cancelled")}
               />
             ) : null}
@@ -384,7 +386,12 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
             <Button
               tone="primary"
               label={isRuntimeUpdate ? "Cancel" : "Cancel request"}
-              disabled={busy || offline || !allowed || ((isSsh || isProvider) && !canTarget)}
+              disabled={
+                busy ||
+                offline ||
+                !allowed ||
+                (!isComputerUse && (isSsh || isProvider) && !canTarget)
+              }
               onPress={() => void act("cancelled")}
             />
           ) : null}

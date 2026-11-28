@@ -28,6 +28,10 @@ namespace Goat.ComputerUse
         public const string Unreadable =
             "GOAT's computer use relay takes one JSON-RPC request object per line.";
 
+        const int MaxJsonLengthBytes = 64 * 1024 * 1024;
+        internal const int MaxPendingEntries = 256;
+        internal const int MaxShotEntries = 256;
+
         sealed class Pending
         {
             public string Tool;
@@ -35,10 +39,80 @@ namespace Goat.ComputerUse
             public Dictionary<string, object> Arguments;
         }
 
-        readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 64 * 1024 * 1024 };
-        readonly Dictionary<string, Pending> pending = new Dictionary<string, Pending>();
+        internal sealed class BoundedMap<TKey, TValue>
+        {
+            sealed class Entry
+            {
+                public TValue Value;
+                public LinkedListNode<TKey> Node;
+            }
+
+            readonly int capacity;
+            readonly Dictionary<TKey, Entry> items = new Dictionary<TKey, Entry>();
+            readonly LinkedList<TKey> order = new LinkedList<TKey>();
+
+            public BoundedMap(int capacity)
+            {
+                this.capacity = capacity;
+            }
+
+            public int Count { get { return items.Count; } }
+
+            public bool ContainsKey(TKey key)
+            {
+                return items.ContainsKey(key);
+            }
+
+            public void Set(TKey key, TValue value)
+            {
+                Entry existing;
+                if (items.TryGetValue(key, out existing))
+                {
+                    existing.Value = value;
+                    order.Remove(existing.Node);
+                    order.AddLast(existing.Node);
+                    return;
+                }
+                while (items.Count >= capacity && order.First != null)
+                {
+                    TKey oldest = order.First.Value;
+                    order.RemoveFirst();
+                    items.Remove(oldest);
+                }
+                LinkedListNode<TKey> node = order.AddLast(key);
+                items[key] = new Entry { Value = value, Node = node };
+            }
+
+            public bool TryGetValue(TKey key, out TValue value)
+            {
+                Entry existing;
+                if (!items.TryGetValue(key, out existing))
+                {
+                    value = default(TValue);
+                    return false;
+                }
+                value = existing.Value;
+                return true;
+            }
+
+            public bool TryRemove(TKey key, out TValue value)
+            {
+                Entry existing;
+                if (!items.TryGetValue(key, out existing))
+                {
+                    value = default(TValue);
+                    return false;
+                }
+                value = existing.Value;
+                order.Remove(existing.Node);
+                items.Remove(key);
+                return true;
+            }
+        }
+
+        readonly BoundedMap<string, Pending> pending = new BoundedMap<string, Pending>(MaxPendingEntries);
         /// <summary>Each window's last screenshot size as the agent saw it; zoom coordinates are in it.</summary>
-        readonly Dictionary<IntPtr, Shot> shots = new Dictionary<IntPtr, Shot>();
+        readonly BoundedMap<IntPtr, Shot> shots = new BoundedMap<IntPtr, Shot>(MaxShotEntries);
 
         /// <summary>A screenshot as delivered, and the native width it was drawn from: the driver's zoom scale.</summary>
         struct Shot
@@ -64,7 +138,7 @@ namespace Goat.ComputerUse
             Dictionary<string, object> message = Parse(line);
             if (message == null)
             {
-                refusal = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":" + json.Serialize(Unreadable) + "}}";
+                refusal = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,\"message\":" + Serialize(Unreadable) + "}}";
                 return null;
             }
             object id, method, parameters;
@@ -77,14 +151,25 @@ namespace Goat.ComputerUse
             call.TryGetValue("arguments", out arguments);
             var given = arguments as Dictionary<string, object>;
             if (message.TryGetValue("id", out id) && id != null)
+            {
+                string key = Key(id);
+                var entry = new Pending
+                {
+                    Tool = name as string,
+                    Window = given == null ? IntPtr.Zero : WindowOf(given),
+                    Arguments = given,
+                };
                 lock (gate)
-                    pending[Key(id)] = new Pending
+                {
+                    if (pending.Count >= MaxPendingEntries && !pending.ContainsKey(key))
                     {
-                        Tool = name as string,
-                        Window = given == null ? IntPtr.Zero : WindowOf(given),
-                        Arguments = given,
-                    };
-            return DropOutFiles(arguments) ? json.Serialize(message) : line;
+                        refusal = "{\"jsonrpc\":\"2.0\",\"id\":" + Serialize(id) + ",\"error\":{\"code\":-32000,\"message\":\"Too many pending computer use calls; wait for earlier calls to finish.\"}}";
+                        return null;
+                    }
+                    pending.Set(key, entry);
+                }
+            }
+            return DropOutFiles(arguments) ? Serialize(message) : line;
         }
 
         /// <summary>A line from the driver as the agent should receive it, or null to drop it.</summary>
@@ -96,11 +181,10 @@ namespace Goat.ComputerUse
             object id;
             Pending call = null;
             if (message.TryGetValue("id", out id) && id != null)
-                lock (gate)
-                {
-                    string key = Key(id);
-                    if (pending.TryGetValue(key, out call)) pending.Remove(key);
-                }
+            {
+                string key = Key(id);
+                lock (gate) pending.TryRemove(key, out call);
+            }
             bool changed = false;
             // The only images that pass are the helper's own, in the result's content of a paired
             // window read or zoom; everything anywhere else that could be one is withheld.
@@ -138,14 +222,14 @@ namespace Goat.ComputerUse
                 var answer = new Dictionary<string, object>();
                 answer["content"] = new object[] { Text(Withheld) };
                 withheld["result"] = answer;
-                return json.Serialize(withheld);
+                return Serialize(withheld);
             }
             // A paired reply's id is the agent's own, echoed: it stays exactly as the agent sent it.
             // Any other id came from the driver and is scrubbed like the rest.
             if (call != null) message.Remove("id");
             Scrub(message, own, ref changed);
             if (call != null) message["id"] = id;
-            return changed ? json.Serialize(message) : line;
+            return changed ? Serialize(message) : line;
         }
 
         /// <summary>
@@ -232,7 +316,7 @@ namespace Goat.ComputerUse
                 using (Bitmap native = capture(call.Window))
                 {
                     if (native == null) return null;
-                    lock (gate) shots[call.Window] = new Shot { Delivered = size.Value, NativeWidth = native.Width };
+                    lock (gate) shots.Set(call.Window, new Shot { Delivered = size.Value, NativeWidth = native.Width });
                     return CaptureGuard.Png(native, new RectangleF(0, 0, native.Width, native.Height), size.Value.Width, size.Value.Height);
                 }
             }
@@ -297,9 +381,19 @@ namespace Goat.ComputerUse
         /// The id as JSON. A reply whose id does not come back identical (the serializer turns
         /// some strings into dates) finds no pending call, and its images are then withheld.
         /// </summary>
-        string Key(object id)
+        static string Key(object id)
         {
-            return id.GetType().Name + ":" + json.Serialize(id);
+            return id.GetType().Name + ":" + Serialize(id);
+        }
+
+        static JavaScriptSerializer CreateSerializer()
+        {
+            return new JavaScriptSerializer { MaxJsonLength = MaxJsonLengthBytes };
+        }
+
+        static string Serialize(object value)
+        {
+            return CreateSerializer().Serialize(value);
         }
 
         static bool Number(Dictionary<string, object> arguments, string name, out double value)
@@ -331,9 +425,9 @@ namespace Goat.ComputerUse
             return block;
         }
 
-        Dictionary<string, object> Parse(string line)
+        static Dictionary<string, object> Parse(string line)
         {
-            try { return json.DeserializeObject(PlainSlashes(line)) as Dictionary<string, object>; }
+            try { return CreateSerializer().DeserializeObject(PlainSlashes(line)) as Dictionary<string, object>; }
             catch (ArgumentException) { return null; }
             catch (InvalidOperationException) { return null; }
         }

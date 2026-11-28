@@ -254,6 +254,13 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     if (current?.launch !== launch) return;
     if (event.type === "humanInput")
       return publish({ version: 1, type: "cuaHumanInput", source: event.source });
+    if (event.type === "personStop")
+      return publish({
+        version: 1,
+        type: "cuaPersonStop",
+        generation: launch,
+        reason: event.reason,
+      });
     const window = windowKey(event.target);
     if (event.active) {
       const first = secret.size === 0;

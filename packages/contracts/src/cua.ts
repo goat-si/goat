@@ -566,6 +566,7 @@ export const DesktopCuaGrants = Schema.Union([
     bundleId: Schema.String,
     accessibility: Schema.Boolean,
     screenRecording: Schema.Boolean,
+    inputMonitoring: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({
     principal: Schema.Literal("unusable"),
@@ -867,16 +868,50 @@ export const DesktopCuaReadinessReport = Schema.Struct({
 });
 export type DesktopCuaReadinessReport = typeof DesktopCuaReadinessReport.Type;
 
+export const DesktopCuaPersonStopReason = Schema.Literals(["person_esc"]);
+export type DesktopCuaPersonStopReason = typeof DesktopCuaPersonStopReason.Type;
+
+export const DesktopCuaPersonStopReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaPersonStop"),
+  generation: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  reason: DesktopCuaPersonStopReason,
+});
+export type DesktopCuaPersonStopReport = typeof DesktopCuaPersonStopReport.Type;
+
+export const DesktopCuaSessionLockReason = Schema.Literals([
+  "screen_locked",
+  "screensaver_active",
+  "session_deactivated",
+  "system_suspended",
+]);
+export type DesktopCuaSessionLockReason = typeof DesktopCuaSessionLockReason.Type;
+
+export const DesktopCuaSessionLockReport = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("cuaSessionLock"),
+  generation: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  locked: Schema.Boolean,
+  reasons: Schema.Array(DesktopCuaSessionLockReason).check(Schema.isMaxLength(16)),
+});
+export type DesktopCuaSessionLockReport = typeof DesktopCuaSessionLockReport.Type;
+
 export type DesktopCuaSafetyReport =
   | DesktopCuaHumanInputReport
   | DesktopCuaPrivateModeReport
+  | DesktopCuaPersonStopReport
+  | DesktopCuaSessionLockReport
   | DesktopCuaReadinessReport;
 
 export const ComputerUseStopInput = Schema.Struct({ threadId: ThreadId });
-export const ComputerUseStopResult = Schema.Struct({ stopped: Schema.Boolean });
+export const ComputerUseStopResult = Schema.Struct({
+  stopped: Schema.Boolean,
+  failed: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+});
 export const ComputerUseStopAllResult = Schema.Struct({
   /** Threads whose control ended, unattended admissions included. */
   stopped: Schema.Int,
+  failed: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 /** App ids as the driver lists them: a macOS bundle id, or the app name elsewhere. */
 const ComputerUseApps = Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(200))).check(

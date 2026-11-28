@@ -885,26 +885,38 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               readonly evidence?: unknown;
               readonly pressesCompleted?: unknown;
               readonly pressed?: unknown;
+              readonly openedTabId?: unknown;
             })
           : undefined;
+      const openedTabId =
+        operation === "click" &&
+        typeof seen?.openedTabId === "string" &&
+        seen.openedTabId.length > 0
+          ? seen.openedTabId
+          : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
-      // A checked click that found the state already held sent nothing: no input went out.
       const unsent = operation === "click" && seen?.pressed === false;
-      // A range the browser set and read back is confirmed; typed text never is, nor a click a
-      // dialog cut short of its count.
       const confirmed =
         navigated ||
         unsent ||
+        (openedTabId !== undefined && seen?.pressesCompleted === undefined) ||
         (seen?.effect === "confirmed" &&
           seen.pressesCompleted === undefined &&
           Array.isArray(seen.evidence) &&
           (operation === "click" || seen.evidence.includes("value")));
+      const seenEvidence =
+        confirmed && seen && Array.isArray(seen.evidence)
+          ? (seen.evidence as ReadonlyArray<unknown>).map(
+              (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
+            )
+          : [];
+      const clickEvidence =
+        openedTabId === undefined ? seenEvidence : [...seenEvidence, `popup:${openedTabId}`];
       return {
         value:
           call.method === "close_tab"
             ? result
             : withInputTiming(
-                // A click cut short of its count must not read as confirmed in any call form.
                 seen?.pressesCompleted === undefined ? result : { ...seen, effect: "unverifiable" },
                 { ms: endedAt - startedAt, phases: { driverMs: endedAt - sentAt } },
                 context.limits.returnBytes,
@@ -914,10 +926,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ? ["click:already in that state"]
           : navigated
             ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
-            : confirmed && seen
-              ? (seen.evidence as ReadonlyArray<unknown>).map(
-                  (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
-                )
+            : confirmed && clickEvidence.length > 0
+              ? clickEvidence
               : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         ...(unsent

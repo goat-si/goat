@@ -81,6 +81,7 @@ const decodeMessage = Schema.decodeUnknownOption(Schema.fromJsonString(Message))
 export const HelperGrants = Schema.Struct({
   accessibility: Schema.Boolean,
   screenRecording: Schema.Boolean,
+  inputMonitoring: Schema.optionalKey(Schema.Boolean),
 });
 const decodeGrants = Schema.decodeUnknownSync(HelperGrants);
 /**

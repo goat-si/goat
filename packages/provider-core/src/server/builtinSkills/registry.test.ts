@@ -137,7 +137,10 @@ describe("browser skill", () => {
     expect(computerUseAppNote("darwin", "KakaoTalk")).toContain(
       "Opening a chat marks its messages read",
     );
-    expect(computerUseAppNote("darwin", "com.apple.Safari")).toContain("File > Open Location");
+    expect(computerUseAppNote("darwin", "com.apple.Safari")).toContain("GOAT's browser");
+    expect(computerUseAppNote("darwin", "com.apple.Safari")).not.toContain("File > Open Location");
+    expect(computerUseAppNote("darwin", "org.mozilla.firefox")).toContain("GOAT's browser");
+    expect(computerUseAppNote("darwin", "org.chromium.chromium")).toContain("GOAT's browser");
     expect(computerUseAppNote("darwin", "constructor")).toBeUndefined();
   });
 

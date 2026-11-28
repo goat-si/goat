@@ -46,6 +46,7 @@ import {
   PreviewAutomationPageError,
 } from "./previewAutomationSnapshot.ts";
 import { PreviewAutomationReadError } from "./previewAutomationRead.ts";
+import { PreviewAutomationClickRefusal } from "./previewAutomationPrimitives.ts";
 export * from "./previewAutomationSnapshot.ts";
 export * from "./previewAutomationRead.ts";
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
@@ -368,13 +369,6 @@ export const PreviewAutomationSelectInput = Schema.Struct({
   ),
 );
 export type PreviewAutomationSelectInput = typeof PreviewAutomationSelectInput.Type;
-
-export const PreviewAutomationSelectResult = Schema.Struct({
-  selected: Schema.Array(Schema.String).annotate({
-    description: "The values of the options now selected.",
-  }),
-});
-export type PreviewAutomationSelectResult = typeof PreviewAutomationSelectResult.Type;
 
 const PagePoint = Schema.Struct({ x: Schema.Finite, y: Schema.Finite });
 
@@ -839,6 +833,8 @@ export class PreviewAutomationExecutionError extends Schema.TaggedError<PreviewA
     unloadedTab: Schema.optional(Schema.Struct({ tabId: PreviewTabId, loadError: Schema.String })),
     /** Why a tab's fetch got no response it could read: CORS, the page's CSP, DNS or the network. */
     fetchFailure: Schema.optional(Schema.Literals(["cors", "csp", "dns", "network"])),
+    clickRefusal: Schema.optional(PreviewAutomationClickRefusal),
+    interceptedBy: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
   },
 ) {
   override get message(): string {

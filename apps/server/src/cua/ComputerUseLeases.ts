@@ -21,7 +21,6 @@ import {
   type ComputerUseHumanInputSource,
   type ComputerUsePauseReason,
   type CuaAgentBlock,
-  cuaAgentBlockUnder,
   type Handoff,
   type RunId,
   type ThreadId,
@@ -40,6 +39,7 @@ import * as Scheduler from "effect/Scheduler";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
+import type * as Stream from "effect/Stream";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
 import * as CuaDriver from "./CuaDriver.ts";
@@ -73,6 +73,15 @@ import { appsOf, type ComputerUseHolder, holderOf } from "./computerUseGrants.ts
 import { makeCallReservation } from "./ComputerUseLeaseAdmission.ts";
 import { makeStoppedCards } from "./ComputerUseStoppedCards.ts";
 import { makeLeaseSafety } from "./ComputerUseLeaseSafety.ts";
+import {
+  activeBlockedTurns,
+  type ComputerUseAuthorityChange,
+  isActingControl as acting,
+  makeAuthorityNotifier,
+  makeDesktopControlActive,
+  makeHostSafetyHandlers,
+  makeSettleAll,
+} from "./ComputerUseLeaseActivity.ts";
 import { startHelperWatch } from "./ComputerUseLeaseWatch.ts";
 
 export { ComputerUseLeaseError } from "./ComputerUseLeaseQueries.ts";
@@ -310,14 +319,10 @@ export class ComputerUseLeases extends Context.Service<
     >;
     /** Wakes after any admission may have started or ended. Subscribe before reading. */
     readonly subscribe: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
+    readonly desktopControlActive?: Stream.Stream<boolean>;
     readonly changed: Effect.Effect<void>;
     readonly onAuthorityChange?: (
-      listener: (change: {
-        readonly kind: "stop" | "credentialRevoked" | "pause" | "private";
-        readonly threadId: ThreadId;
-        readonly controlId: string;
-        readonly terminal?: "stopped_by_person" | "screen_locked";
-      }) => void,
+      listener: (change: ComputerUseAuthorityChange) => void,
     ) => () => void;
     /** How this server starts its own lease proxy subcommand. */
     readonly proxy: SelfInvocation | undefined;
@@ -340,9 +345,6 @@ interface ControlRecord extends ComputerUseControl {
   readonly waitHeld?: boolean;
 }
 
-/** Whether an agent can act on the screen through this control now. */
-const acting = (record: ControlRecord) => record.ended === undefined && record.idle !== true;
-
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const directory = yield* ChannelBotDirectory.ChannelBotDirectory;
@@ -357,22 +359,7 @@ const make = Effect.gen(function* () {
   const controls = new Map<ThreadId, ControlRecord>();
   const controlSettings = new Map<string, ServerSettings.ServerSettingsService["Service"]>();
   const controlOwners = new Map<string, ThreadId>();
-  const authorityListeners = new Set<
-    (change: {
-      kind: "stop" | "credentialRevoked" | "pause" | "private";
-      threadId: ThreadId;
-      controlId: string;
-      terminal?: "stopped_by_person" | "screen_locked";
-    }) => void
-  >();
-  const notifyAuthority = (change: {
-    kind: "stop" | "credentialRevoked" | "pause" | "private";
-    threadId: ThreadId;
-    controlId: string;
-    terminal?: "stopped_by_person" | "screen_locked";
-  }) => {
-    for (const listener of authorityListeners) listener(change);
-  };
+  const authority = makeAuthorityNotifier();
   const stoppedCards = makeStoppedCards();
   const reservations = makeCallReservations();
   const foreground = makeForegroundApprovals();
@@ -444,6 +431,7 @@ const make = Effect.gen(function* () {
           existing.everyApp === everyApp &&
           DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
         ) {
+          const lockedNow = hostSafety.applyHostSessionLock();
           const identityChanged = runId !== undefined && runId !== existing.runId;
           const reused: ControlRecord = {
             ...nextTurn(existing),
@@ -460,7 +448,12 @@ const make = Effect.gen(function* () {
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
-            implyFocus(reused) || existing.idle === true || moved || identityChanged || unblocked
+            lockedNow ||
+            implyFocus(reused) ||
+            existing.idle === true ||
+            moved ||
+            identityChanged ||
+            unblocked
               ? changed
               : Effect.void;
           return Effect.as(notice, Option.some(reused));
@@ -490,6 +483,7 @@ const make = Effect.gen(function* () {
         }
         controls.set(threadId, next);
         if (Option.isSome(settings)) controlSettings.set(next.controlId, settings.value);
+        hostSafety.applyHostSessionLock();
         foreground.bindPending(
           threadId,
           next.controlId,
@@ -638,7 +632,7 @@ const make = Effect.gen(function* () {
     controls.set(threadId, { ...record, ended: reason });
     reservations.forgetClosed(threadId, record.controlId);
     reservations.markStopped(threadId, record.controlId, now);
-    notifyAuthority({
+    authority.notify({
       kind: reason === "revoked" ? "credentialRevoked" : "stop",
       threadId,
       controlId: record.controlId,
@@ -692,7 +686,7 @@ const make = Effect.gen(function* () {
       interrupted(reason);
       for (const record of controls.values())
         if (record.ended === undefined)
-          notifyAuthority({
+          authority.notify({
             kind: reason === "private" ? "private" : "pause",
             threadId: record.threadId,
             controlId: record.controlId,
@@ -701,8 +695,25 @@ const make = Effect.gen(function* () {
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
+  const hostSafety = makeHostSafetyHandlers({
+    controls,
+    getPaused: () => paused,
+    setScreenLocked: () => {
+      foreground.clear();
+      paused = "screen_locked";
+      interrupted("screen_locked");
+    },
+    pause,
+    stopAllAt,
+    changed,
+  });
+
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
-  const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
+  const { desktop, linuxHelper, detection } = yield* makeLeaseSafety({
+    changed,
+    onPersonStop: hostSafety.onPersonStop,
+    onSessionLock: hostSafety.onSessionLock,
+  });
   // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
   // them only with privateModeOn in ComputerUsePrivateMode.ts.
   const privateHost = false;
@@ -732,6 +743,12 @@ const make = Effect.gen(function* () {
     blocked: () => paused !== undefined || privateHost,
     interruptions: () => interruptions.count,
     bound: (threadId, controlId, id) => foreground.bound(id, threadId, controlId),
+  });
+
+  const desktopControlActive = makeDesktopControlActive({
+    signals,
+    controls,
+    isPaused: () => paused !== undefined,
   });
 
   return ComputerUseLeases.of({
@@ -898,42 +915,7 @@ const make = Effect.gen(function* () {
     stopAll: Effect.map(Clock.currentTimeMillis, stopAllAt).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
-    settle: Effect.suspend(() =>
-      Effect.forEach(
-        [...controls.values()]
-          .filter(
-            (record) => acting(record) || (record.ended === undefined && record.waitHeld === true),
-          )
-          .map((record) => record.threadId),
-        (threadId) =>
-          turnEnded(threadId).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("computer use control left to expire", { threadId, cause }),
-            ),
-          ),
-        { discard: true },
-      ).pipe(
-        // A blocked turn has no control; it leaves the list once nothing of it is open.
-        Effect.andThen(
-          Effect.forEach(
-            [...blockedTurns.keys()],
-            (threadId) =>
-              openWork(threadId).pipe(
-                Effect.flatMap((open) =>
-                  open || !blockedTurns.delete(threadId) ? Effect.void : changed,
-                ),
-                Effect.catch((cause) =>
-                  Effect.logWarning("blocked computer use turn kept until the next end", {
-                    threadId,
-                    cause,
-                  }),
-                ),
-              ),
-            { discard: true },
-          ),
-        ),
-      ),
-    ),
+    settle: makeSettleAll({ controls, blockedTurns, turnEnded, openWork, changed }),
     disable: Effect.map(Clock.currentTimeMillis, (now) => {
       foreground.clear();
       const listed = blockedTurns.size > 0;
@@ -951,6 +933,7 @@ const make = Effect.gen(function* () {
     detection,
     resume: Effect.sync(() => {
       paused = undefined;
+      hostSafety.clearHostSessionLock();
     }).pipe(Effect.andThen(changed)),
     hold: (id, on) => Effect.sync(() => holdFor(id, on)).pipe(Effect.andThen(changed)),
     // Suspended: the controls are read each time it runs, never once when the service is built.
@@ -971,25 +954,16 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.map(stoppedCards.merge)),
     ),
     subscribe: PubSub.subscribe(signals),
+    desktopControlActive,
     changed,
-    onAuthorityChange: (listener) => {
-      authorityListeners.add(listener);
-      return () => void authorityListeners.delete(listener);
-    },
+    onAuthorityChange: authority.subscribe,
     proxy,
     blocked: (threadId, block) =>
       Effect.sync(() => void blockedTurns.set(threadId, block)).pipe(Effect.andThen(changed)),
     // Read against the helper's latest readiness: a grant that came back is no longer named, and a
     // turn whose grants all came back has nothing to show. Its readiness report wakes the lists.
     blockedTurns: (Option.isSome(desktop) ? desktop.value.cuaReadiness : Effect.succeedNone).pipe(
-      Effect.map((report) =>
-        [...blockedTurns].flatMap(([threadId, recorded]) => {
-          const block = Option.isSome(report)
-            ? cuaAgentBlockUnder(recorded, report.value.readiness)
-            : recorded;
-          return block === undefined ? [] : [{ threadId, block }];
-        }),
-      ),
+      Effect.map((report) => activeBlockedTurns(blockedTurns, report)),
     ),
   });
 });

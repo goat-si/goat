@@ -9,6 +9,7 @@ import type { CuaGrantReadEntry, CuaGrantReadLog, CuaGrantReadSubject } from "./
 export interface CuaGrantRead {
   readonly accessibility: boolean;
   readonly screenRecording: boolean;
+  readonly inputMonitoring?: boolean;
 }
 
 /** Asks the app for its grants now, and logs what the read found when that changed. */
@@ -201,6 +202,7 @@ const readCuaGrants = Effect.fn("desktop.cua.grants")(function* (
         bundleId: target.bundleId,
         accessibility: read.accessibility,
         screenRecording: read.screenRecording,
+        ...(read.inputMonitoring === undefined ? {} : { inputMonitoring: read.inputMonitoring }),
       }),
     }),
   );

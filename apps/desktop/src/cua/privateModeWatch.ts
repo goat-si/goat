@@ -1,4 +1,4 @@
-import type { DesktopCuaPrivateModeReport } from "@goat/contracts";
+import type { DesktopCuaPersonStopReport, DesktopCuaPrivateModeReport } from "@goat/contracts";
 
 import type { HelperEvent, HelperSession } from "./ComputerUseHelper.ts";
 
@@ -12,10 +12,11 @@ type Target = DesktopCuaPrivateModeReport["target"];
  * cleared, as the protocol has a helper's exit clear everything it reported.
  */
 export function makePrivateModeFollower(deps: {
-  readonly publish: (report: DesktopCuaPrivateModeReport) => void;
+  readonly publish: (report: DesktopCuaPrivateModeReport | DesktopCuaPersonStopReport) => void;
   readonly newWatchId: () => string;
   /** Runs a retry later, after a watch or unwatch failed while it still matters. */
   readonly retryLater: (retry: () => void) => void;
+  readonly generation?: () => number;
 }) {
   let watching = false;
   let session: Watchable | undefined;
@@ -30,6 +31,16 @@ export function makePrivateModeFollower(deps: {
   const report = (isActive: boolean, target: Target) =>
     deps.publish({ version: 1, type: "cuaPrivateMode", active: isActive, target });
   const onEvent = (event: HelperEvent["event"]) => {
+    if (event.type === "personStop") {
+      const generation = deps.generation?.();
+      deps.publish({
+        version: 1,
+        type: "cuaPersonStop",
+        ...(generation === undefined ? {} : { generation }),
+        reason: event.reason,
+      });
+      return;
+    }
     if (event.type !== "privateMode") return;
     // An inactive first state names no window; there is nothing to clear.
     if (!event.active && active === undefined) return;

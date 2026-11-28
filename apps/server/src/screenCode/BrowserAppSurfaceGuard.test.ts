@@ -78,7 +78,17 @@ describe("guardBrowserAppSurface", () => {
 
   it("refuses each input method on web content in all six browsers", () => {
     for (const [appId] of browsers) {
-      for (const method of ["click", "type_text", "set_value", "press_key"]) {
+      for (const method of [
+        "click",
+        "right_click",
+        "drag",
+        "scroll",
+        "hover",
+        "type_text",
+        "set_value",
+        "press_key",
+        "select_text",
+      ]) {
         expect(guardBrowserAppSurface({ method, appId, target: target() }).refused?.reason).toBe(
           "web_content",
         );
@@ -90,7 +100,7 @@ describe("guardBrowserAppSurface", () => {
     expect(
       guardBrowserAppSurface({ method: "click", appId: "com.apple.finder", target: target() }),
     ).toEqual({});
-    for (const method of ["screenshot", "scroll", "get_accessibility_tree"]) {
+    for (const method of ["screenshot", "get_accessibility_tree"]) {
       expect(
         guardBrowserAppSurface({ method, appId: "com.google.Chrome", target: target() }),
       ).toEqual({});
@@ -362,7 +372,74 @@ describe("browser surface reads", () => {
   it("does not touch other apps or unguarded methods", () => {
     const editor = { ...holder(chromeState()), appId: "org.example.Editor" };
     expect(verdict(editor, "click", 3)).toBeUndefined();
-    expect(verdict(holder(chromeState()), "right_click", 3)).toBeUndefined();
+    expect(verdict(holder(chromeState()), "screenshot", 3)).toBeUndefined();
+  });
+
+  it("guards right_click, scroll, hover, select_text, and both drag endpoints while permitting native sheets", () => {
+    const bound = holder(chromeState());
+    const resolve = (el: Record<string, unknown>) =>
+      typeof el.token === "string" ? el.token : undefined;
+    for (const method of ["right_click", "scroll", "hover", "select_text"]) {
+      expect(verdict(bound, method, 3), method + ":web").toBe("web_content");
+      expect(verdict(bound, method, 2), method + ":address").toBe("address_bar");
+      expect(verdict(bound, method, undefined), method + ":unverified").toBe("unverified_target");
+      expect(verdict(bound, method, 5), method + ":sheet").toBeUndefined();
+      expect(verdict(bound, method, 1), method + ":toolbar").toBeUndefined();
+    }
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { fromEnd: { elementRef: { token: "c1:1" } }, toEnd: { elementRef: { token: "c1:3" } } },
+        resolve,
+        true,
+      )?.detail,
+    ).toBe("web_content");
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { fromEnd: { elementRef: { token: "c1:3" } }, toEnd: { elementRef: { token: "c1:1" } } },
+        resolve,
+        true,
+      )?.detail,
+    ).toBe("web_content");
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { fromEnd: { elementRef: { token: "c1:1" } }, toEnd: { elementRef: { token: "c1:2" } } },
+        resolve,
+        true,
+      )?.detail,
+    ).toBe("address_bar");
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { fromEnd: { elementRef: { token: "c1:1" } }, toEnd: { x: 100, y: 200 } },
+        resolve,
+        true,
+      )?.detail,
+    ).toBe("unverified_target");
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { from_x: 10, from_y: 20, to_x: 100, to_y: 200 },
+        resolve,
+        true,
+      )?.detail,
+    ).toBe("unverified_target");
+    expect(
+      browserSurfaceRefusal(
+        bound,
+        "drag",
+        { fromEnd: { elementRef: { token: "c1:5" } }, toEnd: { elementRef: { token: "c1:1" } } },
+        resolve,
+        true,
+      ),
+    ).toBeUndefined();
   });
 });
 
@@ -451,6 +528,45 @@ describe("DesktopTargetHost browser surface", () => {
       yield* host.invoke(input("click", 3), context);
       expect(clicks()).toHaveLength(1);
     }),
+  );
+
+  it.effect(
+    "refuses newly guarded methods on web content in single calls, select_text, and batch preflight while allowing native sheets",
+    () =>
+      Effect.gen(function* () {
+        const { host, sent, ref } = yield* observeChrome();
+        const observed = (yield* host.observe(call("get_window_state", {}, ref), context)).value;
+        const webRef = byIndex(observed, 3);
+        const toolbarRef = byIndex(observed, 1);
+        const sheetRef = byIndex(observed, 5);
+        for (const refusedCall of [
+          call("right_click", { elementRef: webRef }, ref),
+          call("scroll", { elementRef: webRef, direction: "down", amount: 3 }, ref),
+          call("hover", { elementRef: webRef }, ref),
+          call("select_text", { elementRef: webRef, text: "Sign" }, ref),
+          call("drag", { fromEnd: { elementRef: toolbarRef }, toEnd: { elementRef: webRef } }, ref),
+          call("drag", { fromEnd: { elementRef: webRef }, toEnd: { elementRef: toolbarRef } }, ref),
+        ]) {
+          expect(yield* host.invoke(refusedCall, context).pipe(Effect.flip)).toMatchObject({
+            code: "browser_surface_required",
+            effectStarted: false,
+            detail: "web_content",
+          });
+        }
+        const batchResult = yield* host.dispatchBatch!(
+          [call("select_text", { elementRef: webRef, text: "Sign" }, ref)],
+          context,
+          () => true,
+        );
+        expect(batchResult[0]?._tag).toBe("Failure");
+        expect(
+          sent.filter((entry) =>
+            ["right_click", "scroll", "hover", "select_text", "drag"].includes(entry.tool),
+          ),
+        ).toEqual([]);
+        yield* host.invoke(call("right_click", { elementRef: sheetRef }, ref), context);
+        expect(sent.filter((entry) => entry.tool === "right_click")).toHaveLength(1);
+      }),
   );
 
   it.live(

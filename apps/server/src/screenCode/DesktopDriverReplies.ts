@@ -101,6 +101,91 @@ export const driverFailureNextStep = (
     ? "Earlier input may have landed. Observe before acting; never resend it."
     : error.nextStep;
 };
+const BACKGROUND_CONTAINMENT_CODES = new Set([
+  "sheet_or_modal_on_target_window",
+  "foreign_overlay_above_granted",
+  "hit_test_foreign_pid",
+  "focused_window_mismatch",
+  "focused_element_foreign_pid",
+  "focused_element_not_at_point",
+  "mouse_containment_unverifiable",
+  "keyboard_containment_unverifiable",
+  "off_space_containment_unverifiable",
+]);
+
+const IDENTITY_REFUSAL_CODES = new Set([
+  "identity_not_unique",
+  "identity_unproven",
+  "ambiguous_target",
+]);
+
+const SECURE_INPUT_REFUSAL_CODES = new Set(["secure_input_active", "secure_field"]);
+
+const USER_TYPING_REFUSAL_CODES = new Set([
+  "user_interacting",
+  "user_actively_typing",
+  "recent_hid_keydown_would_misdirect",
+]);
+
+const classifyPreDispatchRefusalCode = (
+  code: string | undefined,
+  said: string | undefined,
+  structured: Record<string, unknown> | undefined,
+): ScreenRunError | undefined => {
+  if (code === undefined) return undefined;
+  if (SECURE_INPUT_REFUSAL_CODES.has(code))
+    return {
+      ...fail(
+        "private",
+        said ??
+          "A secure field or secure input mode is active; nothing was sent. Wait until secure input ends before continuing.",
+      ),
+      ...refusalOf(structured),
+      refused: "privateMode",
+    };
+  if (code === "titlebar_would_raise_window")
+    return {
+      ...fail(
+        "unsupported",
+        said ??
+          "Clicking the title bar in background mode would raise the window; nothing was sent. Use another control or request foreground control.",
+      ),
+      ...refusalOf(structured),
+      refused: "backgroundUnavailable",
+    };
+  if (BACKGROUND_CONTAINMENT_CODES.has(code))
+    return {
+      ...fail(
+        "unsupported",
+        said ??
+          "Background containment or target focus could not be verified; nothing was sent. Observe again, target an unobstructed control, or request foreground control.",
+      ),
+      ...refusalOf(structured),
+      refused: "backgroundUnavailable",
+    };
+  if (IDENTITY_REFUSAL_CODES.has(code))
+    return {
+      ...fail(
+        "stale_reference",
+        said ??
+          "Target identity could not be uniquely verified; nothing was sent. Observe again and pick an unambiguous element.",
+      ),
+      ...refusalOf(structured),
+      refused: "staleElement",
+    };
+  if (code === "lock_timeout")
+    return {
+      ...fail(
+        "unavailable",
+        said ??
+          "The desktop driver lock timed out before sending input; nothing was sent. Wait a moment and retry.",
+      ),
+      ...refusalOf(structured),
+      refused: "helperUnavailable",
+    };
+  return undefined;
+};
+
 const classifyDriverError = (
   reply: ComputerUsePrimitiveReply,
   tool?: string,
@@ -153,7 +238,8 @@ const classifyDriverError = (
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
   if (
-    driverCode === "user_interacting" &&
+    driverCode !== undefined &&
+    USER_TYPING_REFUSAL_CODES.has(driverCode) &&
     (structured?.effect === undefined || structured.effect === "refused")
   ) {
     const retry = object(structured?.refusal)?.retry_after_ms ?? structured?.retry_after_ms;
@@ -249,6 +335,8 @@ const classifyDriverError = (
         ...fail("unavailable", said ?? "The window could not be brought to the front."),
         ...refusalOf(structured),
       };
+    const typedPreDispatch = classifyPreDispatchRefusalCode(code, said, structured);
+    if (typedPreDispatch !== undefined) return typedPreDispatch;
     const isInvalidCoord =
       code === "invalid_arguments" ||
       code === "point_outside_window" ||
@@ -269,6 +357,10 @@ const classifyDriverError = (
   if (result?.isError === true || reply.error !== undefined) {
     if (structured?.effect === "unverifiable")
       return { ...fail("unknown_outcome"), effectStarted: true };
+    if (structured?.effect === undefined && !mayHaveRun()) {
+      const typedPreDispatch = classifyPreDispatchRefusalCode(driverCode, said, structured);
+      if (typedPreDispatch !== undefined) return typedPreDispatch;
+    }
     // An effect of "refused" never gets here: the refused branch above answers it.
     if (structured?.effect === undefined && driverCode === "permission_denied" && !mayHaveRun())
       return {
@@ -344,7 +436,17 @@ export const driverWarnings = (
   const disabled = (after ?? fallback)
     ?.split(/(?<=[.!?])\s+/u)
     .find((sentence) => /disabled/i.test(sentence));
-  const warnings = [focusWarning, disabled, string(fields?.note), string(fields?.warning)]
+  const focusUnconfirmed =
+    source === "input" && fields?.focus_confirmed === false
+      ? "target focus was not confirmed after input; verify focus before typing"
+      : undefined;
+  const warnings = [
+    focusWarning,
+    focusUnconfirmed,
+    disabled,
+    string(fields?.note),
+    string(fields?.warning),
+  ]
     .filter((item): item is string => item !== undefined)
     .map((item) => item.replace(/\s+/gu, " ").trim().slice(0, 200))
     .filter((item) => item.length > 0);
@@ -357,25 +459,31 @@ export const driverResult = (
   reply: ComputerUsePrimitiveReply,
 ): ScreenHostDispatchResult => {
   const value = driverValue(reply);
-  const effect = object(value)?.effect;
+  const fields = object(value);
+  const effect = fields?.effect;
+  const focusUnconfirmed = fields?.focus_confirmed === false;
   const category =
-    effect === "confirmed" || effect === "partial" || effect === "refused"
-      ? effect
-      : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
-        ? "suspected_noop"
-        : "unverifiable";
+    effect === "confirmed" && !focusUnconfirmed
+      ? "confirmed"
+      : effect === "partial" || effect === "refused"
+        ? effect
+        : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
+          ? "suspected_noop"
+          : "unverifiable";
   const warnings = driverWarnings(reply, "input");
+  const evidence = [
+    ...(effect === "confirmed" && !focusUnconfirmed
+      ? ["driver:effect=confirmed"]
+      : category === "unverifiable"
+        ? []
+        : driverEvidence(fields)),
+    ...(focusUnconfirmed ? ["driver:focus_confirmed=false"] : []),
+  ];
   return {
     value,
     category,
     ...(warnings.length ? { warnings } : {}),
-    // A result that did not do what was asked fails at the bridge; it keeps the driver's words.
-    evidence:
-      effect === "confirmed"
-        ? ["driver:effect=confirmed"]
-        : category === "unverifiable"
-          ? []
-          : driverEvidence(object(value)),
+    evidence,
     safety: driverOutcomeSafety(tool, reply),
   };
 };

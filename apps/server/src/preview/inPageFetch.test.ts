@@ -154,6 +154,53 @@ describe("inPageFetch privacy", () => {
     ).rejects.toMatchObject({ reason: "privateMode" });
   });
 
+  it("validates final response URL scheme and blocked-host validator before reading cookies or returning data", async () => {
+    const control = new SessionControl("agent");
+    const cookies = vi.fn(async () => []);
+    const pageWithFinalUrl = (finalUrl: string) => ({
+      url: () => "https://app.example/",
+      evaluateHandle: vi.fn(async () => {
+        const held = {
+          outcome: {
+            url: finalUrl,
+            status: 200,
+            ok: true,
+            contentType: "text/plain",
+            kind: "text" as const,
+            text: "SENSITIVE_BODY",
+            truncated: false,
+          },
+          body: null,
+        };
+        return {
+          evaluate: async (read: (value: typeof held) => unknown) => read(held),
+          dispose: async () => undefined,
+        };
+      }),
+      context: () => ({ cookies }),
+      on: () => undefined,
+      off: () => undefined,
+    });
+    await expect(
+      inPageFetch(pageWithFinalUrl("file:///etc/passwd") as unknown as Page, control, {
+        url: "/me",
+      }),
+    ).rejects.toThrow(/Only http and https/);
+    await expect(
+      inPageFetch(
+        pageWithFinalUrl("https://blocked.example/secret") as unknown as Page,
+        control,
+        { url: "/me" },
+        undefined,
+        (targetUrl) => {
+          if (new URL(targetUrl).hostname === "blocked.example")
+            throw new Error("blocked_final_url");
+        },
+      ),
+    ).rejects.toThrow("blocked_final_url");
+    expect(cookies).not.toHaveBeenCalled();
+  });
+
   it("gives up on a page that never answers at its deadline, releases its handle and lets the next queued action run", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
@@ -272,12 +319,157 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(result.text).toContain("# Inbox");
     expect(result.text).toContain("# Messages");
     expect(result.text).toContain("- First item");
-    expect(result.text).toContain("- Second item");
-    expect(result.text).toContain("[docs](https://app.example/docs?token=redacted&page=2)");
-    expect(result.text).toContain("~~~\n  code line\n~~~");
+    expect(result.text).toContain("- Second **item**");
+    expect(result.text).toContain("[docs](/docs?token=redacted&page=2)");
+    expect(result.text).toContain("```\n  code line\n```");
     expect(result.text).not.toMatch(
       /script-token|template-token|hidden-token|csrf-hidden|pw-value|draft-text|abc123|javascript/,
     );
+  });
+
+  it("uses clean markdown extraction to drop SPA JSON blobs, display:none, and inert noise while keeping secret redaction", async () => {
+    const spaBlob = JSON.stringify({ $type: "hydration", payload: "x".repeat(150) });
+    await page.route("https://app.example/spa", (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body: `<html><head><title>App</title></head><body><h1>Feed</h1><p>${spaBlob}</p><div style="display:none">hidden-display-1</div><div inert>inert-block-2</div><p>Cookie LongHttpOnlyValue123 ok</p></body></html>`,
+      }),
+    );
+    const result = await inPageFetch(page, control, { url: "/spa", format: "markdown" });
+    expect(result.format).toBe("markdown");
+    expect(result.text).toContain("# App");
+    expect(result.text).toContain("# Feed");
+    expect(result.text).toContain("Cookie [redacted] ok");
+    expect(result.text).not.toContain("hydration");
+    expect(result.text).not.toContain("hidden-display-1");
+    expect(result.text).not.toContain("inert-block-2");
+    expect(result.text).not.toContain("LongHttpOnlyValue123");
+  });
+
+  it("refuses 302 redirects to blocked hosts or non-http schemes without leaking response data", async () => {
+    let blockedHostHits = 0;
+    let raceHits = 0;
+    const releaseFirstRace = Promise.withResolvers<void>();
+    const firstRaceArrived = Promise.withResolvers<void>();
+    const server = NodeHttp.createServer((request, response) => {
+      const port = (server.address() as NodeNet.AddressInfo).port;
+      if (request.url === "/page") {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<p>ok</p>");
+        return;
+      }
+      if (request.url === "/to-allowed") {
+        response.writeHead(302, { location: "/allowed-final" });
+        response.end();
+        return;
+      }
+      if (request.url === "/allowed-final") {
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.end("ALLOWED_REDIRECT_BODY");
+        return;
+      }
+      if (request.url === "/to-blocked") {
+        response.writeHead(302, { location: `http://localhost:${port}/secret` });
+        response.end();
+        return;
+      }
+      if (request.url === "/bounce") {
+        response.writeHead(302, { location: `http://localhost:${port}/hop` });
+        response.end();
+        return;
+      }
+      if (request.url === "/hop") {
+        blockedHostHits++;
+        response.writeHead(302, {
+          location: `http://127.0.0.1:${port}/final`,
+          "access-control-allow-origin": "*",
+        });
+        response.end();
+        return;
+      }
+      if (request.url === "/secret") {
+        blockedHostHits++;
+        response.writeHead(200, {
+          "content-type": "text/plain",
+          "access-control-allow-origin": "*",
+        });
+        response.end("TOP_SECRET_BODY");
+        return;
+      }
+      if (request.url === "/final") {
+        blockedHostHits++;
+        response.writeHead(200, {
+          "content-type": "text/plain",
+          "access-control-allow-origin": "*",
+        });
+        response.end("FINAL_AFTER_BLOCKED_HOP");
+        return;
+      }
+      if (request.url === "/to-file") {
+        response.writeHead(302, { location: "file:///etc/passwd" });
+        response.end();
+        return;
+      }
+      if (request.url === "/race-redirect") {
+        raceHits++;
+        if (raceHits === 1) {
+          firstRaceArrived.resolve();
+          void releaseFirstRace.promise.then(() => {
+            response.writeHead(302, { location: "/allowed-final" });
+            response.end();
+          });
+          return;
+        }
+        releaseFirstRace.resolve();
+        response.writeHead(302, { location: `http://localhost:${port}/secret` });
+        response.end();
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await using _server = {
+      [Symbol.asyncDispose]: () => new Promise<void>((done) => server.close(() => done())),
+    };
+    const port = (server.address() as NodeNet.AddressInfo).port;
+    const redirectPage = await context.newPage();
+    await redirectPage.goto(`http://127.0.0.1:${port}/page`);
+    const blockedUrls: Array<string> = [];
+    const validateUrl = (targetUrl: string) => {
+      if (new URL(targetUrl).hostname === "localhost") {
+        blockedUrls.push(targetUrl);
+        throw new Error("blocked_redirect_host");
+      }
+    };
+    const allowed = await inPageFetch(
+      redirectPage,
+      control,
+      { url: "/to-allowed" },
+      undefined,
+      validateUrl,
+    );
+    expect(allowed.text).toBe("ALLOWED_REDIRECT_BODY");
+    await expect(
+      inPageFetch(redirectPage, control, { url: "/to-blocked" }, undefined, validateUrl),
+    ).rejects.toThrow("blocked_redirect_host");
+    await expect(
+      inPageFetch(redirectPage, control, { url: "/bounce" }, undefined, validateUrl),
+    ).rejects.toThrow("blocked_redirect_host");
+    await expect(
+      inPageFetch(redirectPage, control, { url: "/to-file" }, undefined, validateUrl),
+    ).rejects.toThrow(/Only http and https|Refused redirect without a valid Location header/);
+    const backgroundFetch = redirectPage.evaluate(
+      "fetch('/race-redirect', { redirect: 'manual' }).then((res) => res.type)",
+    );
+    await firstRaceArrived.promise;
+    await expect(
+      inPageFetch(redirectPage, control, { url: "/race-redirect" }, undefined, validateUrl),
+    ).rejects.toThrow("blocked_redirect_host");
+    await backgroundFetch;
+    expect(blockedHostHits).toBe(0);
+    expect(blockedUrls.some((entry) => entry.includes("/secret"))).toBe(true);
+    expect(blockedUrls.some((entry) => entry.includes("/hop"))).toBe(true);
   });
 
   it("sends the session's cookies but returns none of them, nor any credential header", async () => {

@@ -16,7 +16,15 @@ export class ElectronPowerMonitor extends Context.Service<
     readonly getSystemIdleState: (idleThresholdSeconds: number) => Effect.Effect<ElectronIdleState>;
     readonly getCurrentThermalState: Effect.Effect<ElectronThermalState>;
     readonly onSimpleEvent: (
-      eventName: "lock-screen" | "unlock-screen" | "on-ac" | "on-battery" | "suspend" | "resume",
+      eventName:
+        | "lock-screen"
+        | "unlock-screen"
+        | "on-ac"
+        | "on-battery"
+        | "suspend"
+        | "resume"
+        | "user-did-resign-active"
+        | "user-did-become-active",
       listener: () => void,
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly onThermalStateChange: (

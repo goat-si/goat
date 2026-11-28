@@ -190,6 +190,24 @@ private final class SystemWindowAXSubscription: WindowAXSubscription {
     return true
   }
 
+  func addOptional(_ element: WindowAXElement, notification: String) -> WindowAXAddResult {
+    guard let observer, CFGetTypeID(element.reference) == AXUIElementGetTypeID() else {
+      return .failed(AXError.illegalArgument.rawValue)
+    }
+    let ax = unsafeBitCast(element.reference, to: AXUIElement.self)
+    let status = AXObserverAddNotification(observer, ax, notification as CFString, context)
+    switch status {
+    case .success:
+      registrations.append((element, notification))
+      return .added
+    case .notificationUnsupported, .attributeUnsupported,
+      .notImplemented, .notificationAlreadyRegistered:
+      return .unsupported
+    default:
+      return .failed(status.rawValue)
+    }
+  }
+
   func attach() {
     fenceLock.lock()
     defer { fenceLock.unlock() }

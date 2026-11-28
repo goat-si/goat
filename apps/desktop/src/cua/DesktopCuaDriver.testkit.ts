@@ -6,8 +6,10 @@ import type {
   DesktopCuaAppsReport,
   DesktopCuaDriverReport,
   DesktopCuaDriverRequest,
+  DesktopCuaPersonStopReport,
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
+  DesktopCuaSessionLockReport,
 } from "@goat/contracts";
 import {
   admittedCuaApplications,
@@ -29,7 +31,11 @@ import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublishe
 import type { HelperEvent } from "./ComputerUseHelper.ts";
 import { makeHelperServiceManager } from "./ComputerUseHelperService.ts";
 import { makeAppCatalog } from "./appCatalog.ts";
-import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
+import {
+  make,
+  type DesktopCuaDriverDependencies,
+  type DesktopCuaPowerEvent,
+} from "./DesktopCuaDriver.ts";
 import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
 
 // The embedded allowlist forwards only these opt-outs; DO_NOT_TRACK would fail construction.
@@ -55,6 +61,7 @@ export const HELPER_BUNDLE = "/Helpers/GOAT Computer Use.app";
 /** The helper's answer to a grant check; detail and blocker are its Windows refusal. */
 export interface HelperAnswer {
   readonly granted: boolean;
+  readonly inputMonitoring?: boolean;
   readonly detail?: string;
   readonly blocker?: ComputerUseReadiness["blockers"][number];
   /** Fails the read the way a helper that cannot answer does. */
@@ -101,6 +108,7 @@ export const healthyTools = (): Record<string, ToolResult> => ({
 export const fixture = Effect.fn(function* (
   options: {
     platform?: NodeJS.Platform;
+    processArch?: string;
     isPackaged?: boolean;
     /** Runs as a dev launcher does: a dev server URL and the checkout's own app id. */
     development?: { readonly appUserModelId: string };
@@ -169,10 +177,32 @@ export const fixture = Effect.fn(function* (
     { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
   ];
   const safety: DesktopCuaPrivateModeReport[] = [];
+  const personStopReports: DesktopCuaPersonStopReport[] = [];
+  const sessionLockReports: DesktopCuaSessionLockReport[] = [];
   const safetyHeard = yield* Queue.unbounded<void>();
+  const powerSaveEvents: Array<
+    | { readonly kind: "start"; readonly type: string; readonly id: number }
+    | { readonly kind: "stop"; readonly id: number }
+  > = [];
+  const activePowerSaveIds = new Set<number>();
+  let nextPowerSaveId = 0;
+  const powerSaveBlocker = {
+    start: (type: "prevent-display-sleep" | "prevent-app-suspension") => {
+      const id = ++nextPowerSaveId;
+      activePowerSaveIds.add(id);
+      powerSaveEvents.push({ kind: "start", type, id });
+      return id;
+    },
+    stop: (id: number) => {
+      activePowerSaveIds.delete(id);
+      powerSaveEvents.push({ kind: "stop", id });
+    },
+    isStarted: (id: number) => activePowerSaveIds.has(id),
+  };
   /** The helper's watch calls, in order, and a way to raise its private-mode event. */
   const helperWatches = yield* Queue.unbounded<"watch" | "unwatch">();
   let raise: ((active: boolean, windowId: number) => void) | undefined;
+  let raiseStop: (() => void) | undefined;
   const starting = yield* Deferred.make<void>();
   const helperStarting = yield* Deferred.make<void>();
   let helperStartHeld = false;
@@ -229,6 +259,7 @@ export const fixture = Effect.fn(function* (
   const helperLaunches: Array<{
     bundleId: string;
     driverPath: string;
+    driverVersion: string;
     manifestPath: string;
     environment: ReadonlyArray<{ name: string; value: string }>;
     direct: boolean;
@@ -273,6 +304,9 @@ export const fixture = Effect.fn(function* (
       return {
         accessibility: granted,
         screenRecording: granted,
+        ...(helperAnswer?.inputMonitoring === undefined
+          ? {}
+          : { inputMonitoring: helperAnswer.inputMonitoring }),
         // A probe's helper says in its hello what it can do, as an agent's helper does.
         features: {
           canWatch: helperAnswer?.canWatch ?? options.helperWithoutWatch !== true,
@@ -323,6 +357,7 @@ export const fixture = Effect.fn(function* (
       helperLaunches.push({
         bundleId: helper.bundle.bundleId,
         driverPath: helper.bundle.driverPath,
+        driverVersion: helper.driverVersion,
         manifestPath: helper.capabilityManifestPath,
         environment: helper.environment,
         direct: helper.direct === true,
@@ -353,6 +388,7 @@ export const fixture = Effect.fn(function* (
           // A watch's first state follows its answer.
           raise = (active, windowId) =>
             listener?.({ type: "privateMode", active, target: { pid: 7, windowId } });
+          raiseStop = () => listener?.({ type: "personStop", reason: "person_esc" });
         },
         unwatch: async () => {
           Queue.offerUnsafe(helperWatches, "unwatch");
@@ -528,6 +564,7 @@ export const fixture = Effect.fn(function* (
     },
     processId: HOST_PID,
     executablePath: "C:\\Program Files\\GOAT\\GOAT.exe",
+    powerSaveBlocker,
     loadElectron: async () => ({
       requestMacOSPermissions: () => ({ accessibility: allowed, screenRecording: allowed }),
       hasRequiredMacOSPermissions: (permissions) =>
@@ -649,13 +686,15 @@ export const fixture = Effect.fn(function* (
     publishCuaSafety: (report) =>
       Effect.sync(() => {
         if (report.type === "cuaPrivateMode") safety.push(report);
+        else if (report.type === "cuaPersonStop") personStopReports.push(report);
+        else if (report.type === "cuaSessionLock") sessionLockReports.push(report);
       }).pipe(Effect.andThen(Queue.offer(safetyHeard, undefined)), Effect.asVoid),
   });
   const environment = DesktopEnvironment.layer({
     dirname: "/app",
     homeDirectory: "/home/test",
     platform: options.platform ?? "linux",
-    processArch: "x64",
+    processArch: options.processArch ?? "x64",
     appVersion: "1.0.0",
     appPath: "/app",
     isPackaged: options.isPackaged ?? true,
@@ -679,7 +718,7 @@ export const fixture = Effect.fn(function* (
   const powerHandled = yield* Queue.unbounded<void>();
   const powerMonitor = {
     handled: () => Queue.offerUnsafe(powerHandled, undefined),
-    on: (event: "resume" | "unlock-screen", listener: () => void) =>
+    on: (event: DesktopCuaPowerEvent, listener: () => void) =>
       Effect.acquireRelease(
         Effect.sync(() => {
           const set = powerListeners.get(event) ?? new Set();
@@ -783,6 +822,10 @@ export const fixture = Effect.fn(function* (
       Effect.sync(() => {
         for (const listener of powerListeners.get(event) ?? []) listener();
       }).pipe(Effect.andThen(Queue.take(powerHandled))),
+    emitPower: (event: DesktopCuaPowerEvent) =>
+      Effect.sync(() => {
+        for (const listener of powerListeners.get(event) ?? []) listener();
+      }),
     manifestListings,
     helperAppListings,
     helperLaunches,
@@ -795,7 +838,12 @@ export const fixture = Effect.fn(function* (
     nextHelperWatch: Queue.take(helperWatches),
     raisePrivateMode: (active: boolean, windowId: number) =>
       Effect.sync(() => raise?.(active, windowId)),
+    raisePersonStop: Effect.sync(() => raiseStop?.()),
     safety,
+    personStopReports,
+    sessionLockReports,
+    powerSaveEvents,
+    activePowerSaveCount: () => activePowerSaveIds.size,
     nextSafety: Queue.take(safetyHeard),
     counts: () => ({ starts, stops, destroys }),
   };

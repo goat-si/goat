@@ -1,5 +1,6 @@
 import {
   PREVIEW_AUTOMATION_V1_OPERATIONS,
+  PreviewAutomationClickRefusal,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationClosedPopup,
   PreviewAutomationControlInterruptedError,
@@ -259,7 +260,31 @@ const readRemoteReason = (detail: unknown): string | undefined =>
     : undefined;
 
 const MAX_REASON_CHARS = 500;
+const MAX_INTERCEPTED_BY_CHARS = 300;
 const isReadFailure = Schema.is(PreviewAutomationReadFailure);
+const isClickRefusal = Schema.is(PreviewAutomationClickRefusal);
+
+const clickRefusalOf = (
+  detail: unknown,
+): { readonly clickRefusal?: PreviewAutomationClickRefusal; readonly interceptedBy?: string } => {
+  if (typeof detail !== "object" || detail === null) return {};
+  const clickRefusal =
+    "clickRefusal" in detail && isClickRefusal(detail.clickRefusal)
+      ? detail.clickRefusal
+      : "kind" in detail && isClickRefusal(detail.kind)
+        ? detail.kind
+        : undefined;
+  const interceptedBy =
+    "interceptedBy" in detail &&
+    typeof detail.interceptedBy === "string" &&
+    detail.interceptedBy.length > 0
+      ? detail.interceptedBy.slice(0, MAX_INTERCEPTED_BY_CHARS)
+      : undefined;
+  return {
+    ...(clickRefusal === undefined ? {} : { clickRefusal }),
+    ...(interceptedBy === undefined ? {} : { interceptedBy }),
+  };
+};
 
 type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
 const isSecretFailure = (value: unknown): value is SecretFailure =>
@@ -503,6 +528,7 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
         ...notSent,
+        ...clickRefusalOf(hostDetail),
         ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
           ? {
               reason: error.message.slice(0, MAX_REASON_CHARS),

@@ -24,6 +24,7 @@ const harness = vi.hoisted(() => ({
   refreshProviders: vi.fn(),
   scopeAllowed: true,
   manage: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
+  setRespond: (_registry: AtomRegistry.AtomRegistry, _allowed: boolean) => {},
   publish: (_registry: AtomRegistry.AtomRegistry, _value: SshHandoffProgressResult) => {},
 }));
 vi.mock("../../state/server", async () => {
@@ -33,6 +34,9 @@ vi.mock("../../state/server", async () => {
   harness.manage = (registry, value) => {
     harness.scopeAllowed = value;
     registry.set(canManage, value);
+  };
+  harness.setRespond = (registry, value) => {
+    registry.set(allowed, value);
   };
   const progress = Atom.make<AtomAsyncResult.AsyncResult<SshHandoffProgressResult, never>>(
     AsyncResult.initial(),
@@ -700,20 +704,66 @@ describe("computer use grant", () => {
     });
   });
 
-  it("needs settings access to end it, and offers nothing once it ended", async () => {
+  it("allows ending an active grant with respond permission alone and offers nothing once it ended", async () => {
     using _timers = fakeTimers({ now: NOW });
     harness.scopeAllowed = false;
     await render(grant);
     const end = [...container.querySelectorAll("button")].find(
       (node) => node.textContent === "End computer use",
     );
-    expect(end?.disabled).toBe(true);
+    expect(end?.disabled).toBe(false);
+    await click("End computer use");
+    expect(harness.respond).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        threadId: grant.requestedBy.threadId,
+        handoffId: grant.handoffId,
+        action: "cancelled",
+      },
+    });
+    await act(async () => harness.setRespond(registry, false));
+    const endWithoutRespond = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "End computer use",
+    );
+    expect(endWithoutRespond?.disabled).toBe(true);
+    await act(async () => harness.setRespond(registry, true));
     harness.scopeAllowed = true;
     await render({ ...grant, state: "cancelled" });
     expect(container.textContent).toContain("Ended by Jun's phone");
     expect(container.textContent).not.toContain("End computer use");
     await render({ ...grant, expiresAt: DateTime.makeUnsafe(NOW - 1_000) });
     expect(container.textContent).toContain("Ended at its time limit");
+  });
+
+  it("requires settings access to review or decline a pending grant while allowing cancel with respond permission", async () => {
+    harness.scopeAllowed = false;
+    await render({ ...grant, state: "pending", resolvedBy: undefined });
+    const review = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Review request",
+    );
+    const decline = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Decline",
+    );
+    const cancel = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Cancel request",
+    );
+    expect(review?.disabled).toBe(true);
+    expect(decline?.disabled).toBe(true);
+    expect(cancel?.disabled).toBe(false);
+    await click("Cancel request");
+    expect(harness.respond).toHaveBeenCalledWith({
+      environmentId,
+      input: {
+        threadId: grant.requestedBy.threadId,
+        handoffId: grant.handoffId,
+        action: "cancelled",
+      },
+    });
+    await act(async () => harness.setRespond(registry, false));
+    const cancelWithoutRespond = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Cancel request",
+    );
+    expect(cancelWithoutRespond?.disabled).toBe(true);
   });
 });
 

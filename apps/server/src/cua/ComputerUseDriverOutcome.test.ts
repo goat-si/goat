@@ -490,3 +490,39 @@ it("desktop lease refusals require observing again", () => {
     );
   }
 });
+
+it("classifies expanded pre-dispatch refusal codes and downgrades unconfirmed focus", () => {
+  for (const [code, expected] of [
+    ["titlebar_would_raise_window", { possibleCommit: false, retryClass: "fix_input" }],
+    ["secure_input_active", { possibleCommit: false, retryClass: "never" }],
+    ["secure_field", { possibleCommit: false, retryClass: "never" }],
+    ["sheet_or_modal_on_target_window", { possibleCommit: false, retryClass: "fix_input" }],
+    ["user_actively_typing", { possibleCommit: false, retryClass: "new_key" }],
+    ["recent_hid_keydown_would_misdirect", { possibleCommit: false, retryClass: "new_key" }],
+    ["identity_not_unique", { possibleCommit: false, retryClass: "new_key" }],
+    ["lock_timeout", { possibleCommit: false, retryClass: "same_key" }],
+  ] as const) {
+    assert.deepInclude(
+      driverOutcomeSafety("click", { result: { isError: true, structuredContent: { code } } }),
+      expected,
+    );
+    assert.isTrue(
+      driverRefused("click", { result: { isError: true, structuredContent: { code } } }),
+    );
+  }
+  assert.deepInclude(
+    driverOutcomeSafety("click", {
+      result: { isError: true, structuredContent: { code: "unknown_driver_fault" } },
+    }),
+    { possibleCommit: true, retryClass: "never", code: "write_indeterminate" },
+  );
+  assert.deepInclude(
+    driverOutcomeSafety("click", {
+      result: {
+        isError: false,
+        structuredContent: { effect: "confirmed", focus_confirmed: false },
+      },
+    }),
+    { possibleCommit: true, writeStatus: "may_have_applied", code: "write_indeterminate" },
+  );
+});

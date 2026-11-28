@@ -1,6 +1,7 @@
 // @effect-diagnostics globalTimers:off - event-driven tracking belongs to the browser connection.
 import type { Page, Request } from "playwright-core";
 import { appLinkUrl } from "@goat/shared/appLinks";
+import { isStabilityNoise } from "./BrowserStabilityTracker.ts";
 
 const trackers = new WeakMap<Page, ReturnType<typeof makeTracker>>();
 
@@ -44,11 +45,16 @@ const makeTracker = (page: Page) => {
       previousRequests = new Set(requests);
       navigation = request;
     }
+    if (
+      !request.isNavigationRequest() &&
+      isStabilityNoise({ url: request.url(), resourceType: request.resourceType() })
+    )
+      return;
     requests.add(request);
     notify();
   };
   const finished = (request: Request) => {
-    requests.delete(request);
+    if (!requests.delete(request)) return;
     notify();
   };
   const failed = (request: Request) => {

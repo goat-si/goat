@@ -11,8 +11,10 @@ import {
   DesktopCuaFrames,
   DesktopCuaWatch,
   DesktopCuaHumanInputReport,
+  DesktopCuaPersonStopReport,
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
+  DesktopCuaSessionLockReport,
 } from "./cua.ts";
 import { DesktopUpdateStateSchema } from "./ipc.ts";
 import { DesktopCuaManifestRequest, DesktopCuaManifestReport } from "./desktopCuaManifest.ts";
@@ -367,6 +369,8 @@ export const DesktopHostTelemetryMessage = Schema.Union([
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
   DesktopCuaFrame,
+  DesktopCuaPersonStopReport,
+  DesktopCuaSessionLockReport,
 ]);
 export type DesktopHostTelemetryMessage = typeof DesktopHostTelemetryMessage.Type;
 

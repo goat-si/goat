@@ -94,10 +94,19 @@ export const failureHint = (
     ) === "terminal"
   )
     return {};
-  if ("interceptedBy" in error && typeof error.interceptedBy === "string")
+  if (
+    "interceptedBy" in error &&
+    typeof error.interceptedBy === "string" &&
+    error.interceptedBy.length > 0
+  ) {
+    if ("dispatched" in error && error.dispatched === false)
+      return {
+        next: `Nothing was sent because the target is covered by ${error.interceptedBy}. Dismiss or scroll past it before retrying; ${RETRY_LATER}`,
+      };
     return {
       next: `Something covered the target (interceptedBy names it). Observe first in case the click landed, close or move past the cover, then retry; ${RETRY_LATER}`,
     };
+  }
   if (safety.possibleCommit)
     return {
       next: `Observe first: the input may have landed. If it did not, snapshot again before retrying; ${RETRY_LATER}`,

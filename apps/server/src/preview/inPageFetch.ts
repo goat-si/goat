@@ -1,7 +1,8 @@
 // @effect-diagnostics globalTimers:off - Playwright calls run outside the Effect runtime.
 /** Reads same-origin session content in the page; fields, hidden markup and credentials stay out. */
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
-import type { Page, Request } from "playwright-core";
+import { extractCleanMarkdown } from "./BrowserCleanMarkdown.ts";
+import type { Page, Request, Response } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
@@ -39,16 +40,22 @@ type PageOutcome =
       readonly timedOut: boolean;
       readonly reachable?: boolean;
       readonly policyBlocked?: boolean;
+      readonly invalidUrl?: boolean;
+    }
+  | {
+      readonly kind: "redirect";
+      readonly url: string;
+      readonly status: number;
     }
   | {
       readonly url: string;
       readonly status: number;
       readonly ok: boolean;
       readonly contentType: string;
-      readonly kind: "html" | "text" | "raw" | "binary";
+      readonly kind: "html" | "html_markdown" | "text" | "raw" | "binary";
+      readonly title?: string;
       readonly text: string;
       readonly truncated: boolean;
-      /** Bytes of a "binary" body held in the page for the server to read in slices. */
       readonly size?: number;
     };
 
@@ -56,10 +63,9 @@ const DEFAULT_MAX_CHARS = 20_000;
 const MAX_CHARS = 100_000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 60_000;
-/** Markup outweighs its text many times over, so the body may be larger than the result. */
+const MAX_REDIRECT_HOPS = 10;
 const MAX_BODY_BYTES = 5_000_000;
 const MAX_SAVED_BYTES = 25 * 1024 * 1024;
-/** Bytes per read of a held body; base64 makes each reply about a third larger. */
 const SLICE_BYTES = 1024 * 1024;
 
 const bounded = (value: number | undefined, fallback: number, low: number, high: number) =>
@@ -67,14 +73,11 @@ const bounded = (value: number | undefined, fallback: number, low: number, high:
     ? Math.min(high, Math.max(low, Math.round(value)))
     : fallback;
 
-/** Runs in the page. DOMParser builds an inert document: no scripts run, nothing loads. */
 const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, timeoutMs, secretPattern }, held) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  // The page's Content-Security-Policy refuses some addresses before any request goes out.
   let policyBlocked = false;
   const onViolation = (event) => {
-    // A report-only policy lets the request go; only an enforced one blocked it.
     if (event.disposition !== "enforce") return;
     try { if (new URL(event.blockedURI).origin === new URL(url).origin) policyBlocked = true; } catch {}
   };
@@ -82,12 +85,26 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
   try {
     const response = await fetch(url, {
       credentials: "same-origin",
-      redirect: "follow",
+      redirect: "manual",
       cache: "no-store",
       signal: controller.signal,
     });
+    if (response.type === "opaqueredirect") {
+      return { kind: "redirect", url: response.url || url, status: response.status };
+    }
+    const finalUrl = response.url || url;
+    let finalProtocol = "";
+    try { finalProtocol = new URL(finalUrl).protocol; } catch {}
+    if (finalProtocol !== "http:" && finalProtocol !== "https:") {
+      controller.abort();
+      return {
+        error: "Only http and https URLs can be fetched, not " + (finalProtocol || "an invalid URL") + ".",
+        timedOut: false,
+        invalidUrl: true,
+      };
+    }
     const contentType = response.headers.get("content-type") || "";
-    const head = { url: response.url || url, status: response.status, ok: response.ok, contentType };
+    const head = { url: finalUrl, status: response.status, ok: response.ok, contentType };
     const mime = contentType.split(";")[0].trim().toLowerCase();
     const html = mime === "text/html" || mime === "application/xhtml+xml";
     const textual =
@@ -97,7 +114,6 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
       /^application\\/(json|xml|javascript|ecmascript)$/.test(mime) ||
       /\\+(json|xml)$/.test(mime);
     if (!textual) {
-      // Kept whole for a file, up to the cap; the length header is not trusted.
       const parts = [];
       let saved = 0;
       const reader = response.body ? response.body.getReader() : null;
@@ -153,7 +169,12 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
     if (!html) {
       return { ...head, kind: "text", text: body.slice(0, maxChars), truncated: cut || body.length > maxChars };
     }
-    const markdown = format === "markdown";
+    if (format === "markdown") {
+      const parsed = new DOMParser().parseFromString(body, "text/html");
+      const title = (parsed.title || "").trim();
+      return { ...head, kind: "html_markdown", title, text: body, truncated: cut };
+    }
+    const markdown = false;
     const secretName = new RegExp(secretPattern, "i");
     const skipped = new Set([
       "script", "style", "noscript", "template", "svg", "math", "canvas", "iframe", "object",
@@ -181,7 +202,7 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
       if (tag === "img") return (node.getAttribute("alt") || "").trim();
       if (tag === "pre") {
         const code = node.textContent.replace(/\\n+$/, "");
-        return markdown ? "\\n\\n~~~\\n" + code + "\\n~~~\\n\\n" : "\\n\\n" + code + "\\n\\n";
+        return "\\n\\n" + code + "\\n\\n";
       }
       const inner = [...node.childNodes].map(render).join("");
       return formatNode(node, inner, markdown, hrefOf);
@@ -189,21 +210,16 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
     const parsed = new DOMParser().parseFromString(body, "text/html");
     const title = (parsed.title || "").trim();
     const content = render(parsed.body || parsed.documentElement);
-    const text = (title && markdown ? "# " + title + "\\n\\n" : title ? title + "\\n\\n" : "") + content;
-    // Leave room for whitespace that Node collapses afterwards.
+    const text = (title ? title + "\\n\\n" : "") + content;
     const room = maxChars * 2;
     return { ...head, kind: "html", text: text.slice(0, room), truncated: cut || text.length > room };
   } catch (error) {
     const timedOut = controller.signal.aborted;
-    // The violation event is queued as a task after the fetch rejects.
     if (!timedOut) await new Promise((resolve) => setTimeout(resolve, 0));
-    // An opaque answer to a no-cors request, without credentials, means the site answered and CORS
-    // refused the read; the page's error says only "Failed to fetch" either way.
     let reachable = false;
     if (!timedOut && !policyBlocked) {
       try {
         const probe = await fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store", signal: controller.signal });
-        // Only a cross-origin answer is opaque; a readable one says nothing about CORS.
         reachable = probe.type === "opaque";
       } catch {}
     }
@@ -282,40 +298,124 @@ export const truncateText = (text: string, maxChars: number) =>
     ? { text: text.slice(0, maxChars), truncated: true }
     : { text, truncated: false };
 
-/**
- * Runs as an observation of `control`: a private tab refuses it before any request, and a secret
- * prompt that opened while it ran, even briefly, withholds the whole answer.
- */
+export type FetchUrlValidator = (url: string) => void | Promise<void>;
+
+const assertHttpUrl = (raw: string) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "Refused fetch response with an invalid URL.",
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      `Only http and https URLs can be fetched, not ${parsed.protocol}.`,
+    );
+  }
+  return parsed.href;
+};
+
 export const inPageFetch = (
   page: FetchPage,
   control: Pick<SessionControl, "observe">,
   input: InPageFetchInput,
   gate?: DispatchGate,
-) => control.observe(() => fetchInPage(page, input, gate));
+  validateUrl?: FetchUrlValidator,
+) => control.observe(() => fetchInPage(page, input, gate, validateUrl));
 
 type FetchPage = Pick<Page, "evaluateHandle" | "url" | "context" | "on" | "off">;
 type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
 
 const DNS_ERRORS = new Set(["net::ERR_NAME_NOT_RESOLVED", "net::ERR_NAME_RESOLUTION_FAILED"]);
 
-/**
- * The page only sees "Failed to fetch"; the browser's record of the failed request names the
- * network error behind it.
- */
+type RedirectObservation =
+  | { readonly kind: "location"; readonly value: string | undefined }
+  | { readonly kind: "ambiguous" };
+
 const watchFetchFailure = (page: FetchPage, url: string) => {
-  // The browser's request URL never carries the fragment.
   const requested = url.split("#")[0];
+  const started = new Set<Request>();
   let failed: Request | undefined;
-  const onFailed = (request: Request) => {
-    let first = request;
-    for (let previous = first.redirectedFrom(); previous; previous = previous.redirectedFrom())
-      first = previous;
-    if (failed === undefined && request.resourceType() === "fetch" && first.url() === requested)
-      failed = request;
+  let redirectObservation: RedirectObservation | undefined;
+  let redirectSettled = false;
+  let resolveRedirect: ((value: RedirectObservation) => void) | undefined;
+  const redirectPromise = new Promise<RedirectObservation>((resolve) => {
+    resolveRedirect = resolve;
+  });
+  const settleRedirect = (value: RedirectObservation) => {
+    if (redirectSettled) return;
+    redirectSettled = true;
+    redirectObservation = value;
+    resolveRedirect?.(value);
   };
+  const matchesTargetRequest = (request: Request) =>
+    request.resourceType() === "fetch" &&
+    request.method() === "GET" &&
+    request.url() === requested &&
+    request.redirectedFrom() === null;
+  const onRequest = (request: Request) => {
+    if (!matchesTargetRequest(request)) return;
+    started.add(request);
+    if (started.size > 1) settleRedirect({ kind: "ambiguous" });
+  };
+  const onResponse = (response: Response) => {
+    const request = response.request();
+    if (!started.has(request)) return;
+    if (started.size > 1) {
+      settleRedirect({ kind: "ambiguous" });
+      return;
+    }
+    const status = response.status();
+    if (status < 300 || status >= 400) return;
+    const direct = response.headers()["location"];
+    if (direct !== undefined && direct.trim() !== "") {
+      settleRedirect({ kind: "location", value: direct.trim() });
+      return;
+    }
+    void response
+      .headerValue("location")
+      .then((value) => {
+        if (started.size > 1) {
+          settleRedirect({ kind: "ambiguous" });
+          return;
+        }
+        settleRedirect({
+          kind: "location",
+          value: value !== null && value.trim() !== "" ? value.trim() : undefined,
+        });
+      })
+      .catch(() => {
+        settleRedirect({ kind: "location", value: undefined });
+      });
+  };
+  const onFailed = (request: Request) => {
+    if (failed === undefined && started.has(request)) {
+      failed = request;
+      settleRedirect({ kind: "location", value: undefined });
+    }
+  };
+  page.on("request", onRequest);
+  page.on("response", onResponse);
   page.on("requestfailed", onFailed);
   return {
-    dispose: () => page.off("requestfailed", onFailed),
+    dispose: () => {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onFailed);
+      settleRedirect({ kind: "location", value: undefined });
+    },
+    redirectLocation: (deadline: number): Promise<RedirectObservation> => {
+      if (started.size > 1) return Promise.resolve({ kind: "ambiguous" });
+      if (redirectSettled)
+        return Promise.resolve(redirectObservation ?? { kind: "location", value: undefined });
+      return beforeDeadline(redirectPromise, deadline, url).then((result) =>
+        started.size > 1 ? { kind: "ambiguous" } : result,
+      );
+    },
     classify: (outcome: { readonly reachable?: boolean; readonly policyBlocked?: boolean }) => {
       if (outcome.policyBlocked)
         return {
@@ -323,11 +423,15 @@ const watchFetchFailure = (page: FetchPage, url: string) => {
           reason: "this page's Content-Security-Policy does not allow requests there",
         } as const;
       const errorText = failed?.failure()?.errorText ?? "";
-      // CORS shows as a bare ERR_FAILED; a concrete network error wins over a later probe's answer.
       if (outcome.reachable && (errorText === "" || errorText === "net::ERR_FAILED"))
         return {
           fetchFailure: "cors",
           reason: "the site does not allow this page to read it (CORS)",
+        } as const;
+      if (errorText === "net::ERR_UNSAFE_REDIRECT")
+        return {
+          fetchFailure: "network",
+          reason: "Only http and https URLs are allowed (net::ERR_UNSAFE_REDIRECT)",
         } as const;
       if (DNS_ERRORS.has(errorText))
         return {
@@ -350,7 +454,6 @@ const fetchTimedOut = (url: string) =>
     `Fetching ${url} did not finish within its deadline.`,
   );
 
-/** Waits for page work no longer than the deadline; the late reply is ignored. */
 const beforeDeadline = async <A>(work: Promise<A>, deadline: number, url: string) => {
   const left = deadline - performance.now();
   void work.catch(() => undefined);
@@ -368,7 +471,6 @@ const beforeDeadline = async <A>(work: Promise<A>, deadline: number, url: string
   }
 };
 
-/** Copies a held body out of the page in bounded slices, within the fetch's deadline. */
 const readHeldBody = async (
   held: { evaluate<R, A>(read: (value: Held, arg: A) => R, arg: A): Promise<R> },
   size: number,
@@ -401,40 +503,66 @@ const fetchInPage = async (
   page: FetchPage,
   input: InPageFetchInput,
   gate?: DispatchGate,
+  validateUrl?: FetchUrlValidator,
 ): Promise<InPageFetchResult> => {
-  const url = resolveFetchUrl(input.url, page.url());
+  const initialUrl = resolveFetchUrl(input.url, page.url());
   const format = input.format ?? "markdown";
   const maxChars = bounded(input.maxChars, DEFAULT_MAX_CHARS, 1, MAX_CHARS);
+  const maxSavedBytes = bounded(input.maxSavedBytes, MAX_SAVED_BYTES, 1, MAX_SAVED_BYTES);
   const deadline = Math.min(
     input.deadline ?? Number.POSITIVE_INFINITY,
     performance.now() + bounded(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
   );
-  // The page aborts its own request when the request's time runs out.
-  const timeoutMs = Math.max(1, Math.floor(deadline - performance.now()));
-  const args = JSON.stringify({
-    url,
-    format,
-    maxChars,
-    maxBytes: MAX_BODY_BYTES,
-    maxSavedBytes: bounded(input.maxSavedBytes, MAX_SAVED_BYTES, 1, MAX_SAVED_BYTES),
-    timeoutMs,
-    secretPattern: SECRET_NAME.source,
-  });
-  const watch = watchFetchFailure(page, url);
-  try {
-    return await fetchHeld(
-      page,
-      args,
-      url,
+  let currentUrl = initialUrl;
+  for (let hop = 0; ; hop++) {
+    await validateUrl?.(currentUrl);
+    const timeoutMs = Math.max(1, Math.floor(deadline - performance.now()));
+    const args = JSON.stringify({
+      url: currentUrl,
       format,
       maxChars,
+      maxBytes: MAX_BODY_BYTES,
+      maxSavedBytes,
       timeoutMs,
-      deadline,
-      watch.classify,
-      gate,
-    );
-  } finally {
-    watch.dispose();
+      secretPattern: SECRET_NAME.source,
+    });
+    const watch = watchFetchFailure(page, currentUrl);
+    let step:
+      | { readonly kind: "done"; readonly result: InPageFetchResult }
+      | { readonly kind: "redirect"; readonly observation: RedirectObservation };
+    try {
+      step = await fetchHeld(
+        page,
+        args,
+        currentUrl,
+        format,
+        maxChars,
+        timeoutMs,
+        deadline,
+        watch,
+        gate,
+        validateUrl,
+      );
+    } finally {
+      watch.dispose();
+    }
+    if (step.kind === "done") return step.result;
+    if (hop >= MAX_REDIRECT_HOPS)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        `Fetching ${initialUrl} exceeded the maximum redirect limit (${MAX_REDIRECT_HOPS}).`,
+      );
+    if (step.observation.kind === "ambiguous")
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "Refused redirect because concurrent fetches to the same URL prevented unambiguous redirect verification.",
+      );
+    if (step.observation.value === undefined)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "Refused redirect without a valid Location header.",
+      );
+    currentUrl = resolveFetchUrl(step.observation.value, currentUrl);
   }
 };
 
@@ -446,11 +574,13 @@ const fetchHeld = async (
   maxChars: number,
   timeoutMs: number,
   deadline: number,
-  classify: ReturnType<typeof watchFetchFailure>["classify"],
+  watch: ReturnType<typeof watchFetchFailure>,
   gate?: DispatchGate,
-): Promise<InPageFetchResult> => {
-  // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
-  // binary body in the page, out of reach of page scripts, until it is read and disposed.
+  validateUrl?: FetchUrlValidator,
+): Promise<
+  | { readonly kind: "done"; readonly result: InPageFetchResult }
+  | { readonly kind: "redirect"; readonly observation: RedirectObservation }
+> => {
   await gate?.();
   const expression = `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`;
   if (gate && !gate.channel) throw new Error("An action channel is required for fetch.");
@@ -458,12 +588,21 @@ const fetchHeld = async (
     ? gate.channel.call(() => page.evaluateHandle<Held>(expression))
     : page.evaluateHandle<Held>(expression);
   const held = await beforeDeadline(pending, deadline, url).catch((cause: unknown) => {
-    // A handle that arrives after the deadline is released as soon as it does.
     void pending.then((late) => late.dispose()).catch(() => undefined);
     throw cause;
   });
   try {
-    return await shapeOutcome(page, held, url, format, maxChars, timeoutMs, deadline, classify);
+    return await shapeOutcome(
+      page,
+      held,
+      url,
+      format,
+      maxChars,
+      timeoutMs,
+      deadline,
+      watch,
+      validateUrl,
+    );
   } finally {
     void held.dispose().catch(() => undefined);
   }
@@ -477,58 +616,82 @@ const shapeOutcome = async (
   maxChars: number,
   timeoutMs: number,
   deadline: number,
-  classify: ReturnType<typeof watchFetchFailure>["classify"],
-): Promise<InPageFetchResult> => {
+  watch: ReturnType<typeof watchFetchFailure>,
+  validateUrl?: FetchUrlValidator,
+): Promise<
+  | { readonly kind: "done"; readonly result: InPageFetchResult }
+  | { readonly kind: "redirect"; readonly observation: RedirectObservation }
+> => {
   const outcome = await beforeDeadline(
     held.evaluate((value) => value.outcome, undefined),
     deadline,
     url,
   );
   if ("error" in outcome) {
+    if (outcome.invalidUrl)
+      throw new ServerBrowserOperationError("PreviewAutomationExecutionError", outcome.error);
     if (outcome.timedOut)
       throw new ServerBrowserOperationError(
         "PreviewAutomationTimeoutError",
         `Fetching ${url} did not finish within ${timeoutMs}ms.`,
       );
-    const known = classify(outcome);
+    const known = watch.classify(outcome);
     if (known)
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         `Fetching ${url} failed: ${known.reason}.`,
         { fetchFailure: known.fetchFailure },
       );
-    // A page's own fetch can fail with any message, the tab's cookie values included.
     const failed = redactSecrets(String(outcome.error), await tabCookies(page, [url]));
     throw new ServerBrowserOperationError(
       "PreviewAutomationExecutionError",
       `Fetching ${url} failed: ${failed}`,
     );
   }
-  // Every cookie the browser would send to the request, its redirect target, the tab's frames or
-  // what the tab fetched before, HttpOnly ones included.
-  const cookies = await tabCookies(page, [url, outcome.url]);
+  if (outcome.kind === "redirect")
+    return { kind: "redirect", observation: await watch.redirectLocation(deadline) };
+  const finalUrl = assertHttpUrl(outcome.url);
+  await validateUrl?.(finalUrl);
+  const cookies = await tabCookies(page, [url, finalUrl]);
   const redact = (text: string) => redactSecrets(text, cookies);
   const head = {
-    url: redact(redactQuery(outcome.url)),
+    url: redact(redactQuery(finalUrl)),
     status: outcome.status,
     ok: outcome.ok,
     contentType: redact(outcome.contentType),
   };
   if (outcome.kind === "raw")
-    return { ...head, format: "raw", text: "", truncated: outcome.truncated };
+    return {
+      kind: "done",
+      result: { ...head, format: "raw", text: "", truncated: outcome.truncated },
+    };
   if (outcome.kind === "binary") {
     const body = await readHeldBody(held, outcome.size ?? 0, deadline, url);
-    return { ...head, format: "raw", text: "", truncated: false, [FETCHED_BODY]: body };
+    return {
+      kind: "done",
+      result: { ...head, format: "raw", text: "", truncated: false, [FETCHED_BODY]: body },
+    };
   }
-  // Plain text such as JSON keeps its own layout; only rendered HTML is tidied.
-  const shown = outcome.kind === "html" ? normalizeText(outcome.text) : outcome.text;
-  // A cut in the page can split a credential, and half of one no longer matches; drop the cut word.
-  const text = redact(outcome.truncated ? shown.replace(/\S+$/, "") : shown);
+  let shown: string;
+  let wasTruncated = outcome.truncated;
+  if (outcome.kind === "html_markdown") {
+    const cleaned = extractCleanMarkdown(outcome.text, { extractLinks: true });
+    wasTruncated = wasTruncated || cleaned.stats.truncated;
+    const title = outcome.title ? `# ${outcome.title}` : "";
+    shown =
+      title && cleaned.markdown ? `${title}\n\n${cleaned.markdown}` : title || cleaned.markdown;
+  } else {
+    shown = outcome.kind === "html" ? normalizeText(outcome.text) : outcome.text;
+  }
+  const text = redact(wasTruncated ? shown.replace(/\S+$/, "") : shown);
   const result = truncateText(text, maxChars);
   return {
-    ...head,
-    format: outcome.kind === "html" ? format : "text",
-    text: result.text,
-    truncated: outcome.truncated || result.truncated,
+    kind: "done",
+    result: {
+      ...head,
+      format: outcome.kind === "html" || outcome.kind === "html_markdown" ? format : "text",
+      text: result.text,
+      truncated: wasTruncated || result.truncated,
+    },
   };
 };

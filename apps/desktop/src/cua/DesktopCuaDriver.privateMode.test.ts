@@ -81,3 +81,117 @@ describe("DesktopCuaDriver human input", () => {
     ),
   );
 });
+
+describe("DesktopCuaDriver person stop, session lock, and display wake", () => {
+  it.effect("forwards helper personStop events to DesktopTelemetryPublisher", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: true },
+        });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.setWatching(true);
+        assert.equal(yield* test.nextHelperWatch, "watch");
+
+        yield* test.raisePersonStop;
+        yield* test.nextSafety;
+        assert.deepEqual(test.personStopReports, [
+          { version: 1, type: "cuaPersonStop", generation: 1, reason: "person_esc" },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect.each(["darwin", "win32"] as const)(
+    "reports host session lock transitions on %s without auto-resuming on unlock",
+    (platform) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform,
+            helper: { granted: true },
+          });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          const launchesBefore = test.counts().starts;
+
+          yield* test.setWatching(true);
+          assert.equal(yield* test.nextHelperWatch, "watch");
+          assert.isEmpty(test.sessionLockReports);
+
+          yield* test.emitPower("lock-screen");
+          yield* test.nextSafety;
+          yield* test.emitPower("suspend");
+          yield* test.nextSafety;
+          yield* test.emitPower("resume");
+          yield* test.nextSafety;
+          yield* test.emitPower("user-did-resign-active");
+          yield* test.nextSafety;
+          yield* test.emitPower("unlock-screen");
+          yield* test.nextSafety;
+          yield* test.emitPower("user-did-become-active");
+          yield* test.nextSafety;
+
+          assert.deepEqual(
+            test.sessionLockReports.map(({ locked, reasons }) => ({ locked, reasons })),
+            [
+              { locked: true, reasons: ["screen_locked"] },
+              { locked: true, reasons: ["screen_locked", "system_suspended"] },
+              { locked: true, reasons: ["screen_locked"] },
+              { locked: true, reasons: ["screen_locked", "session_deactivated"] },
+              { locked: true, reasons: ["session_deactivated"] },
+              { locked: false, reasons: [] },
+            ],
+          );
+          assert.equal(test.counts().starts, launchesBefore);
+        }),
+      ),
+  );
+
+  it.effect(
+    "holds prevent-display-sleep powerSaveBlocker while watching and releases on inactive and shutdown",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const test = yield* fixture({
+              platform: "darwin",
+              helper: { granted: true },
+            });
+            yield* test.request("agent");
+            assert.equal((yield* test.next).status, "ready");
+
+            yield* test.setWatching(true);
+            assert.equal(yield* test.nextHelperWatch, "watch");
+            assert.equal(test.activePowerSaveCount(), 1);
+            assert.deepEqual(test.powerSaveEvents, [
+              { kind: "start", type: "prevent-display-sleep", id: 1 },
+            ]);
+
+            yield* test.setWatching(true);
+            yield* test.setWatching(false);
+            assert.equal(yield* test.nextHelperWatch, "unwatch");
+            assert.equal(test.activePowerSaveCount(), 0);
+            assert.deepEqual(test.powerSaveEvents, [
+              { kind: "start", type: "prevent-display-sleep", id: 1 },
+              { kind: "stop", id: 1 },
+            ]);
+
+            yield* test.setWatching(true);
+            assert.equal(yield* test.nextHelperWatch, "watch");
+            assert.equal(test.activePowerSaveCount(), 1);
+            return test;
+          }),
+        );
+        assert.equal(test.activePowerSaveCount(), 0);
+        assert.deepEqual(test.powerSaveEvents, [
+          { kind: "start", type: "prevent-display-sleep", id: 1 },
+          { kind: "stop", id: 1 },
+          { kind: "start", type: "prevent-display-sleep", id: 2 },
+          { kind: "stop", id: 2 },
+        ]);
+      }),
+  );
+});

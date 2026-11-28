@@ -176,3 +176,19 @@ export const PreviewAutomationFillCardResult = Schema.Struct({
   code: Schema.optional(Schema.String),
 });
 export type PreviewAutomationFillCardResult = typeof PreviewAutomationFillCardResult.Type;
+
+export const PreviewAutomationSelectResult = Schema.Struct({
+  selected: Schema.Array(Schema.String).annotate({
+    description: "The values of the options now selected.",
+  }),
+});
+export type PreviewAutomationSelectResult = typeof PreviewAutomationSelectResult.Type;
+
+export const PreviewAutomationClickRefusal = Schema.Literals([
+  "occluded_refused",
+  "no_visible_area",
+  "invalid_geometry",
+  "oopif_transform_unproven",
+  "special_element_refused",
+]);
+export type PreviewAutomationClickRefusal = typeof PreviewAutomationClickRefusal.Type;

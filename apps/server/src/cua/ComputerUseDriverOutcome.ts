@@ -249,6 +249,8 @@ function classifiedSafety(
   const refusalCode = isRecord(structured.refusal) ? structured.refusal.code : structured.code;
   if (
     (refusalCode === "user_interacting" ||
+      refusalCode === "user_actively_typing" ||
+      refusalCode === "recent_hid_keydown_would_misdirect" ||
       refusalCode === "desktop_busy" ||
       refusalCode === "desktop_lease_unavailable") &&
     (structured.effect === undefined || structured.effect === "refused") &&
