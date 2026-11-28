@@ -55,6 +55,7 @@ MERGE_LOCK="/tmp/goat2-merge.lock"
 # One Dev build at a time per machine: the build worktree and its output are shared (review devbuild-2).
 BUILD_LOCK="/tmp/goat2-devbuild.lock"
 DEVBUILD="${GOAT2_DEVBUILD_DIR:-$HOME/Developer/goat2_devbuild}"   # override: local tests only
+DEVBUILD_MARKER="goat2-devbuild-worktree"   # file in the build worktree's own git dir
 # The merge checkout on every machine (docs/lanes/PART1.md); the build worktree hangs off it.
 SOURCE_REPO="$HOME/Developer/goat2"
 BUILD_HOST="${GOAT2_DEVBUILD_HOST:-mac-studio}"
@@ -154,6 +155,22 @@ check_devbuild_path() {
       echo "$DEVBUILD exists but is not a registered worktree root of $repo: not building" >&2
       exit 1
     fi
+    # Identity (review devbuild3-1): only a worktree this script made carries the marker in its own git
+    # dir. Any other registered worktree (another lane's, whatever its path) is refused before
+    # checkout --force / clean -fdx can touch it. A build worktree made before markers existed is adopted
+    # only at the default path and only with a detached HEAD; lane worktrees are on goat2_<lane> branches.
+    local marker
+    marker="$(git -C "$DEVBUILD" rev-parse --absolute-git-dir)/$DEVBUILD_MARKER"
+    if [[ ! -f "$marker" ]]; then
+      if [[ "$real" == "$(ondisk_path "$HOME/Developer/goat2_devbuild")" ]] &&
+        ! git -C "$DEVBUILD" symbolic-ref -q HEAD >/dev/null; then
+        echo "goat2 Dev build worktree (scripts/build-dev-app.sh)" > "$marker"
+        echo "==> adopted $DEVBUILD as the build worktree"
+      else
+        echo "$DEVBUILD is a worktree this script did not create (no $DEVBUILD_MARKER marker): not building" >&2
+        exit 1
+      fi
+    fi
   fi
 }
 
@@ -170,6 +187,7 @@ prepare_devbuild() {
   else
     echo "==> creating the build worktree $DEVBUILD"
     git -C "$repo" worktree add -q --detach "$DEVBUILD" "$sha"
+    echo "goat2 Dev build worktree (scripts/build-dev-app.sh)" > "$(git -C "$DEVBUILD" rev-parse --absolute-git-dir)/$DEVBUILD_MARKER"
     check_devbuild_path "$repo"
   fi
   git -C "$DEVBUILD" clean -q -fdx -e node_modules -e target
