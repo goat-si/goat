@@ -1344,6 +1344,60 @@ async fn an_idle_status_sent_just_before_the_list_answer_wins() {
     }
 }
 
+#[tokio::test]
+async fn an_elicitation_without_a_turn_waits_for_the_start_answer() {
+    // v1 awaits the registered turn (CodexAdapterV2.ts:5061-5066): an MCP elicitation that
+    // names no turn and arrives before turn/start is answered belongs to that turn once it is
+    // registered; it is shown to a person, never cancelled for want of a turn.
+    let t = load("codex-0.167.0/basic.json");
+    let thread = recorded_thread(&t);
+    let at = t
+        .entries
+        .iter()
+        .position(|e| method_of(e) == Some("turn/start"))
+        .unwrap();
+    let mut entries: Vec<Entry> = t.entries[..=at].to_vec();
+    entries.push(emit(
+        json!({"id": 7, "method": "mcpServer/elicitation/request", "params": {
+        "threadId": thread, "serverName": "goat", "mode": "form", "message": "Allow the GOAT tool?",
+        "requestedSchema": {"type": "object", "properties": {}}}}),
+    ));
+    entries.extend(t.entries[at + 1..].iter().cloned());
+    entries.push(expect(json!({"id": 7, "result": {"action": "decline"}})));
+    let t = synthetic("turnless-elicitation", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    let turn = accepted(
+        h.session
+            .start_turn(
+                input("goat-input-1", "Reply with exactly: GOAT2-OK"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    let opened = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened {
+        key, turn_id, kind, ..
+    }) = opened.last().cloned()
+    else {
+        unreachable!()
+    };
+    assert_eq!(turn_id, turn);
+    assert_eq!(kind, RequestKind::Approval);
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Decline,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
     goat2_contracts::ChatAttachment {
         kind: goat2_contracts::ChatAttachmentType::Image,

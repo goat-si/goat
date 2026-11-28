@@ -1057,6 +1057,16 @@ impl Actor {
     }
 
     fn is_unclaimed(&self, inbound: &Inbound) -> bool {
+        // v1 awaits the registered turn for an elicitation that names none
+        // (CodexAdapterV2.ts:5061-5066): hold it until the start answer registers ours.
+        if let Inbound::Request {
+            request: ServerRequest::Elicitation(p),
+            ..
+        } = inbound
+            && p.turn_id.is_none()
+        {
+            return self.owned.is_none();
+        }
         let turn = match inbound {
             Inbound::Notification(n) => n.turn_id().map(str::to_string),
             Inbound::Request { request, .. } => request.turn_id().map(str::to_string),
