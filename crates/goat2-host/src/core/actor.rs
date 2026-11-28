@@ -154,6 +154,9 @@ struct ActiveRun {
     permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
+    /// `signin` requests opened for this run's turn, closed when the run ends. Answered by the
+    /// person, never through the engine, so they are kept apart from `engine_requests`.
+    signins: Vec<RequestId>,
 }
 
 struct Session {
@@ -171,6 +174,8 @@ struct Actor {
     held: bool,
     not_before: Option<Instant>,
     idle_gen: u64,
+    /// `signin` requests the engine raised outside any turn, closed when the session ends.
+    session_signins: Vec<RequestId>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -192,6 +197,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         held: false,
         not_before: None,
         idle_gen: 0,
+        session_signins: Vec::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -746,6 +752,7 @@ impl Actor {
                     turn_id,
                     permit,
                     engine_requests: Vec::new(),
+                    signins: Vec::new(),
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
@@ -788,6 +795,7 @@ impl Actor {
                     turn_id: String::new(),
                     permit,
                     engine_requests: Vec::new(),
+                    signins: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
             }
@@ -905,27 +913,11 @@ impl Actor {
                     self.finish_run(outcome, reason).await;
                 }
             }
-            EngineEvent::AuthRequired { url, message, .. } => {
-                // The engine needs a person to sign in: a `signin` request on the thread (the
-                // active run's, if any). It is answered by the person, not through the engine.
-                let summary = match &url {
-                    Some(url) => format!("{message} ({url})"),
-                    None => message,
-                };
-                let request_id = RequestId::new(new_id("req"));
-                self.append(vec![LogEvent::RequestOpened(RequestOpened {
-                    request_id: request_id.clone(),
-                    run_id: self.active_run_id(),
-                    item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
-                    kind: RequestKind::Signin,
-                    summary: goat2_contracts::text::clamp_chars(
-                        &summary,
-                        goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
-                    ),
-                    options: None,
-                    recommended: None,
-                })]);
-            }
+            EngineEvent::AuthRequired {
+                turn_id,
+                url,
+                message,
+            } => self.on_auth_required(turn_id, url, message),
             EngineEvent::SubagentUpdate { subagent_id, .. } => {
                 // Progress of an unfinished native subagent: not stored (PRD storage.md: no
                 // progress updates in the log). The finished subagent arrives as an item. There
@@ -948,6 +940,73 @@ impl Actor {
             .store
             .fold(&self.id)
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
+    }
+
+    /// The engine needs the person to sign in: a `signin` request, answered by the person. A
+    /// sign-in naming a turn belongs to that run and only while it runs; one naming a turn that
+    /// is no longer running is dropped (the next turn asks again). One without a turn belongs to
+    /// the engine session. Each scope keeps at most one open sign-in; a repeat refreshes its link.
+    fn on_auth_required(&mut self, turn_id: Option<String>, url: Option<String>, message: String) {
+        let run_id = match (&turn_id, &self.phase) {
+            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => Some(run.run_id.clone()),
+            (Some(_), _) => {
+                tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
+                return;
+            }
+            (None, _) => None,
+        };
+        let scope: &[RequestId] = match (&run_id, &self.phase) {
+            (Some(_), Phase::Running(run)) => &run.signins,
+            _ => &self.session_signins,
+        };
+        let open = scope.iter().find(|id| self.is_open(id)).cloned();
+        let request_id = match open {
+            Some(request_id) => request_id,
+            None => {
+                let request_id = RequestId::new(new_id("req"));
+                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                    request_id: request_id.clone(),
+                    run_id: run_id.clone(),
+                    item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
+                    kind: RequestKind::Signin,
+                    summary: signin_summary(&message, url.as_deref()),
+                    options: None,
+                    recommended: None,
+                })]);
+                match (&run_id, &mut self.phase) {
+                    (Some(_), Phase::Running(run)) => run.signins.push(request_id.clone()),
+                    _ => self.session_signins.push(request_id.clone()),
+                }
+                request_id
+            }
+        };
+        match url.filter(|u| !u.trim().is_empty()) {
+            Some(url) => self.host.set_signin_link(crate::core::SigninLink {
+                thread_id: self.id.clone(),
+                request_id,
+                url,
+                message,
+            }),
+            None => self.host.forget_signin_link(&request_id),
+        }
+    }
+
+    /// Close the still open sign-ins among `ids` with `why`; their links are dropped.
+    fn close_signins(&self, ids: &[RequestId], why: &str) -> Vec<LogEvent> {
+        let mut events = Vec::new();
+        for request_id in ids {
+            self.host.forget_signin_link(request_id);
+            if self.is_open(request_id) {
+                events.push(LogEvent::RequestResolved(RequestResolved {
+                    request_id: request_id.clone(),
+                    outcome: RequestOutcome::Cancel,
+                    option_id: None,
+                    text: Some(why.to_owned()),
+                    answers: None,
+                }));
+            }
+        }
+        events
     }
 
     /// End the active run: `run.finished`, engine requests closed, checkpoint, child report.
@@ -974,6 +1033,7 @@ impl Actor {
                 }));
             }
         }
+        events.extend(self.close_signins(&run.signins, "the run ended"));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: run.run_id.clone(),
             outcome,
@@ -1248,6 +1308,9 @@ impl Actor {
                 })],
             )
             .map_err(|e| self.store_err(e))?;
+        if request.kind == RequestKind::Signin {
+            self.host.forget_signin_link(&r.request_id);
+        }
         // An agent's own question (MCP request.ask): the answer comes back as an input.
         if request.item_id.is_none()
             && request.kind != RequestKind::Resend
@@ -1365,6 +1428,11 @@ impl Actor {
     }
 
     fn drop_session(&mut self) {
+        let signins = std::mem::take(&mut self.session_signins);
+        let closed = self.close_signins(&signins, "the engine stopped");
+        if !closed.is_empty() {
+            self.append(closed);
+        }
         if let Some(s) = self.session.take() {
             let mut sessions = self.host.inner.sessions.lock().expect("sessions");
             if sessions.get(&self.id).is_some_and(|(p, _)| *p == s.pgen) {
@@ -1385,6 +1453,46 @@ impl Actor {
         // Events from the stopped process are ignored from here on.
         self.pgen += 1;
     }
+}
+
+/// The bounded `request.opened` summary of a sign-in: the engine's message without the sign-in
+/// URL and without the query or fragment of any other URL in it (one-time codes, tokens). The full
+/// link stays in memory ([crate::core::SigninLink]).
+fn signin_summary(message: &str, url: Option<&str>) -> String {
+    let text = match url.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(url) => message.replace(url, "the sign-in link"),
+        None => message.to_owned(),
+    };
+    let text = strip_url_queries(&text);
+    let text = text.trim();
+    let text = if text.is_empty() {
+        "Sign in to continue"
+    } else {
+        text
+    };
+    goat2_contracts::text::clamp_chars(text, goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS)
+}
+
+/// `text` with every http(s) URL cut before its `?` or `#`.
+fn strip_url_queries(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = [rest.find("https://"), rest.find("http://")]
+        .into_iter()
+        .flatten()
+        .min()
+    {
+        out.push_str(&rest[..start]);
+        let url = &rest[start..];
+        let end = url
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | ']' | '"' | '\''))
+            .unwrap_or(url.len());
+        let keep = url[..end].find(['?', '#']).unwrap_or(end);
+        out.push_str(&url[..keep]);
+        rest = &url[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The parent's wake input for a child result. The clientRequestId names (child, child run).
@@ -1434,4 +1542,34 @@ fn take_batch(pending: &[QueuedInput]) -> Vec<QueuedInput> {
         .take_while(|q| same(head, q))
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod signin_summary_tests {
+    use super::signin_summary;
+    use goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS;
+
+    #[test]
+    fn the_sign_in_url_and_url_queries_stay_out_of_the_summary() {
+        let url = "https://auth.example.invalid/device?user_code=SECRET-1&state=s2";
+        let message = format!(
+            "Open {url} to sign in, or see (https://docs.example.invalid/help?token=SECRET-2#frag)."
+        );
+        let summary = signin_summary(&message, Some(url));
+        assert_eq!(
+            summary,
+            "Open the sign-in link to sign in, or see (https://docs.example.invalid/help)."
+        );
+        assert!(!summary.contains("SECRET"));
+    }
+
+    #[test]
+    fn a_long_message_is_bounded_and_an_empty_one_gets_a_default() {
+        let long = "x".repeat(NEEDS_YOU_SUMMARY_MAX_CHARS * 3);
+        let summary = signin_summary(&long, Some("https://example.invalid/login"));
+        assert!(summary.chars().count() <= NEEDS_YOU_SUMMARY_MAX_CHARS);
+        let url = "https://example.invalid/login?code=1";
+        assert_eq!(signin_summary(url, Some(url)), "the sign-in link");
+        assert_eq!(signin_summary("  ", None), "Sign in to continue");
+    }
 }
