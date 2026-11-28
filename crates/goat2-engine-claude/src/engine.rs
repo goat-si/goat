@@ -261,6 +261,8 @@ struct State {
     /// Subagent tasks Claude started and has not finished, by task id, whatever order the launch
     /// acknowledgement, root result and notification arrive in (v1 sessionSubagentsByTaskId).
     live_subagent_tasks: std::collections::BTreeSet<String>,
+    /// Subagent tasks already finished; a late task_started for one does not revive it.
+    finished_subagent_tasks: std::collections::BTreeSet<String>,
     ordinal: u32,
     exited: bool,
     shutting_down: bool,
@@ -388,6 +390,7 @@ async fn start_session(
             async_subagents: HashMap::new(),
             background_commands: std::collections::BTreeSet::new(),
             live_subagent_tasks: std::collections::BTreeSet::new(),
+            finished_subagent_tasks: std::collections::BTreeSet::new(),
             ordinal: 0,
             exited: false,
             shutting_down: false,
@@ -603,6 +606,7 @@ impl Inner {
                     state.exited = false;
                     state.background_commands.clear();
                     state.live_subagent_tasks.clear();
+                    state.finished_subagent_tasks.clear();
                     state.stopping = false;
                     state.exit_hint = None;
                     true
@@ -842,6 +846,7 @@ impl Inner {
         // Background commands and subagents die with the process.
         state.background_commands.clear();
         state.live_subagent_tasks.clear();
+        state.finished_subagent_tasks.clear();
         let reason = if state.shutting_down {
             "shutdown".to_string()
         } else {
@@ -1305,11 +1310,22 @@ impl Inner {
         let subtype = message.get("subtype").and_then(Value::as_str).unwrap_or("");
         // A new CLI turn after a held or absorbed result is the queued steer running (v1 keeps the
         // steered turn open across Claude's own result, ClaudeSteerLifecycle.ts).
+        let no_lifecycle = state.lifecycle == Lifecycle::Absent;
         if subtype == "init"
             && let Some(turn) = state.turn.as_mut()
             && turn.absorbed_result
         {
-            // Which steer runs is told by its own `started` or echo (v1 markSteersAccepted).
+            // Which steer runs is told by its own `started` or echo (v1 markSteersAccepted). A CLI
+            // without `command_lifecycle` has no such evidence: continuing the turn after the
+            // steer's abort or held result is the steers it holds being read.
+            if no_lifecycle {
+                let turn_id = turn.id.clone();
+                for steer in turn.steers.values_mut() {
+                    if steer.phase != SteerPhase::Consumed {
+                        self.consume_steer(&turn_id, steer);
+                    }
+                }
+            }
             turn.absorbed_result = false;
             turn.held_result = None;
         }
@@ -1368,15 +1384,18 @@ impl Inner {
                 );
             match subtype {
                 "task_started"
-                    if message.get("task_type").and_then(Value::as_str) == Some("local_agent") =>
+                    if message.get("task_type").and_then(Value::as_str) == Some("local_agent")
+                        && !state.finished_subagent_tasks.contains(task_id) =>
                 {
                     state.live_subagent_tasks.insert(task_id.clone());
                 }
                 "task_notification" => {
                     state.live_subagent_tasks.remove(task_id);
+                    state.finished_subagent_tasks.insert(task_id.clone());
                 }
                 _ if terminal_update => {
                     state.live_subagent_tasks.remove(task_id);
+                    state.finished_subagent_tasks.insert(task_id.clone());
                 }
                 _ => {}
             }
@@ -1871,11 +1890,9 @@ impl Inner {
             TurnOutcome::Interrupted => "the turn was interrupted".to_string(),
             TurnOutcome::Failed { reason } => reason.clone(),
         };
-        // v1 finalize reports a pending steer completed with a completed turn; that only stands
-        // for a CLI that cannot say otherwise (no command_lifecycle). One that queued the steer
-        // and never started or echoed it did not read it.
-        let done = matches!(outcome, TurnOutcome::Done) && state.lifecycle == Lifecycle::Absent;
-        self.end_steers(&turn_id, steers, &mut state.steer_waiters, done, &ended);
+        // A steer with no evidence of being read is Cancelled (the contract's "left unread"); v1
+        // finalize would call it completed with a completed turn, which would lose it.
+        self.end_steers(&turn_id, steers, &mut state.steer_waiters, false, &ended);
         state.turn = None;
         state.last_finished = Some(turn_id.clone());
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
