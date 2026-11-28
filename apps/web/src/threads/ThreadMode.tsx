@@ -12,6 +12,7 @@ import { plannedProps } from "../planned/Planned.tsx";
 import type { UiState } from "../ui-state/uiState.ts";
 import { duration } from "../lib/format.ts";
 import { RequestCard } from "../App.tsx";
+import { DEFAULT_SELECTION, ModelChip, useThreadModelChange, type Selection } from "../providers/ModelChip.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -158,6 +159,8 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
     if (!r.ok) setError(r.error?.message ?? "The host did not take this.");
     return r;
   };
+  const modelChange = useThreadModelChange(card?.id ?? null);
+  const [newSelection, setNewSelection] = useState<Selection>(DEFAULT_SELECTION);
   const busy = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const submit = async () => {
@@ -173,7 +176,7 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
       return;
     }
     if (card) { client.sendMessage({ threadId: card.id }, text, card.followUpMode === "followup" ? "followup" : "steer"); setDraft(""); return; }
-    const r = await run({ type: "start_thread", kind: "user", title: text.slice(0, 80), modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" }, runtimeMode: "full-access", text });
+    const r = await run({ type: "start_thread", kind: "user", title: text.slice(0, 80), modelSelection: newSelection, runtimeMode: "full-access", text });
     // The person may have opened another thread while this one was being created.
     if (r.ok && r.value?.threadId && mounted.current) { setDraft(""); onStarted(r.value.threadId); }
   };
@@ -241,7 +244,7 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
             onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); } }}
             style={{ color: "#0D0D0D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 14, lineHeight: "22px" }} />}
           plus={plannedProps("attachments")} access={plannedProps("settings-accounts")} spinner={running ? <span data-spin="" style={{ display: "inline-flex" }}><P.ComposerSpinner /></span> : null}
-          picker={<P.ThreadModelChip button={plannedProps("runtime-picker-change")} label={card?.engine.modelSelection.model ?? "gpt-6.1-sol"} />} effort={plannedProps("runtime-picker-change")}
+          picker={<ModelChip selection={card?.engine.modelSelection ?? newSelection} onChange={card ? modelChange.change : setNewSelection} label={card?.title ?? "New thread"} error={modelChange.error} />} effort={plannedProps("runtime-picker-change")}
           send={sendButton} />
       </>}
     />

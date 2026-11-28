@@ -2,7 +2,7 @@
 // nav in the sidebar and the page in the main area. Providers is live (lifted v1 ProviderSettingsPanel); other v1
 // settings sections are not built in GOAT 2 yet and say so.
 import { useEffect, type ReactNode } from "react";
-import { ProvidersSettingsScreen, V1Boundary, setV1Location, setV1Navigator } from "@v1/surfaces";
+import { ProvidersSettingsScreen, V1Boundary, setV1Location } from "@v1/surfaces";
 import * as P from "../paper/parts.tsx";
 import { Planned } from "../planned/Planned.tsx";
 import type { UiState } from "../ui-state/uiState.ts";
@@ -24,10 +24,7 @@ export function SettingsMode({ ui, setUi, top, rail, nav, botPage }: {
   const instanceId = typeof ui.settingsSearch?.instanceId === "string" ? ui.settingsSearch.instanceId : undefined;
   useEffect(() => {
     setV1Location({ pathname: path, search: ui.settingsSearch ?? {} });
-    setV1Navigator((to) => {
-      if (to.pathname.startsWith("/settings")) setUi({ mode: "settings", settingsPath: to.pathname, settingsSearch: to.search as Record<string, string> });
-    });
-  }, [path, ui.settingsSearch, setUi]);
+  }, [path, ui.settingsSearch]);
   return (
     <P.Frame top={top} rail={rail} sidebar={ui.sidebarOpen ? nav : null}
       main={

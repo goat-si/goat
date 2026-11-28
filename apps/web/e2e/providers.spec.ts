@@ -81,3 +81,18 @@ test("settings nav (v1 SettingsSidebarNav): sections move the GOAT 2 settings pa
   await nav.getByText("Providers", { exact: true }).click();
   await expect(settings(page).getByRole("button", { name: "Select Codex", exact: true })).toBeVisible();
 });
+
+test("thread view: the composer picker changes the open thread's model; a new thread starts on the picked model", async ({ page }) => {
+  await page.goto("/?fake=1NEM-1");
+  const chip = page.getByRole("button", { name: /model: gpt-6\.1-sol$/ });
+  await chip.click();
+  await page.getByText("GPT-6.1 Terra", { exact: true }).click();
+  expect(await sent(page, "change_thread")).toEqual([expect.objectContaining({ threadId: "t-billing", modelSelection: { instanceId: "codex", model: "gpt-6.1-terra" } })]);
+  await page.getByRole("button", { name: "New thread" }).first().click();
+  await page.getByRole("button", { name: "New thread model: gpt-6.1-sol" }).click();
+  await page.getByText("GPT-6 Luna", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "New thread model: gpt-6-luna" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Message" }).fill("hello");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => sent(page, "start_thread")).toEqual([expect.objectContaining({ modelSelection: { instanceId: "codex", model: "gpt-6-luna" } })]);
+});

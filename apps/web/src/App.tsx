@@ -15,7 +15,8 @@ import { NewBotDialog } from "./bot-home/NewBot.tsx";
 import { ThreadMode } from "./threads/ThreadMode.tsx";
 import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
 import { SettingsMode } from "./settings/SettingsMode.tsx";
-import { BotModelSettings, ModelPicker, SettingsSidebarNav, V1Boundary, installProviderPort } from "@v1/surfaces";
+import { BotModelSettings, SettingsSidebarNav, V1Boundary, installProviderPort, setV1Navigator } from "@v1/surfaces";
+import { DEFAULT_SELECTION, ModelChip, useThreadModelChange } from "./providers/ModelChip.tsx";
 import { hostProviderPort } from "./providers/hostProviderPort.ts";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
@@ -42,6 +43,18 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
     installProviderPort(hostProviderPort(client));
     return () => installProviderPort(null);
   }, [client]);
+  // Where lifted v1 code navigates (v1 useNavigate / Link): settings paths open Settings, v1's thread route
+  // "/<environmentId>/<threadId>" opens the thread in thread mode.
+  useEffect(() => {
+    setV1Navigator((to) => {
+      if (to.pathname.startsWith("/settings")) {
+        setUi({ mode: "settings", settingsPath: to.pathname, settingsSearch: to.search as Record<string, string> });
+        return;
+      }
+      const thread = /^\/[^/]+\/([^/]+)$/.exec(to.pathname);
+      if (thread) setUi({ mode: "threads", threadId: decodeURIComponent(thread[1]!) });
+    });
+  }, [setUi]);
   const rows = useMemo(() => botRows(snap.state), [snap.state]);
   const main = rows.find((r) => r.role === "main") ?? null;
   const bot = rows.find((r) => r.botId === ui.botId) ?? main;
@@ -257,37 +270,17 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 
 // ---------------------------------------------------------------- chat
 
-/** The composer's model chip: v1's picker over the host's providers (board 1QM8-2). The choice applies from the bot's
- * next turn through change_thread on its thread (docs/part2/provider-wire.md); before its first thread it is disabled. */
-export function useThreadModelChange(threadId: string | null) {
-  const client = useClient();
-  const [error, setError] = useState<string | null>(null);
-  const change = threadId === null ? null : (selection: { instanceId: string; model: string }) => {
-    setError(null);
-    void client.command({ type: "change_thread", threadId, modelSelection: { instanceId: selection.instanceId, model: selection.model } }).then((r) => {
-      if (!r.ok) setError(r.error?.message ?? "Could not change the model.");
-    });
-  };
-  return { change, error };
-}
-
 /** Settings > GOAT Bot: the bot's model (board 1QYE-2), the same picker and change_thread as the composer. */
 function BotSettingsPage({ bot }: { bot: BotRowData | null }) {
   const { change } = useThreadModelChange(bot?.threadId ?? null);
   if (!bot) return <div style={{ padding: 32, color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13 }}>Loading bots…</div>;
-  const selection = bot.card?.engine.modelSelection ?? { instanceId: "codex", model: "gpt-6.1-sol" };
+  const selection = bot.card?.engine.modelSelection ?? DEFAULT_SELECTION;
   return <BotModelSettings botName={bot.name} instanceId={selection.instanceId} model={selection.model} onChange={change} />;
 }
 
 function BotModelPicker({ bot }: { bot: BotRowData }) {
-  const selection = bot.card?.engine.modelSelection ?? { instanceId: "codex", model: "gpt-6.1-sol" };
   const { change, error } = useThreadModelChange(bot.threadId);
-  return (
-    <V1Boundary style={{ display: "contents" }} title={error ?? undefined}>
-      <ModelPicker composer instanceId={selection.instanceId} model={selection.model} popupAlign="end"
-        ariaLabel={`${bot.name} model: ${selection.model}`} disabled={change === null} onChange={(s) => change?.(s)} />
-    </V1Boundary>
-  );
+  return <ModelChip selection={bot.card?.engine.modelSelection ?? DEFAULT_SELECTION} onChange={change} label={bot.name} error={error} />;
 }
 
 function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string) => void }) {
