@@ -31,3 +31,15 @@ it("renders the version, UTC date, platform file table, and exact signing notice
   expect(notes).toContain(RELEASE_SIGNING_NOTICE);
   expect(notes).not.toMatch(/https?:|commit|pull request|\/pull\//i);
 });
+
+it("keeps highlights as plain text above the platform table", () => {
+  const notes = renderReleaseNotes(
+    "0.1.14",
+    "2026-11-26",
+    ["GOAT.dmg"],
+    ["Handle <offline> & @mentions", "Open [files](link)"],
+  );
+  expect(notes).toContain(
+    "## What's changed\n\n- Handle &lt;offline&gt; &amp; &#64;mentions\n- Open &#91;files&#93;&#40;link&#41;\n\n| Platform | File |",
+  );
+});

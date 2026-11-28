@@ -186,12 +186,13 @@ const fixture = (
       readFileString: (file) =>
         Effect.succeed(new TextDecoder().decode(files.get(file.slice(dir.length + 1))!)),
     });
-    const run = (dryRun = false) =>
+    const run = (dryRun = false, highlights: readonly string[] = []) =>
       publishNightlyRelease({
         client,
         dir,
         version: target,
         name: "GOAT Nightly",
+        highlights,
         dryRun,
         ...(options.assetsOnly ? { assetsOnly: true, target: "abc1234" } : {}),
       }).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.provide(NodeServices.layer));
@@ -207,7 +208,7 @@ describe("publish nightly release", () => {
     () =>
       Effect.gen(function* () {
         const state = yield* fixture();
-        expect(yield* state.run()).toBe("published");
+        expect(yield* state.run(false, ["Stable-only highlight"])).toBe("published");
         expect(state.assets.map((asset) => asset.name).toSorted()).toEqual(
           [...state.files.keys()].toSorted(),
         );
@@ -221,6 +222,7 @@ describe("publish nightly release", () => {
           prerelease: true,
           make_latest: "false",
           name: "GOAT Nightly",
+          body: expect.not.stringContaining("## What's changed"),
         });
         expect(state.calls.filter((call) => call.host === "uploads.github.com")).toHaveLength(
           state.files.size,
@@ -294,12 +296,13 @@ describe("publish nightly release", () => {
         newer: "0.2.0-nightly.20261013.1",
         superseded: "before",
       });
-      expect(yield* state.run()).toBe("published");
+      expect(yield* state.run(false, ["Show the update summary"])).toBe("published");
       const create = state.calls.find(
         (call) => call.path.endsWith("/releases") && call.method === "POST",
       )!;
       expect(create.body).toMatchObject({
         tag_name: `v${stable}`,
+        body: expect.stringContaining("## What's changed\n\n- Show the update summary"),
         prerelease: false,
         make_latest: "true",
       });

@@ -4,6 +4,8 @@ const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
 const {
   SOAK_MS,
+  previousStableSha,
+  stableHighlights,
   decideNightlyBuild,
   decideStablePromotion,
   nextStableBase,
@@ -279,5 +281,52 @@ describe("decideNightlyBuild", () => {
     const nextBase = nightly("0.1.3-nightly.20261020.200", "999999999999", ago(90 * HOUR));
     const { calls } = decideNightly({ releases: [...shipped, nextBase] });
     assert.deepEqual(calls, ["999999999999..." + GREEN]);
+  });
+});
+
+describe("stable release highlights", () => {
+  it("uses the previous published stable's source commit on first publish and retry", () => {
+    const releases = [
+      stable("0.1.9", "aaaaaaaaaaaa"),
+      stable("0.1.10", "bbbbbbbbbbbb"),
+      stable("0.1.11", "cccccccccccc"),
+      { ...stable("0.1.12", "dddddddddddd"), draft: true },
+      nightly("0.1.11-nightly.20261010.1", "eeeeeeeeeeee"),
+    ];
+    assert.equal(previousStableSha(releases, "0.1.11"), "bbbbbbbbbbbb");
+    assert.equal(previousStableSha(releases, "0.1.9"), undefined);
+  });
+
+  it("takes at most five app changes from merged PRs on the built commit's first-parent path", () => {
+    const messages = [
+      "feat(web): earlier feature (#1)",
+      "fix(web): one (#2)",
+      "fix(web): two (#3)",
+      "fix(web): three (#4)",
+      "fix(desktop): four (#5)",
+      "feat(bot): earlier feature (#6)",
+      "fix(ci): internal tests (#7)",
+      "fix: direct commit",
+      "Merge pull request #8 from fork/feature\n\nfeat(web): merged feature",
+    ];
+    const commits = messages.map((message, i) => ({
+      sha: String(i + 1),
+      parent: String(i),
+      lines: message.split("\n"),
+    }));
+    commits.splice(4, 0, { sha: "side", parent: "0", lines: ["feat: nested change (#99)"] });
+    const pages = [
+      { status: "ahead", commits: commits.slice(0, 4) },
+      { status: "ahead", commits: commits.slice(4) },
+    ];
+    assert.deepEqual(stableHighlights(pages, "0", "9"), [
+      "merged feature",
+      "earlier feature",
+      "four",
+      "three",
+      "two",
+    ]);
+    assert.deepEqual(stableHighlights(pages, "other", "9"), []);
+    assert.deepEqual(stableHighlights([{ status: "diverged", commits }], "0", "9"), []);
   });
 });
