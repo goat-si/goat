@@ -17,6 +17,14 @@ import type { ThreadId } from "./ThreadId.ts";
  * run's hold. At `run.finished`, run inputs still queued are delivered if
  * `activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`
  * outcome opens request `resend:<runId>` (kind `resend`) holding them.
+ *
+ * Steers: `input.delivered {as: steer, outcome: accepted}` moves the input from
+ * `queuedInputs` to `steeredInputs`. A later `{as: steer, outcome: declined}` for an input in
+ * `steeredInputs` (the engine dropped an accepted steer, `EngineEvent::SteerUpdated` Cancelled)
+ * moves it back to the END of `queuedInputs` with mode `followup`, same inputId, text, source
+ * and attachments (v1 re-dispatches through the normal queue). A declined steer still queued is
+ * unchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as
+ * the turn ends still requeues.
  */
 export type Fold = { 
 /**
@@ -42,6 +50,11 @@ queuedInputs: Array<QueuedInput>,
  * Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
  */
 heldInputs: Array<HeldInputs>, 
+/**
+ * Steers the engine accepted that are not settled yet (see the steer rules above). Omitted
+ * when empty; checkpoints written before this field read as empty.
+ */
+steeredInputs?: Array<QueuedInput>, 
 /**
  * Requests still open (including `resend`), so the inbox renders without earlier lines.
  */
