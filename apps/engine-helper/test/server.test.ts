@@ -4,11 +4,11 @@ import { test } from "node:test";
 import { createServer } from "../src/server.ts";
 import { engineLoaders } from "../src/engines.ts";
 
-function harness() {
+function harness(engines = engineLoaders) {
   const lines: Array<Record<string, unknown>> = [];
   const exits: number[] = [];
   const server = createServer({
-    engines: engineLoaders,
+    engines,
     write: (line, done) => {
       lines.push(JSON.parse(line));
       done?.();
@@ -72,7 +72,7 @@ test("requests before initialize and unknown methods are bad_request", async () 
 });
 
 test("an engine that fails to load answers unavailable", async () => {
-  const h = harness();
+  const h = harness({ ...engineLoaders, muse: async () => { throw new Error("SDK unavailable"); } });
   h.server.handleLine(JSON.stringify({ id: 1, method: "initialize", params: { ...init, engine: "muse" } }));
   assert.equal(((await h.waitFor((l) => l.id === 1)).error as { code: string }).code, "unavailable");
 });

@@ -9,7 +9,5 @@ export const engineLoaders: EngineLoaders = {
   opencode: async () => {
     throw new Error("the opencode engine is not built yet");
   },
-  muse: async () => {
-    throw new Error("the muse engine is not built yet");
-  },
+  muse: async () => (await import("./engines/muse/index.ts")).museEngine,
 };
