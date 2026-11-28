@@ -6,15 +6,17 @@
 //! leaves the hook unset.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use goat2_contracts::{
     ApprovalDecision, ApprovalOption, EngineDriver, ModelSelection, ProviderCapabilities,
-    RuntimeMode,
+    RuntimeMode, TurnItemStatus, UserInputQuestion,
 };
 use goat2_engine_api::{EngineError, SessionSpec};
 use serde_json::{Map, Value};
 
 use crate::capabilities::acp_base_capabilities;
+use crate::items::ToolState;
 use crate::policy::{self, Disposition, RuntimePolicy};
 use crate::wire::{
     InitializeInfo, ModeState, SessionSetup, find_model_config_option, select_values,
@@ -120,6 +122,109 @@ pub enum FlavorEvent {
         prompt_id: Option<String>,
         message: String,
     },
+    /// v1 `AcpAdapterV2ExtensionContext.finishSubagent` (`adapterFlavor.ts:78-83`): an extension
+    /// reported that the child session of a native subagent ended (Copilot `subagent.completed`).
+    FinishSubagent {
+        session_id: String,
+        child_session_id: String,
+        status: TurnItemStatus,
+        result: Option<String>,
+    },
+    /// v1 `reportForegroundWork` (`adapterFlavor.ts:91-98`, `adapter.ts:5440-5478`): the agent's
+    /// foreground work started (`running`) or went idle. An idle after a `running` seen during
+    /// the turn settles it as completed, for agents that hold `session/prompt` past their work.
+    ForegroundWork {
+        session_id: String,
+        running: bool,
+    },
+}
+
+/// v1 `AcpAdapterV2SubagentUpdate`: what a tool call says about an agent-native subagent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentUpdate {
+    pub native_task_id: String,
+    /// The ACP session the child's updates arrive on, when the agent streams them.
+    pub child_session_id: Option<String>,
+    pub prompt: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    /// v1 subagent status (`running`, `completed`, `failed`, ...).
+    pub status: TurnItemStatus,
+    pub result: Option<String>,
+}
+
+/// v1 `AcpSubagentSessionEvent`: a child-session event of agents that report child state
+/// (claude-agent-acp `subagent_update` / `session_message`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubagentSessionEvent {
+    State {
+        child_session_id: String,
+        parent_session_id: Option<String>,
+        status: TurnItemStatus,
+        result: Option<String>,
+    },
+    /// The parent handed the child its prompt; `delegation_id` is the parent's Agent/Task tool id.
+    Delegation {
+        child_session_id: String,
+        parent_session_id: Option<String>,
+        delegation_id: String,
+        prompt: String,
+    },
+}
+
+/// Answers of a question form become the elicitation response (`{action, content}`).
+pub type ElicitationRespond = Arc<dyn Fn(&Map<String, Value>) -> Value + Send + Sync>;
+
+/// v1 `ElicitationQuestionForm` returned by a flavor's `extractElicitationForm`: an agent's own
+/// question form (Droid, omp, OpenCode) with its own answer mapping.
+#[derive(Clone)]
+pub struct NativeElicitationForm {
+    pub questions: Vec<UserInputQuestion>,
+    pub respond: ElicitationRespond,
+}
+
+impl std::fmt::Debug for NativeElicitationForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NativeElicitationForm")
+            .field("questions", &self.questions)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A `session/prompt` error as the agent answered it (v1 `AcpRequestError`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromptError {
+    pub code: i32,
+    pub message: String,
+    pub data: Option<Value>,
+}
+
+/// v1 `watchPromptOutcome` check: sees a prompt the agent answered and reports a failure its
+/// stop reason hid. May block on file reads; the driver runs it off the async runtime.
+pub trait PromptOutcomeCheck: Send {
+    fn check(self: Box<Self>, response: &Value) -> Option<String>;
+}
+
+/// The environment the agent process runs with: the launch's variables over the inherited ones.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentEnv {
+    pub set: Vec<(String, String)>,
+    pub removed: Vec<String>,
+    pub removed_prefixes: Vec<String>,
+}
+
+impl AgentEnv {
+    pub fn get(&self, name: &str) -> Option<String> {
+        if let Some((_, value)) = self.set.iter().rev().find(|(n, _)| n == name) {
+            return Some(value.clone());
+        }
+        if self.removed.iter().any(|n| n == name)
+            || self.removed_prefixes.iter().any(|p| name.starts_with(p))
+        {
+            return None;
+        }
+        std::env::var(name).ok()
+    }
 }
 
 /// Client capabilities a flavor advertises in `initialize`.
@@ -235,6 +340,53 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn supports_image_prompts(&self, init: &InitializeInfo) -> bool {
         init.prompt_image
     }
+    /// v1 `clientCapabilitiesMeta` (`adapter.ts:1018`): `initialize.clientCapabilities._meta`.
+    fn client_capabilities_meta(&self) -> Option<Map<String, Value>> {
+        None
+    }
+    /// v1 `normalizeToolCall`: fix a merged tool call before anything reads it.
+    fn normalize_tool_call(&self, tool: ToolState) -> ToolState {
+        tool
+    }
+    /// v1 `extractSubagentUpdate`: a tool call that starts or reports an agent-native subagent.
+    /// The driver projects it as a subagent instead of a tool.
+    fn extract_subagent(&self, _tool: &ToolState) -> Option<SubagentUpdate> {
+        None
+    }
+    /// v1 `followAgentWorkState` together with `extractSubagentSessionEvent`: the agent reports
+    /// child sessions itself. v1 turns this on only on negotiated ACP v2 (`adapter.ts:499-502`);
+    /// on v1 such a flavor's [Self::extract_subagent] is off (`adapter.ts:465-468`).
+    fn follows_agent_work_state(&self) -> bool {
+        false
+    }
+    /// v1 `isProvisionalSubagentTool`: a subagent tool whose input has not arrived yet; held back.
+    fn is_provisional_subagent_tool(&self, _tool: &ToolState) -> bool {
+        false
+    }
+    /// v1 `extractSubagentSessionEvent`. `params` is the whole `session/update` params object.
+    fn extract_subagent_session_event(&self, _params: &Value) -> Option<SubagentSessionEvent> {
+        None
+    }
+    /// v1 `extractElicitationForm`: the agent's own question form; None uses the generic mapping.
+    fn extract_elicitation_form(&self, _params: &Value) -> Option<NativeElicitationForm> {
+        None
+    }
+    /// v1 `restartRuntimeAfterPromptError`: prompt failures after which the agent keeps failing
+    /// until its process is replaced.
+    fn restart_after_prompt_error(&self, _error: &PromptError) -> bool {
+        false
+    }
+    /// v1 `watchPromptOutcome`: runs before `session/prompt`; a failure the returned check reports
+    /// fails the turn and restarts the agent before the next one.
+    fn watch_prompt_outcome(
+        &self,
+        _session_id: &str,
+        _env: &AgentEnv,
+    ) -> Option<Box<dyn PromptOutcomeCheck>> {
+        None
+    }
+    /// v1 `releaseRuntime`: the agent process of `session_id` ended; drop per-runtime state.
+    fn release_runtime(&self, _session_id: &str) {}
 }
 
 /// v1 default approval options: what the request's option kinds allow, plus cancel.
@@ -281,10 +433,22 @@ pub fn default_approval_options(request: &Value) -> Vec<ApprovalOption> {
 /// v1 runtime `setModel`: write the model option when the agent lists the model, else
 /// `session/set_model` when the agent reports session models; keep when it is already current.
 pub fn default_model_write(selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
+    model_write_with_custom(selection, setup, &[])
+}
+
+/// [default_model_write] for agents with configured custom models: v1 writes a custom model id
+/// without checking the agent's list and lets the agent validate it (`adapter.ts:5936-6016`,
+/// `AcpSessionRuntime.ts:1063-1068`). `auto` is left as the agent has it, like `default`.
+pub fn model_write_with_custom(
+    selection: &ModelSelection,
+    setup: &SessionSetup,
+    custom_models: &[String],
+) -> ModelWrite {
     let model = selection.model.trim();
     if model.is_empty() || model == "default" {
         return ModelWrite::Keep;
     }
+    let custom = custom_models.iter().any(|m| m == model);
     if let Some(option) = find_model_config_option(&setup.config_options) {
         let current = option.get("currentValue").and_then(Value::as_str);
         if current == Some(model) {
@@ -293,14 +457,18 @@ pub fn default_model_write(selection: &ModelSelection, setup: &SessionSetup) -> 
         let config_id = crate::wire::config_option_id(option)
             .unwrap_or("model")
             .to_owned();
-        if select_values(option)
-            .iter()
-            .any(|(value, _)| value == model)
+        if custom
+            || select_values(option)
+                .iter()
+                .any(|(value, _)| value == model)
         {
             return ModelWrite::ConfigOption {
                 config_id,
                 value: model.to_owned(),
             };
+        }
+        if model == "auto" {
+            return ModelWrite::Keep;
         }
         return ModelWrite::Unavailable {
             message: format!("Model '{model}' is not offered by this agent."),
@@ -308,6 +476,9 @@ pub fn default_model_write(selection: &ModelSelection, setup: &SessionSetup) -> 
     }
     if let Some(models) = &setup.models {
         if models.current_model_id == model {
+            return ModelWrite::Keep;
+        }
+        if !custom && model == "auto" && !models.available.iter().any(|(id, _, _)| id == model) {
             return ModelWrite::Keep;
         }
         return ModelWrite::SetModel {

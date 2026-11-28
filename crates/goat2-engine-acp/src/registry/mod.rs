@@ -1,6 +1,7 @@
 //! ACP registry pieces ported from GOAT v1 at 916b5ccc1b2.
 //!
-//! Installation, discovery and agent-specific protocol handling are not yet implemented.
+//! [RegistryAgentFlavor] carries every per-agent hook v1 `packages/provider-acp-registry/src/server/adapter.ts`
+//! sets (see [agents]); installation and discovery live in the other registry modules.
 
 pub mod agents;
 pub mod index;
@@ -8,49 +9,79 @@ pub mod resolve;
 
 use goat2_contracts::{EngineDriver, ModelSelection, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::capabilities::acp_base_capabilities;
-use crate::flavor::{AcpFlavor, LaunchCommand, ModelWrite, default_model_write};
+use crate::flavor::{
+    AcpFlavor, AgentEnv, AuthPolicy, FlavorEvent, LaunchCommand, ModelWrite, NativeElicitationForm,
+    PromptError, PromptOutcomeCheck, SubagentSessionEvent, SubagentUpdate, model_write_with_custom,
+};
+use crate::items::ToolState;
 use crate::wire::SessionSetup;
+use agents::AgentKind;
+use agents::copilot::CopilotRouting;
+use agents::kimi::KimiOutcomeWatch;
 
-/// A command resolved by the registry owner; this type does not install or discover it.
-#[derive(Debug, Clone)]
+/// A registry or local ACP agent, launched with a command the registry owner resolved.
+///
+/// Build it with [RegistryAgentFlavor::new]; the per-agent state (Copilot attribution, Kimi log
+/// cursors) is v1's per-adapter state (`adapter.ts:243,270`).
+#[derive(Debug)]
 pub struct RegistryAgentFlavor {
     pub agent_id: String,
     pub command: LaunchCommand,
     /// Local commands are identified by their executable name in v1.
     pub local: bool,
+    /// v1 settings `authMethodId` (`adapter.ts:185`): the method to sign in with on -32000.
+    auth_method_id: Option<String>,
+    /// v1 settings `customModels` slugs (`adapter.ts:186-188,281`).
+    custom_models: Vec<String>,
+    copilot: CopilotRouting,
+    kimi: KimiOutcomeWatch,
 }
 
 impl RegistryAgentFlavor {
-    // v1 adapter.ts:232-237: local Devin accepts .exe, but not .cmd.
-    fn is_devin(&self) -> bool {
-        if !self.local {
-            return self.agent_id == "devin";
+    pub fn new(agent_id: impl Into<String>, command: LaunchCommand, local: bool) -> Self {
+        Self {
+            agent_id: agent_id.into(),
+            command,
+            local,
+            auth_method_id: None,
+            custom_models: Vec::new(),
+            copilot: CopilotRouting::default(),
+            kimi: KimiOutcomeWatch::default(),
         }
-        let name = self.command.program.to_string_lossy();
-        matches!(
-            name.rsplit(['/', '\\'])
-                .next()
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .as_str(),
-            "devin" | "devin.exe"
+    }
+
+    /// v1 settings `authMethodId`; blank means the first agent-managed method.
+    pub fn with_auth_method_id(mut self, method_id: Option<String>) -> Self {
+        self.auth_method_id = method_id
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
+        self
+    }
+
+    /// v1 settings `customModels`: model ids written without checking the agent's list.
+    pub fn with_custom_models(mut self, models: Vec<String>) -> Self {
+        self.custom_models = models;
+        self
+    }
+
+    /// v1 `adapter.ts:213-267`.
+    pub fn kind(&self) -> AgentKind {
+        agents::agent_kind(
+            &self.agent_id,
+            &self.command.program.to_string_lossy(),
+            self.local,
         )
     }
-    // v1 adapter.ts:213-215,234-238: local agents have no registry ID for matching.
+
+    fn is_devin(&self) -> bool {
+        self.kind() == AgentKind::Devin
+    }
+
     fn is_copilot(&self) -> bool {
-        if !self.local {
-            return self.agent_id == "github-copilot-cli";
-        }
-        let program = self.command.program.to_string_lossy();
-        let name = program
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        matches!(name.as_str(), "copilot" | "copilot.exe" | "copilot.cmd")
+        self.kind() == AgentKind::Copilot
     }
 }
 
@@ -64,13 +95,34 @@ impl AcpFlavor for RegistryAgentFlavor {
         }
     }
     fn launch(&self, _spec: &SessionSpec) -> Result<LaunchCommand, EngineError> {
-        Ok(self.command.clone())
+        let mut command = self.command.clone();
+        // v1 sessionEnvironmentKey.ts:13-22: claude-agent-acp runs its v2 protocol unless told not to.
+        let name = agents::claude::CLAUDE_AGENT_ACP_EXPERIMENTAL_V2;
+        if self.kind() == AgentKind::Claude
+            && !command.env.iter().any(|(n, _)| n == name)
+            && std::env::var_os(name).is_none()
+        {
+            command.env.push((name.to_owned(), "1".to_owned()));
+        }
+        Ok(command)
+    }
+    fn auth_policy(&self) -> AuthPolicy {
+        AuthPolicy::OnRequired {
+            method_id: self.auth_method_id.clone(),
+        }
+    }
+    fn prefers_http_mcp(&self) -> bool {
+        agents::prefers_http_mcp_transport(
+            self.local,
+            &self.command.program.to_string_lossy(),
+            &self.command.args,
+        )
     }
     fn normalize_update(&self, params: Value) -> Value {
-        if self.is_devin() {
-            agents::normalize_devin_session_update(params)
-        } else {
-            params
+        match self.kind() {
+            AgentKind::Devin => agents::normalize_devin_session_update(params),
+            AgentKind::Copilot => self.copilot.normalize_session_update(params),
+            _ => params,
         }
     }
     fn answerable_permission_options(&self, options: Vec<Value>) -> Vec<Value> {
@@ -81,9 +133,10 @@ impl AcpFlavor for RegistryAgentFlavor {
         }
     }
     fn model_write(&self, selection: &ModelSelection, setup: &SessionSetup) -> ModelWrite {
-        // v1 adapter.ts:359-361,6002: Copilot's reported default may not be its active model.
+        // v1 adapter.ts:347-348,6002: Copilot's reported default may not be its active model
+        // (github/copilot-cli#5363), so the model is always written.
         if !self.is_copilot() || matches!(selection.model.trim(), "" | "default") {
-            return default_model_write(selection, setup);
+            return model_write_with_custom(selection, setup, &self.custom_models);
         }
         let mut setup = setup.clone();
         for option in &mut setup.config_options {
@@ -91,15 +144,90 @@ impl AcpFlavor for RegistryAgentFlavor {
                 object.remove("currentValue");
             }
         }
-        default_model_write(selection, &setup)
+        model_write_with_custom(selection, &setup, &self.custom_models)
     }
     fn capabilities(&self) -> ProviderCapabilities {
         let mut caps = acp_base_capabilities();
-        // v1 adapter.ts:275-282: cancellation kills Copilot's background agents.
+        // v1 adapter.ts:274-280: cancelling a Copilot prompt also kills its background agents.
         if self.is_copilot() {
             caps.turns.supports_steering_by_interrupt_restart = false;
         }
         caps
+    }
+    fn client_capabilities_meta(&self) -> Option<Map<String, Value>> {
+        match self.kind() {
+            AgentKind::Devin => Some(agents::devin::devin_client_capabilities_meta()),
+            AgentKind::Copilot => Some(agents::copilot::copilot_client_capabilities_meta()),
+            _ => None,
+        }
+    }
+    fn normalize_tool_call(&self, tool: ToolState) -> ToolState {
+        if self.is_devin() {
+            agents::devin::normalize_devin_tool_call(tool)
+        } else {
+            tool
+        }
+    }
+    fn extract_subagent(&self, tool: &ToolState) -> Option<SubagentUpdate> {
+        match self.kind() {
+            AgentKind::Devin => agents::devin::extract_devin_subagent(tool),
+            AgentKind::Copilot => agents::copilot::extract_copilot_subagent(tool),
+            AgentKind::Claude => agents::claude::extract_claude_subagent(tool),
+            _ => None,
+        }
+    }
+    fn follows_agent_work_state(&self) -> bool {
+        self.kind() == AgentKind::Claude
+    }
+    fn is_provisional_subagent_tool(&self, tool: &ToolState) -> bool {
+        self.kind() == AgentKind::Claude
+            && agents::claude::is_claude_provisional_subagent_tool(tool)
+    }
+    fn extract_subagent_session_event(&self, params: &Value) -> Option<SubagentSessionEvent> {
+        if self.kind() == AgentKind::Claude {
+            agents::claude::extract_claude_subagent_session_event(params)
+        } else {
+            None
+        }
+    }
+    fn extract_elicitation_form(&self, params: &Value) -> Option<NativeElicitationForm> {
+        // v1 adapter.ts:299-305.
+        match self.kind() {
+            AgentKind::Droid => agents::droid::extract_droid_elicitation_form(params),
+            AgentKind::Omp => agents::omp::extract_omp_elicitation_form(params),
+            AgentKind::OpenCode => agents::opencode::extract_opencode_elicitation_form(params),
+            _ => None,
+        }
+    }
+    fn restart_after_prompt_error(&self, error: &PromptError) -> bool {
+        self.is_copilot() && agents::copilot::is_copilot_lost_session_error(error)
+    }
+    fn watch_prompt_outcome(
+        &self,
+        session_id: &str,
+        env: &AgentEnv,
+    ) -> Option<Box<dyn PromptOutcomeCheck>> {
+        if self.kind() == AgentKind::Kimi {
+            self.kimi.watch(session_id, env)
+        } else {
+            None
+        }
+    }
+    fn ext_notification(&self, method: &str, params: &Value) -> Vec<FlavorEvent> {
+        match (self.kind(), method) {
+            (AgentKind::Copilot, agents::copilot::COPILOT_SESSION_EVENT) => {
+                self.copilot.on_session_event(params)
+            }
+            (AgentKind::Vibe, agents::vibe::MISTRAL_VIBE_RETRYING) => {
+                agents::vibe::mistral_vibe_retry_notice(params)
+            }
+            _ => Vec::new(),
+        }
+    }
+    fn release_runtime(&self, session_id: &str) {
+        if self.is_copilot() {
+            self.copilot.release(session_id);
+        }
     }
 }
 
@@ -162,10 +290,8 @@ mod tests {
     use super::*;
     #[test]
     fn local_and_registry_agent_matching_matches_v1() {
-        let flavor = |agent: &str, path: &str, local: bool| RegistryAgentFlavor {
-            agent_id: agent.into(),
-            command: LaunchCommand::new(path, Vec::<String>::new()),
-            local,
+        let flavor = |agent: &str, path: &str, local: bool| {
+            RegistryAgentFlavor::new(agent, LaunchCommand::new(path, Vec::<String>::new()), local)
         };
         assert!(flavor("devin", "other", false).is_devin());
         assert!(flavor("", r"C:\\bin\\DEVIN.EXE", true).is_devin());
@@ -202,11 +328,11 @@ mod tests {
     }
     #[test]
     fn copilot_only_disables_restart_steering() {
-        let mut f = RegistryAgentFlavor {
-            agent_id: "github-copilot-cli".into(),
-            command: LaunchCommand::new("some-command", [] as [&str; 0]),
-            local: false,
-        };
+        let mut f = RegistryAgentFlavor::new(
+            "github-copilot-cli",
+            LaunchCommand::new("some-command", [] as [&str; 0]),
+            false,
+        );
         assert!(
             !f.capabilities()
                 .turns

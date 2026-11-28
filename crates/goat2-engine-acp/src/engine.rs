@@ -45,7 +45,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
-use crate::flavor::{AcpFlavor, AuthPolicy, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine};
+use crate::flavor::{
+    AcpFlavor, AgentEnv, AuthPolicy, FlavorEvent, ModelWrite, NativeElicitationForm, PromptError,
+    ResumeMethod, StdoutLine,
+};
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
@@ -54,6 +57,7 @@ use crate::policy::{
     select_auto_approved_option, select_permission_option_id,
 };
 use crate::process::{ChildProcess, Launch};
+use crate::subagents::{SubagentTracker, ToolRoute, TurnRef};
 use crate::wire::{InitializeInfo, ModeState, SessionSetup, parse_modes, text_field};
 
 type Conn = agent_client_protocol::v1::ConnectionTo<Agent>;
@@ -149,10 +153,17 @@ enum Pending {
     },
     Elicitation {
         responder: ValueResponder,
-        form: Option<ElicitationForm>,
+        form: Option<QuestionForm>,
         /// Legacy `session/elicitation` methods answer with the response nested in `action`.
         nested: bool,
     },
+}
+
+/// A question form: the generic mapping, or the flavor's own (v1 `extractElicitationForm`).
+enum QuestionForm {
+    Parsed(ElicitationForm),
+    /// With the schema's `required` ids (v1 `withOptionalChoices`, `elicitationForm.ts:196-220`).
+    Native(NativeElicitationForm, Vec<String>),
 }
 
 struct ActiveTurn {
@@ -162,6 +173,8 @@ struct ActiveTurn {
     prompt_seq: u64,
     interrupted: bool,
     settled_tx: watch::Sender<bool>,
+    /// v1 `workAccepted`: the agent reported foreground work running during this turn.
+    work_accepted: bool,
 }
 
 #[derive(Default)]
@@ -179,6 +192,8 @@ struct State {
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
     model: Option<String>,
+    /// Agent-native subagents (see [crate::subagents]).
+    subagents: SubagentTracker,
 }
 
 struct Shared {
@@ -196,6 +211,8 @@ struct Shared {
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    /// The environment the agent process runs with (v1 `watchPromptOutcome` reads it).
+    agent_env: AgentEnv,
 }
 
 fn emit(shared: &Shared, event: EngineEvent) {
@@ -330,6 +347,65 @@ impl Shared {
                     self.settle(&turn_id, seq, Err(message));
                 }
             }
+            FlavorEvent::FinishSubagent {
+                session_id,
+                child_session_id,
+                status,
+                result,
+            } => {
+                // v1 adapter.ts:5431-5439: only for the session this runtime serves.
+                if self.session_id.get() != Some(&session_id) {
+                    return;
+                }
+                let mut out = Vec::new();
+                {
+                    let mut guard = self.state.lock().expect("state");
+                    let state = &mut *guard;
+                    let mut turn = state.turn.as_mut().map(|t| TurnRef {
+                        turn_id: &t.turn_id,
+                        projector: &mut t.projector,
+                    });
+                    state.subagents.finish(
+                        self.flavor.as_ref(),
+                        &child_session_id,
+                        status,
+                        result,
+                        &mut turn,
+                        &mut out,
+                    );
+                }
+                for event in out {
+                    emit(self, event);
+                }
+            }
+            FlavorEvent::ForegroundWork {
+                session_id,
+                running,
+            } => {
+                // v1 adapter.ts:5440-5478: idle after running during the turn completes it.
+                if self.session_id.get() != Some(&session_id) {
+                    return;
+                }
+                let settle = {
+                    let mut state = self.state.lock().expect("state");
+                    match state.turn.as_mut() {
+                        Some(turn) if !turn.interrupted => {
+                            if running {
+                                turn.work_accepted = true;
+                                None
+                            } else if turn.work_accepted {
+                                Some((turn.turn_id.clone(), turn.prompt_seq))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some((turn_id, seq)) = settle {
+                    self.settle(&turn_id, seq, Ok(json!({ "stopReason": "end_turn" })));
+                }
+            }
         }
     }
 
@@ -353,40 +429,82 @@ impl Shared {
         );
     }
 
+    /// v1 `followsAgentWorkState` (adapter.ts:499-502): only on negotiated ACP v2.
+    fn native_children(&self) -> bool {
+        self.flavor.follows_agent_work_state()
+            && self.init.get().is_some_and(|i| i.protocol_version == 2)
+    }
+
     fn on_session_update(&self, params: &Value) {
         let Some(update) = params.get("update") else {
             return;
         };
-        if let Some(session) = text_field(params, "sessionId")
-            && self.session_id.get().is_some_and(|own| *own != session)
-        {
-            return;
-        }
+        // Updates of other sessions are the agent's subagents (v1 adapter.ts:3817-3879).
+        let child = text_field(params, "sessionId")
+            .filter(|session| self.session_id.get().is_some_and(|own| own != session));
+        let native_children = self.native_children();
+        let flavor = self.flavor.as_ref();
         let kind = update
             .get("sessionUpdate")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let mut out = Vec::new();
         {
-            let mut state = self.state.lock().expect("state");
-            match kind {
-                "current_mode_update" => {
-                    if let (Some(modes), Some(id)) =
-                        (state.modes.as_mut(), text_field(update, "currentModeId"))
-                    {
-                        modes.current_mode_id = id;
+            let mut guard = self.state.lock().expect("state");
+            let state = &mut *guard;
+            // ACP: after session/cancel the agent may still report what it was doing until it
+            // answers the prompt; those updates belong to the turn.
+            let mut turn = state.turn.as_mut().map(|t| TurnRef {
+                turn_id: &t.turn_id,
+                projector: &mut t.projector,
+            });
+            if let Some(event) = native_children
+                .then(|| flavor.extract_subagent_session_event(params))
+                .flatten()
+            {
+                state
+                    .subagents
+                    .session_event(flavor, event, &mut turn, &mut out);
+            } else if let Some(child) = &child {
+                state.subagents.child_update(
+                    flavor,
+                    native_children,
+                    child,
+                    update,
+                    &mut turn,
+                    &mut out,
+                );
+            } else {
+                match kind {
+                    "current_mode_update" => {
+                        if let (Some(modes), Some(id)) =
+                            (state.modes.as_mut(), text_field(update, "currentModeId"))
+                        {
+                            modes.current_mode_id = id;
+                        }
                     }
-                }
-                "config_option_update" => {
-                    if let Some(options) = update.get("configOptions").and_then(Value::as_array) {
-                        state.config_options = options.clone();
+                    "config_option_update" => {
+                        if let Some(options) = update.get("configOptions").and_then(Value::as_array)
+                        {
+                            state.config_options = options.clone();
+                        }
                     }
-                }
-                _ => {
-                    // ACP: after session/cancel the agent may still report what it was doing
-                    // until it answers the prompt; those updates belong to the turn.
-                    if let Some(turn) = state.turn.as_mut() {
-                        turn.projector.apply(update, &mut out);
+                    "tool_call" | "tool_call_update" => {
+                        let route = state.subagents.root_tool(
+                            flavor,
+                            native_children,
+                            update,
+                            &mut turn,
+                            &mut out,
+                        );
+                        if let (ToolRoute::Project(update), Some(turn)) = (route, turn.as_mut()) {
+                            turn.projector.apply(&update, &mut out);
+                        }
+                    }
+                    _ => {
+                        if let Some(turn) = turn.as_mut() {
+                            turn.projector.apply(update, &mut out);
+                        }
                     }
                 }
             }
@@ -593,7 +711,22 @@ impl Shared {
                 .get("requestedSchema")
                 .cloned()
                 .unwrap_or(Value::Null);
-            let Some(form) = parse_elicitation_form(&schema, &message, false) else {
+            // v1 adapter.ts:5367-5388: the flavor's own form first, then the generic mapping
+            // (Devin's `cognition.ai/allowOther` lets a single choice take free text).
+            let allow_other = params
+                .get("_meta")
+                .and_then(|m| m.get("cognition.ai/allowOther"))
+                == Some(&Value::Bool(true));
+            let form = match self.flavor.extract_elicitation_form(&params) {
+                Some(native) => Some(QuestionForm::Native(
+                    with_optional_choices(native, &schema),
+                    required_ids(&schema),
+                )),
+                None => {
+                    parse_elicitation_form(&schema, &message, allow_other).map(QuestionForm::Parsed)
+                }
+            };
+            let Some(form) = form else {
                 drop(state);
                 for event in out {
                     emit(self, event);
@@ -601,13 +734,17 @@ impl Shared {
                 respond(responder, json!({"action": "decline"}));
                 return;
             };
+            let questions = match &form {
+                QuestionForm::Parsed(form) => form.questions.clone(),
+                QuestionForm::Native(form, _) => form.questions.clone(),
+            };
             let item = self.request_item(
                 &mut state,
                 &turn_id,
                 &key,
                 TurnItemBody::UserInputRequest {
                     request_id: RequestId::new(key.as_str()),
-                    questions: form.questions.clone(),
+                    questions,
                 },
             );
             state.pending.insert(
@@ -661,16 +798,23 @@ impl Shared {
     // ---- turns ---------------------------------------------------------------------------
 
     /// The prompt of `turn_id` answered (or failed). Settles the turn unless a later prompt took over.
-    fn settle(self: &Arc<Self>, turn_id: &str, prompt_seq: u64, result: Result<Value, String>) {
+    /// Returns whether it settled the turn.
+    fn settle(
+        self: &Arc<Self>,
+        turn_id: &str,
+        prompt_seq: u64,
+        result: Result<Value, String>,
+    ) -> bool {
         let mut out = Vec::new();
         let mut restart = false;
         {
-            let mut state = self.state.lock().expect("state");
+            let mut guard = self.state.lock().expect("state");
+            let state = &mut *guard;
             let Some(turn) = state.turn.as_mut() else {
-                return;
+                return false;
             };
             if turn.turn_id != turn_id || turn.prompt_seq != prompt_seq {
-                return;
+                return false;
             }
             let interrupted = turn.interrupted;
             let (outcome, tool_status) = match &result {
@@ -701,12 +845,17 @@ impl Shared {
                     TurnItemStatus::Failed,
                 ),
             };
+            state.subagents.release_held_tools(&mut turn.projector);
             turn.projector.finish(tool_status, &mut out);
+            state
+                .subagents
+                .turn_settled(turn_id, matches!(outcome, TurnOutcome::Done), &mut out);
+            let turn = state.turn.as_mut().expect("turn");
             let ordinal = turn.projector.next_ordinal();
             let _ = turn.settled_tx.send(true);
             state.ordinal = ordinal;
             state.turn = None;
-            self.cancel_pending(&mut state, &mut out);
+            self.cancel_pending(state, &mut out);
             if interrupted && self.flavor.restart_after_interrupt() {
                 restart = true;
             }
@@ -722,6 +871,7 @@ impl Shared {
             // v1 `restartRuntimeAfterInterrupt`: the next turn starts a fresh process.
             self.terminate("restart after interrupt".into());
         }
+        true
     }
 
     fn prompt_blocks(
@@ -810,11 +960,49 @@ impl Shared {
             request = request.meta(meta);
         }
         let message = UntypedMessage::new("session/prompt", request).map_err(|e| e.to_string())?;
+        // v1 `watchPromptOutcome` (adapter.ts:6812-6830) starts before the prompt is sent.
+        let watch = self
+            .flavor
+            .watch_prompt_outcome(&self.session_id(), &self.agent_env);
         let sent = conn.send_request(message);
         let shared = Arc::clone(self);
         tokio::spawn(async move {
-            let result = sent.block_task().await.map_err(|e| e.to_string());
-            shared.settle(&turn_id, prompt_seq, result);
+            match sent.block_task().await {
+                Ok(response) => {
+                    let failure = match watch {
+                        Some(check) => {
+                            let seen = response.clone();
+                            tokio::task::spawn_blocking(move || check.check(&seen))
+                                .await
+                                .ok()
+                                .flatten()
+                        }
+                        None => None,
+                    };
+                    match failure {
+                        // A failure the stop reason hid restarts the agent before the next turn.
+                        Some(message) => {
+                            if shared.settle(&turn_id, prompt_seq, Err(message)) {
+                                shared.terminate("restart after a failed prompt outcome".into());
+                            }
+                        }
+                        None => {
+                            shared.settle(&turn_id, prompt_seq, Ok(response));
+                        }
+                    }
+                }
+                Err(error) => {
+                    // v1 `restartRuntimeAfterPromptError` (adapter.ts:6982-6989).
+                    let restart = shared.flavor.restart_after_prompt_error(&PromptError {
+                        code: error.code.into(),
+                        message: error.message.clone(),
+                        data: error.data.clone(),
+                    });
+                    if shared.settle(&turn_id, prompt_seq, Err(error.to_string())) && restart {
+                        shared.terminate("restart after a prompt error".into());
+                    }
+                }
+            }
         });
         Ok(())
     }
@@ -916,7 +1104,9 @@ impl Shared {
         }
         let mut out = Vec::new();
         {
-            let mut state = self.state.lock().expect("state");
+            let mut guard = self.state.lock().expect("state");
+            let state = &mut *guard;
+            state.subagents.exited(&mut out);
             if let Some(mut turn) = state.turn.take() {
                 let status = if turn.interrupted {
                     TurnItemStatus::Interrupted
@@ -936,10 +1126,13 @@ impl Shared {
                     },
                 });
             }
-            self.cancel_pending(&mut state, &mut out);
+            self.cancel_pending(state, &mut out);
         }
         for event in out {
             emit(self, event);
+        }
+        if let Some(session) = self.session_id.get() {
+            self.flavor.release_runtime(session);
         }
         emit(self, EngineEvent::Exited { reason });
     }
@@ -960,6 +1153,38 @@ fn cancelled() -> Value {
 
 fn is_auth_required(error: &agent_client_protocol::Error) -> bool {
     error.code == agent_client_protocol::ErrorCode::AUTH_REQUIRED
+}
+
+/// The schema's `required` ids.
+fn required_ids(schema: &Value) -> Vec<String> {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// v1 `withOptionalChoices` (elicitationForm.ts:196-220): a single-choice question the schema
+/// does not require is optional.
+fn with_optional_choices(mut form: NativeElicitationForm, schema: &Value) -> NativeElicitationForm {
+    let required = required_ids(schema);
+    let properties = schema.get("properties").and_then(Value::as_object);
+    for question in &mut form.questions {
+        if question.required.is_none()
+            && question.multi_select != Some(true)
+            && !question.options.is_empty()
+            && properties.is_some_and(|p| p.contains_key(&question.id))
+            && !required.contains(&question.id)
+        {
+            question.required = Some(false);
+        }
+    }
+    form
 }
 
 /// The session controller handed to the host.
@@ -1047,6 +1272,7 @@ impl EngineSession for AcpSession {
                 prompt_seq: state.prompt_counter,
                 interrupted: false,
                 settled_tx,
+                work_accepted: false,
             });
             state.preamble = None;
             (turn_id, state.prompt_counter)
@@ -1186,11 +1412,30 @@ impl EngineSession for AcpSession {
                 nested,
             } => {
                 let response = match (answer.outcome, form) {
-                    (RequestOutcome::Answered | RequestOutcome::Accept, Some(form)) => {
+                    (
+                        RequestOutcome::Answered | RequestOutcome::Accept,
+                        Some(QuestionForm::Parsed(form)),
+                    ) => {
                         let answers = answer.answers.unwrap_or_default();
                         match form.content(&answers) {
                             Some(content) => json!({"action": "accept", "content": content}),
                             None => json!({"action": "cancel"}),
+                        }
+                    }
+                    (
+                        RequestOutcome::Answered | RequestOutcome::Accept,
+                        Some(QuestionForm::Native(form, required)),
+                    ) => {
+                        let answers = answer.answers.unwrap_or_default();
+                        // v1 withOptionalChoices: a required question left unanswered cancels.
+                        if form
+                            .questions
+                            .iter()
+                            .any(|q| required.contains(&q.id) && !answers.contains_key(&q.id))
+                        {
+                            json!({"action": "cancel"})
+                        } else {
+                            (form.respond)(&answers)
                         }
                     }
                     (RequestOutcome::Answered | RequestOutcome::Accept, None) => {
@@ -1307,12 +1552,36 @@ impl AcpEngineFactory {
         let flavor = Arc::clone(&self.flavor);
         let launch = launch_for(flavor.as_ref(), &spec)?;
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let agent_env = AgentEnv {
+            set: launch
+                .env_set
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
+            removed: launch
+                .env_remove
+                .iter()
+                .map(|k| k.to_string_lossy().into_owned())
+                .collect(),
+            removed_prefixes: launch.env_remove_prefixes.clone(),
+        };
+        let mut state = State::default();
+        state.subagents.configure(
+            spec.thread_id.clone(),
+            flavor.driver(),
+            spec.engine.provider_instance_id.as_str(),
+        );
 
         let shared = Arc::new(Shared {
             flavor: Arc::clone(&flavor),
             thread_id: spec.thread_id.clone(),
             events: events_tx,
-            state: Mutex::new(State::default()),
+            state: Mutex::new(state),
             policy: Mutex::new(RuntimePolicy {
                 runtime_mode: spec.engine.runtime_mode,
                 cwd: Some(spec.engine.cwd.clone()),
@@ -1327,6 +1596,7 @@ impl AcpEngineFactory {
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
             shutdown_tx: Mutex::new(None),
+            agent_env,
         });
 
         let stderr_hook = {
@@ -1520,6 +1790,14 @@ impl AcpEngineFactory {
             request = request.client_capabilities(client_caps);
             json_or_null(&request)
         };
+        // v1 clientCapabilitiesMeta (adapter.ts:1018): agent-specific opt-ins (Devin, Copilot).
+        if let Some(meta) = flavor.client_capabilities_meta()
+            && let Some(caps) = init_params
+                .get_mut("clientCapabilities")
+                .and_then(Value::as_object_mut)
+        {
+            caps.insert("_meta".into(), Value::Object(meta));
+        }
         // ACP v1 agents send notices only to clients that advertise them; GOAT answers form and
         // url elicitations (v1 clientCapabilities.elicitation).
         if let Some(caps) = init_params
@@ -1727,6 +2005,7 @@ impl AcpEngineFactory {
         let _ = shared.session_id.set(session_id.clone());
         {
             let mut state = shared.state.lock().expect("state");
+            state.subagents.set_session(&session_id);
             state.modes = setup.modes.clone().or_else(|| parse_modes(&setup.raw));
             state.config_options = setup.config_options.clone();
             state.setup = setup;

@@ -402,6 +402,13 @@ impl TurnProjector {
         self.ordinal
     }
 
+    /// Reserve the next ordinal for an item the driver builds itself (subagents).
+    pub fn take_ordinal(&mut self) -> u32 {
+        let ordinal = self.ordinal;
+        self.ordinal += 1;
+        ordinal
+    }
+
     fn new_item_id(&mut self, kind: &str) -> ItemId {
         self.counter += 1;
         ItemId::new(format!("{}:{kind}:{}", self.turn_id, self.counter))
