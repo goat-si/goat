@@ -138,6 +138,7 @@ export function createOpencodeClient() {
         });
         return data(undefined);
       },
+      async summarize(args: unknown, options?: { signal?: AbortSignal }) { calls.push({ method: "summarize", args }); promptReached?.resolve(); await awaitPromptGate(options?.signal); return data(true); },
       async abort(args: { sessionID: string }) { calls.push({ method: "abort", args }); if (args.sessionID === abortTarget) { abortReached?.resolve(); if (abortGate) await abortGate.promise; } if (args.sessionID === abortFailure) throw new Error("fake abort failure"); active = false; setImmediate(() => push("session.idle", args)); return data(true); },
     },
     mcp: { async add(args: unknown) { calls.push({ method: "mcp.add", args }); return data(mcpStatus === "missing" ? {} : { goat: mcpStatus === "failed" ? { status: mcpStatus, error: "synthetic failure" } : { status: mcpStatus } }); } },

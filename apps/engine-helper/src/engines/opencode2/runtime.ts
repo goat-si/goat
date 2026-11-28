@@ -25,6 +25,8 @@ export interface OpenCode2FakeServer {
 export interface OpenCode2Runtime {
   readonly client: OpenCode2Client;
   readonly version: string;
+  /** Credentials generated for this private owned process, for host-output redaction. */
+  readonly redactionSecrets: ReadonlyArray<string>;
   /** Single-consumer stream, already subscribed before start resolves. */
   readonly events: AsyncIterable<OpenCode2Event>;
   /** Resolves on process exit, or with undefined on close. Stream failures throw from events. */
@@ -261,7 +263,7 @@ export async function startOpenCode2Runtime(options: {
     };
     const events = await openStream();
     options.signal?.removeEventListener("abort", abortExternal);
-    return { client, version: info.version, events, failure: failure.promise, reconnect: openStream, close };
+    return { client, version: info.version, redactionSecrets: [password], events, failure: failure.promise, reconnect: openStream, close };
   } catch {
     await close().catch(() => {});
     throw processFailure ?? new Error("OpenCode 2 runtime could not start or verify its event subscription");

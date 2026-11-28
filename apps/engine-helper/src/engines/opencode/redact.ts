@@ -2,8 +2,8 @@ import type { EngineHost } from "../../engine.ts";
 import type { EngineEvent, InitializeParams } from "../../protocol.ts";
 
 // Redact known credentials before any engine-produced text reaches the host.
-export function safeHost(host: EngineHost, params: InitializeParams): EngineHost {
-  const secrets = new Set<string>();
+export function safeHost(host: EngineHost, params: InitializeParams, extraSecrets: ReadonlyArray<string> = []): EngineHost {
+  const secrets = new Set<string>(extraSecrets.filter((secret) => secret.length >= 8));
   if (params.mcp?.bearerToken) secrets.add(params.mcp.bearerToken);
   for (const [key, value] of Object.entries({ ...process.env, ...params.launch?.env })) {
     if (/(?:token|secret|password|api[_-]?key|authorization)/i.test(key) && value && value.length >= 8) secrets.add(value);

@@ -82,7 +82,7 @@ export class OpenCode2Session implements EngineSession {
   private awaitingCancelledForm = false;
   private closing: Promise<void> | undefined;
   private constructor(runtime: OpenCode2Runtime, params: InitializeParams, host: EngineHost, id: string, model: ModelRef | undefined, catalog: ModelInfo[], wait: OpenCode2Delay) {
-    this.runtime = runtime; this.params = params; this.host = safeHost(host, params); this.engineRef = id; this.nativeModel = model; this.timer = wait;
+    this.runtime = runtime; this.params = params; this.host = safeHost(host, params, runtime.redactionSecrets ?? []); this.engineRef = id; this.nativeModel = model; this.timer = wait;
     this.settings = { modelSelection: params.modelSelection, runtimeMode: params.runtimeMode }; this.first = params.resume === null;
     for (const entry of catalog) this.catalog.set(`${entry.providerID}/${entry.id}`, entry);
   }
@@ -387,7 +387,10 @@ export class OpenCode2Session implements EngineSession {
         const turn: Turn = { id, promptId, admitted: false, draining: true, queue: [], queueBytes: 0, steers: new Map(), settled: new Set(), running: false, awaitingStart: false, interrupted: false, stopping: false, admissionCancelled: Promise.withResolvers<void>(), finished: Promise.withResolvers<void>(), projection: new OpenCode2Projection(this.host, id), tools: new Map(), completedTools: new Set() };
         this.active = turn;
         const submission = new AbortController();
-        try { const sent = await Promise.race([bounded(30_000, AbortSignal.any([this.shutdownSignal.signal, submission.signal]), (signal) => this.runtime.client.session.prompt({ sessionID: this.engineRef, id: promptId, text: prompt.text, ...(prompt.files.length ? { files: prompt.files } : {}) }, { signal })).then(() => true), turn.admissionCancelled.promise.then(() => false)]); if (!sent) return { status: "unknown" as const, reason: "OpenCode 2 session ended during admission" }; }
+        const compact = inputs.every((input) => input.attachments.length === 0) && inputs.map((input) => input.text).filter(Boolean).join("\n").trim() === "/compact";
+        try { const sent = await Promise.race([bounded(30_000, AbortSignal.any([this.shutdownSignal.signal, submission.signal]), (signal) => compact
+          ? this.runtime.client.session.compact({ sessionID: this.engineRef, id: promptId }, { signal }).then(() => undefined)
+          : this.runtime.client.session.prompt({ sessionID: this.engineRef, id: promptId, text: prompt.text, ...(prompt.files.length ? { files: prompt.files } : {}) }, { signal }).then(() => undefined)).then(() => true), turn.admissionCancelled.promise.then(() => false)]); if (!sent) return { status: "unknown" as const, reason: "OpenCode 2 session ended during admission" }; }
         catch (error) { if (this.active === turn) this.active = undefined; if (!rejected(error)) this.uncertain = true; return rejected(error) ? { status: "declined" as const, reason: "OpenCode 2 declined the prompt" } : { status: "unknown" as const, reason: "OpenCode 2 prompt admission is unknown" }; }
         finally { submission.abort(); }
         if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode 2 session ended during admission" };

@@ -146,6 +146,13 @@ export class OpenCodeSession implements EngineSession {
     if (turn.emitted.has(id)) return;
     turn.emitted.add(id); this.host.emit({ type: "item_completed", turnId: turn.id, item: value, locator: { turnId: turn.id, itemId: id } });
   }
+  private emitCompaction(turn: Turn) {
+    const id = `${turn.id}:compaction`;
+    delete turn.lastUsage;
+    for (const pending of turn.usagePending.values()) for (const partId of pending.keys()) turn.usagePartIds.add(partId);
+    turn.usagePending.clear();
+    if (!turn.emitted.has(id)) this.completed(turn, id, item({ ...this.base(id, turn), strength: "weak", title: "Context compacted" }, "compaction", { driver: "opencode", summary: "Context compacted" }));
+  }
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
     if (turn.interrupted && outcome.type === "done") {
@@ -427,12 +434,7 @@ export class OpenCodeSession implements EngineSession {
         return;
       case "session.compacted": {
         turn.overflow = false;
-        const id = `${turn.id}:compaction`;
-        delete turn.lastUsage;
-        for (const pending of turn.usagePending.values()) for (const partId of pending.keys()) turn.usagePartIds.add(partId);
-        turn.usagePending.clear();
-        if (turn.emitted.has(id)) return;
-        this.completed(turn, id, item({ ...this.base(id, turn), strength: "weak", title: "Context compacted" }, "compaction", { driver: "opencode", summary: "Context compacted" }));
+        this.emitCompaction(turn);
         return;
       }
       case "session.error": {
@@ -503,21 +505,45 @@ export class OpenCodeSession implements EngineSession {
     this.active = turn;
     this.ownedMessages.add(turn.admission.id);
     turn.promptIds.add(turn.admission.id);
-    try { await this.submit(turn, inputs, this.first); }
+    const compact = inputs.every((input) => input.attachments.length === 0) && inputs.map((input) => input.text).filter(Boolean).join("\n").trim() === "/compact";
+    let cancelAdmission: (() => void) | undefined;
+    const cancelled = new Promise<never>((_, reject) => {
+      cancelAdmission = () => reject(new Error("OpenCode admission cancelled"));
+      turn.controller.signal.addEventListener("abort", cancelAdmission, { once: true });
+      if (turn.controller.signal.aborted) cancelAdmission();
+    });
+    try {
+      const operation = turn.controller.signal.aborted ? cancelled : (async () => {
+        if (compact) {
+          const model = parsedModel(settings.modelSelection.model)!;
+          const result = await this.api.session.summarize({ sessionID: this.engineRef, ...model, auto: false }, { throwOnError: false, signal: turn.controller.signal });
+          if (result.error !== undefined) {
+            if (result.response) throw new Error("OpenCode rejected the request", { cause: { status: result.response.status } });
+            if (result.error instanceof Error) throw result.error;
+            throw new Error("OpenCode transport outcome is unknown");
+          }
+        } else await this.submit(turn, inputs, this.first);
+      })();
+      await Promise.race([operation, cancelled]);
+    }
     catch (error) {
       if (this.active === turn) this.active = undefined;
       const rejected = !this.closed && promptRejected(error);
       if (!this.closed && !rejected) this.uncertain = true;
       return rejected ? { status: "declined" as const, reason: "OpenCode declined the prompt" } : { status: "unknown" as const, reason: "OpenCode prompt admission is unknown" };
     }
+    finally { if (cancelAdmission) turn.controller.signal.removeEventListener("abort", cancelAdmission); }
     if (this.closed || this.active !== turn) return { status: "unknown" as const, reason: "OpenCode session ended during admission" };
     this.config = settings;
-    this.first = false;
+    if (!compact) this.first = false;
     turn.admitted = true;
     // Promise response handlers run before setImmediate, preserving JSONL response ordering.
     setImmediate(() => { void (async () => {
       while (this.active === turn && turn.queued.length) await this.routeQueued(turn);
-      if (this.active === turn) turn.draining = false;
+      if (this.active === turn) {
+        turn.draining = false;
+        if (compact && !turn.interrupted) { this.emitCompaction(turn); this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+      }
     })().catch(() => this.broken("OpenCode event processing failed")); });
     return { status: "accepted" as const, turnId: turn.id };
     } finally { this.starting = false; }

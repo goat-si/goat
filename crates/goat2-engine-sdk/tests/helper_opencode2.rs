@@ -10,6 +10,27 @@ use goat2_engine_api::{
 use goat2_engine_sdk::{HelperFactory, HelperLaunch};
 use std::{path::PathBuf, time::Duration};
 
+fn spec(model: &ModelSelection, launch: Option<LaunchSpec>) -> SessionSpec {
+    SessionSpec {
+        thread_id: ThreadId::from("opencode2-test"),
+        engine: EngineConfig {
+            provider_instance_id: ProviderInstanceId::from("opencode"),
+            model_selection: model.clone(),
+            runtime_mode: RuntimeMode::FullAccess,
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+        },
+        resume: None,
+        mcp: McpEndpoint {
+            url: "http://127.0.0.1:1/mcp".into(),
+            bearer_token: "synthetic-token".into(),
+        },
+        host_generation: 1,
+        process_generation: 1,
+        instructions: None,
+        launch,
+    }
+}
+
 #[tokio::test]
 async fn v2_probe_capabilities_and_turn_cross_the_helper() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -42,30 +63,17 @@ async fn v2_probe_capabilities_and_turn_cross_the_helper() {
         model: "test/model".into(),
         options: None,
     };
-    let spec = SessionSpec {
-        thread_id: ThreadId::from("opencode2-test"),
-        engine: EngineConfig {
-            provider_instance_id: ProviderInstanceId::from("opencode"),
-            model_selection: model.clone(),
-            runtime_mode: RuntimeMode::FullAccess,
-            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
-        },
-        resume: None,
-        mcp: McpEndpoint {
-            url: "http://127.0.0.1:1/mcp".into(),
-            bearer_token: "synthetic-token".into(),
-        },
-        host_generation: 1,
-        process_generation: 1,
-        instructions: None,
-        launch: None,
-    };
-    let mut v1_spec = spec.clone();
-    v1_spec.launch = Some(LaunchSpec {
-        env: [("GOAT2_ENGINE_HELPER_SDK_OPENCODE2".into(), "".into())].into(),
-        ..LaunchSpec::default()
-    });
-    let mut handle = factory.start(spec).await.expect("session starts");
+    let v1_spec = spec(
+        &model,
+        Some(LaunchSpec {
+            env: [("GOAT2_ENGINE_HELPER_SDK_OPENCODE2".into(), "".into())].into(),
+            ..LaunchSpec::default()
+        }),
+    );
+    let mut handle = factory
+        .start(spec(&model, None))
+        .await
+        .expect("session starts");
     let result = handle
         .session
         .start_turn(

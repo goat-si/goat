@@ -28,6 +28,33 @@ test("prompt submission failure does not report a turn as accepted", async () =>
   }
 });
 
+test("a bare 1.x /compact uses the native summarize request and completes after admission", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); const gate = fake.holdPrompt();
+  try {
+    const starting = session.startTurn([{ inputId: "i", text: "/compact", attachments: [] }], settings); await gate.reached;
+    assert.equal(events.length, 0); assert.equal(fake.calls.filter((call) => call.method === "prompt").length, 0);
+    const summarize = fake.calls.find((call) => call.method === "summarize")?.args as { sessionID: string; providerID: string; modelID: string; auto: boolean };
+    assert.deepEqual(summarize, { sessionID: session.engineRef, providerID: "test", modelID: "model", auto: false });
+    gate.release(); assert.equal((await starting).status, "accepted"); await finished.promise;
+    assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
+    assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "done").length, 1);
+  } finally { gate.release(); await session.shutdown(); }
+});
+
+test("shutdown releases a stalled 1.x compaction admission without a late acceptance", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); const gate = fake.holdPrompt(true);
+  try {
+    const starting = session.startTurn([{ inputId: "i", text: "/compact", attachments: [] }], settings); let settled = false; void starting.then(() => { settled = true; }); await gate.reached;
+    await session.shutdown(); await new Promise<void>((resolve) => setImmediate(resolve)); assert.equal(settled, true); assert.equal((await starting).status, "unknown");
+    const count = events.length; gate.release(); await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(events.length, count); assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+  } finally { gate.release(); await session.shutdown(); }
+});
+
 test("a definite prompt rejection is declined and permits a later turn", async () => {
   fake.reset();
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

@@ -36,6 +36,7 @@ export function scriptedRuntime(version = "2.0.28") {
       async update(input: unknown) { add("session.update", input); updateReached?.resolve(); if (updateGate) await updateGate.promise; if (updateFailure) throw new Error("synthetic-secret-token"); },
       async switchModel(input: unknown) { add("session.switchModel", input); },
       async prompt(input: { id: string; text: string; delivery?: string }) { add("session.prompt", input); promptReached?.resolve(); if (promptGate) await promptGate.promise; if (promptError) throw promptError; return { id: input.id, sessionID: "session-v2", type: "user" }; },
+      async compact(input: unknown) { add("session.compact", input); return { id: "compact", sessionID: "session-v2", type: "compaction" }; },
       async interrupt(input: unknown) { add("session.interrupt", input); interruptReached?.resolve(); if (interruptGate) await interruptGate.promise; return { interrupted: true }; },
       inbox: { async list() { return []; }, async cancel(input: unknown) { add("session.inbox.cancel", input); if (cancelFailure) throw new Error("synthetic cancellation failure"); } },
       form: { async list(input: { sessionID: string }) { return nativeForms.get(input.sessionID) ?? []; }, async cancel(input: unknown) { add("session.form.cancel", input); }, async reply(input: unknown) { add("session.form.reply", input); } },

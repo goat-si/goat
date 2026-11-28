@@ -52,6 +52,20 @@ test("OpenCode 2 steers settle before terminal including terminal followed by de
   } finally { await session.shutdown(); }
 });
 
+test("a bare /compact turn uses the native compaction request", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    assert.equal((await session.startTurn(input("i", "/compact"), settings)).status, "accepted"); await tick();
+    assert.equal(fake.calls.filter((call) => call.method === "session.prompt").length, 0);
+    const compact = fake.calls.find((call) => call.method === "session.compact")?.input as { sessionID: string; id: string };
+    assert.equal(compact.sessionID, session.engineRef); assert.match(compact.id, /^msg_t3_turn_/);
+    fake.emit("session.compaction.started", { sessionID: session.engineRef });
+    fake.emit("session.compaction.ended", { sessionID: session.engineRef, text: "Summary" });
+    fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
+    assert.ok(events.some((event) => event.type === "item_completed" && event.item.type === "compaction"));
+  } finally { await session.shutdown(); }
+});
+
 test("resuming a 2.x session follows the requested working directory", async () => {
   const fake = scriptedRuntime(); fake.setNativeDirectory("/old");
   const session = await OpenCode2Session.fromRuntime(fake.runtime, { ...params, resume: "session-v2" }, hostFor([]));
@@ -514,4 +528,18 @@ test("oversized events during admission fail the session without a false accepta
     assert.equal((await starting).status, "unknown"); assert.deepEqual(failures, ["OpenCode 2 admission event buffer exceeded its limit"]);
     assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
   } finally { gate.release(); await session.shutdown(); }
+});
+
+test("generated runtime credentials are redacted across streamed chunks", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [];
+  (fake.runtime as unknown as { redactionSecrets: string[] }).redactionSecrets = ["synthetic-runtime-password"];
+  const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    fake.emit("session.text.delta", { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, delta: "synthetic-runtime-" });
+    fake.emit("session.text.ended", { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, text: "synthetic-runtime-password" });
+    fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
+    assert.equal(events.flatMap((event) => event.type === "text_delta" ? [event.text] : []).join(""), "[redacted]");
+    assert.ok(!JSON.stringify(events).includes("synthetic-runtime-password"));
+  } finally { await session.shutdown(); }
 });
