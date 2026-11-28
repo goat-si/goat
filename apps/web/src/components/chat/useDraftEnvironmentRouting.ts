@@ -81,6 +81,12 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T |
   });
 }
 
+function withAbortTimeout<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return run(controller.signal).finally(() => clearTimeout(timer));
+}
+
 // A send waits on this; a read stuck on a reconnecting machine falls back to no project file.
 function readDestinationWorkspace(draft: DraftSessionState, projectRef: ScopedProjectRef) {
   return retargetDraftWorkspace(draft, projectRef, AbortSignal.timeout(5_000));
@@ -166,13 +172,11 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
   );
   const mountedRoutingScope = useRef<{ readonly key: string } | null>(null);
   const readRouting = useStableCallback(() => ({ input, loadBalancingCandidates }));
-  const readWorktreeBase = async (projectRef: ScopedProjectRef, branch: string | null) => {
+  const readWorktreeBase = (projectRef: ScopedProjectRef, branch: string | null) => {
     const cwd = readProject(projectRef)?.workspaceRoot;
-    if (!cwd) return null;
+    if (!cwd) return Promise.resolve(null);
     const { environmentId } = projectRef;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), WORKTREE_BASE_TIMEOUT_MS);
-    try {
+    return withAbortTimeout(WORKTREE_BASE_TIMEOUT_MS, async (signal) => {
       if (branch) {
         let cursor: number | undefined;
         do {
@@ -181,24 +185,22 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
               environmentId,
               input: { cwd, query: branch.slice(0, 256), cursor, includeMatchingRemoteRefs: true },
             }),
-            controller.signal,
+            signal,
           );
           if (matching === null || matching._tag !== "Success") break;
           if (matching.value.refs.some((ref) => ref.name === branch)) return branch;
           cursor = matching.value.nextCursor ?? undefined;
-        } while (cursor !== undefined && !controller.signal.aborted);
+        } while (cursor !== undefined && !signal.aborted);
       }
-      if (controller.signal.aborted) return null;
+      if (signal.aborted) return null;
       const result = await raceWithAbort(
         readRefs({ environmentId, input: { cwd, limit: 2 } }),
-        controller.signal,
+        signal,
       );
       return result !== null && result._tag === "Success"
         ? resolveDefaultWorktreeBaseBranch(result.value.refs)
         : null;
-    } finally {
-      clearTimeout(timer);
-    }
+    });
   };
   const refreshBeforeSend = () => {
     if (
