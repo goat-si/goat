@@ -30,6 +30,24 @@ pub enum ChannelAttentionKind {
     Finished,
 }
 
+/// v1 `ChannelAttentionRequest.kind`: an engine request, or a durable approval handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelAttentionRequestKind {
+    Runtime,
+    Handoff,
+}
+
+/// v1 `ChannelAttentionRequest` (`ChannelTaskApprovalRef` fields + kind): which request on which thread
+/// needs the person. v1 `host` / `environmentId` are not carried (Part 2 is local).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelAttentionRequest {
+    pub request_id: RequestId,
+    pub thread_id: ThreadId,
+    pub kind: ChannelAttentionRequestKind,
+}
+
 /// v1 `ChannelAttentionEvent`: one attention event for a bot's thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +58,9 @@ pub struct ChannelAttentionEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub request_id: Option<RequestId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub request: Option<ChannelAttentionRequest>,
     pub event_id: String,
     /// At most [crate::limits::MAX_SAFE_WIRE_INTEGER].
     #[serde(with = "crate::serde_util::safe_u64")]
@@ -47,7 +68,11 @@ pub struct ChannelAttentionEvent {
     #[schemars(with = "u64")]
     pub sequence: u64,
     pub kind: ChannelAttentionKind,
-    pub generation: u32,
+    /// v1 `Schema.Int`, within the safe wire integer range.
+    #[serde(with = "crate::serde_util::safe_i64")]
+    #[ts(as = "i64")]
+    #[schemars(with = "i64")]
+    pub generation: i64,
     /// RFC 3339 UTC timestamp.
     pub occurred_at: String,
     pub bot_name: String,
