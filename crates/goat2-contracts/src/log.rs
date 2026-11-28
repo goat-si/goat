@@ -82,7 +82,7 @@ pub enum LogEvent {
     #[serde(rename = "run.accepted")]
     RunAccepted(RunAccepted),
     #[serde(rename = "item.completed")]
-    ItemCompleted(ItemCompleted),
+    ItemCompleted(Box<ItemCompleted>),
     #[serde(rename = "request.opened")]
     RequestOpened(RequestOpened),
     #[serde(rename = "request.resolved")]
@@ -96,7 +96,7 @@ pub enum LogEvent {
     #[serde(rename = "user.notified")]
     UserNotified(UserNotified),
     #[serde(rename = "checkpoint")]
-    Checkpoint(Checkpoint),
+    Checkpoint(Box<Checkpoint>),
 }
 
 impl LogEvent {
@@ -454,6 +454,9 @@ pub struct RunFinished {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub token_usage: Option<crate::ThreadTokenUsageSnapshot>,
 }
 
 /// `child.started` (parent log).
