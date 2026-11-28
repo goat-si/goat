@@ -251,6 +251,16 @@ struct Process {
     generation: u64,
 }
 
+/// The stderr tail of one process generation and the signal that it is complete.
+type StderrSource = (
+    u64,
+    Arc<Mutex<StderrTail>>,
+    tokio::sync::watch::Receiver<bool>,
+);
+
+/// How long an exit waits for Claude's last stderr lines before it is reported.
+const STDERR_DRAIN: Duration = Duration::from_millis(500);
+
 /// A stdin line and, for frames whose delivery matters, who to tell once it was written.
 type Outgoing = (String, Option<oneshot::Sender<Result<(), String>>>);
 
@@ -275,7 +285,7 @@ struct Inner {
     controls: Mutex<HashMap<String, oneshot::Sender<Result<Value, String>>>>,
     writer: Mutex<Option<mpsc::UnboundedSender<Outgoing>>>,
     process: tokio::sync::Mutex<Option<Process>>,
-    stderr: Mutex<Option<(u64, Arc<Mutex<StderrTail>>)>>,
+    stderr: Mutex<Option<StderrSource>>,
     /// Woken whenever the active turn settles.
     settled: Notify,
     /// Held for the whole of an interrupt and of a turn start, so no turn starts on a process an
@@ -483,7 +493,7 @@ impl Inner {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.pgid.store(child.pid(), Ordering::SeqCst);
         if let Ok(mut stderr) = self.stderr.lock() {
-            *stderr = Some((generation, child.stderr_handle()));
+            *stderr = Some((generation, child.stderr_handle(), child.stderr_closed()));
         }
         let (tx, mut rx) = mpsc::unbounded_channel::<Outgoing>();
         if let Ok(mut writer) = self.writer.lock() {
@@ -668,17 +678,19 @@ impl Inner {
         if generation != self.generation.load(Ordering::SeqCst) {
             return;
         }
-        let stderr = self
-            .stderr
-            .lock()
-            .ok()
-            .and_then(|s| {
-                s.as_ref()
-                    .filter(|(g, _)| *g == generation)
-                    .map(|(_, t)| Arc::clone(t))
-            })
-            .and_then(|tail| tail.lock().ok().map(|t| t.text()))
-            .unwrap_or_default();
+        let source = self.stderr.lock().ok().and_then(|s| {
+            s.as_ref()
+                .filter(|(g, _, _)| *g == generation)
+                .map(|(_, tail, closed)| (Arc::clone(tail), closed.clone()))
+        });
+        let stderr = match source {
+            Some((tail, mut closed)) => {
+                // stdout and stderr close together; read the reason only once stderr is drained.
+                let _ = tokio::time::timeout(STDERR_DRAIN, closed.wait_for(|done| *done)).await;
+                tail.lock().map(|t| t.text()).unwrap_or_default()
+            }
+            None => String::new(),
+        };
         let last = stderr
             .lines()
             .rev()

@@ -116,6 +116,8 @@ pub struct ChildProcess {
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     stderr_tail: Arc<Mutex<StderrTail>>,
+    /// Turns true once the child's stderr closed and its tail is complete.
+    stderr_closed: tokio::sync::watch::Receiver<bool>,
     kill_grace: Duration,
     reaped: Option<ExitStatus>,
     group_gone: bool,
@@ -171,6 +173,7 @@ impl ChildProcess {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
+        let (closed_tx, stderr_closed) = tokio::sync::watch::channel(false);
         if let Some(mut stderr) = child.stderr.take() {
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
@@ -185,7 +188,10 @@ impl ChildProcess {
                         }
                     }
                 }
+                let _ = closed_tx.send(true);
             });
+        } else {
+            let _ = closed_tx.send(true);
         }
         Ok(Self {
             pid,
@@ -193,6 +199,7 @@ impl ChildProcess {
             stdin,
             stdout,
             stderr_tail,
+            stderr_closed,
             kill_grace: launch.kill_grace,
             reaped: None,
             group_gone: false,
@@ -223,6 +230,11 @@ impl ChildProcess {
     /// A handle to the stderr tail that outlives a borrow of the child.
     pub fn stderr_handle(&self) -> Arc<Mutex<StderrTail>> {
         Arc::clone(&self.stderr_tail)
+    }
+
+    /// Turns true once stderr closed (the tail then holds everything the child wrote).
+    pub fn stderr_closed(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.stderr_closed.clone()
     }
 
     /// Ordinary stop: close stdin, then always signal the group (the leader exiting does not
