@@ -113,6 +113,13 @@ pub enum FlavorEvent {
         prompt_id: Option<String>,
         stop_reason: String,
     },
+    /// The agent ended the prompt with a failure by extension (xAI `stopReason` `rate_limit` /
+    /// `error`, v1 `xaiAcpExtension.ts:1283-1301`): fail the turn with `message`. Stale prompt ids
+    /// are ignored as for [Self::PromptComplete].
+    PromptFailed {
+        prompt_id: Option<String>,
+        message: String,
+    },
 }
 
 /// Client capabilities a flavor advertises in `initialize`.

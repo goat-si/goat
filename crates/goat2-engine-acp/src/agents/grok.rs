@@ -252,15 +252,26 @@ impl AcpFlavor for Grok {
                 .get("stopReason")
                 .and_then(Value::as_str)
                 .unwrap_or("end_turn");
-            if reason == "rate_limit" || reason == "error" {
-                return vec![FlavorEvent::Notice {
-                    message: if reason == "rate_limit" {
-                        "Grok usage limit reached. Try again later."
-                    } else {
-                        "Grok ended the turn with an error."
-                    }
-                    .into(),
-                    warning: true,
+            // v1 xAiPromptFailure (xaiAcpExtension.ts:1283-1301) and the adapter's promptFailure
+            // (adapter.ts:434-446): the agent's own result text is the message when it sent one.
+            let prompt_id = p.get("promptId").and_then(Value::as_str).map(str::to_owned);
+            if reason == "rate_limit" {
+                return vec![FlavorEvent::PromptFailed {
+                    prompt_id,
+                    message: "Grok usage limit reached. Try again later.".into(),
+                }];
+            }
+            if reason == "error" {
+                let agent_result = p
+                    .get("agentResult")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                return vec![FlavorEvent::PromptFailed {
+                    prompt_id,
+                    message: agent_result
+                        .unwrap_or("Grok ended the turn with an error.")
+                        .to_owned(),
                 }];
             }
             return vec![FlavorEvent::PromptComplete {

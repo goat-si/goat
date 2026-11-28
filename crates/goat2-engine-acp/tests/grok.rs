@@ -7,8 +7,8 @@ use goat2_engine_api::{
 };
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-#[tokio::test]
-async fn prompt_complete_settles_without_rpc_response() {
+/// One Grok turn against the fake agent's xAI completion, with extra fake-agent env.
+async fn grok_turn(extra: &[(&str, &str)]) -> TurnOutcome {
     let dir = tempfile::tempdir().unwrap();
     let selection = ModelSelection {
         instance_id: "grok".into(),
@@ -35,10 +35,11 @@ async fn prompt_complete_settles_without_rpc_response() {
         launch: Some(LaunchSpec {
             binary: Some(env!("CARGO_BIN_EXE_goat2-acp-mock-agent").into()),
             args: vec![],
-            env: BTreeMap::from([(
-                "GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG".into(),
-                "1".into(),
-            )]),
+            env: [("GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG", "1")]
+                .iter()
+                .chain(extra)
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<BTreeMap<_, _>>(),
         }),
     };
     let mut h = AcpEngineFactory::new(Arc::new(Grok::default()))
@@ -71,6 +72,44 @@ async fn prompt_complete_settles_without_rpc_response() {
     })
     .await
     .unwrap();
-    assert_eq!(outcome, TurnOutcome::Done);
     h.session.shutdown().await;
+    outcome
+}
+
+#[tokio::test]
+async fn prompt_complete_settles_without_rpc_response() {
+    assert_eq!(grok_turn(&[]).await, TurnOutcome::Done);
+}
+
+/// v1 xAiPromptFailure (xaiAcpExtension.ts:1283-1301): a rate-limit completion fails the turn
+/// instead of leaving it waiting for a prompt answer that never comes.
+#[tokio::test]
+async fn rate_limit_completion_fails_the_turn() {
+    assert_eq!(
+        grok_turn(&[("GOAT_ACP_XAI_STOP_REASON", "rate_limit")]).await,
+        TurnOutcome::Failed {
+            reason: "Grok usage limit reached. Try again later.".into()
+        }
+    );
+}
+
+/// An error completion fails the turn with the agent's own result text, else v1's fallback.
+#[tokio::test]
+async fn error_completion_fails_the_turn_with_agent_result() {
+    assert_eq!(
+        grok_turn(&[
+            ("GOAT_ACP_XAI_STOP_REASON", "error"),
+            ("GOAT_ACP_XAI_AGENT_RESULT", "model overloaded"),
+        ])
+        .await,
+        TurnOutcome::Failed {
+            reason: "model overloaded".into()
+        }
+    );
+    assert_eq!(
+        grok_turn(&[("GOAT_ACP_XAI_STOP_REASON", "error")]).await,
+        TurnOutcome::Failed {
+            reason: "Grok ended the turn with an error.".into()
+        }
+    );
 }

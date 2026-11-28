@@ -33,7 +33,8 @@
 //! - `GOAT_ACP_STEERS_WITH_PROMPT=1` (GOAT 2): a prompt sent while one runs ends the running one
 //!   with `end_turn` and carries on (Antigravity 1.5 behaviour).
 //! - `GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG=1`: send `_x.ai/session/prompt_complete` with
-//!   the prompt's `_meta.promptId`, then never answer `session/prompt`.
+//!   the prompt's `_meta.promptId`, then never answer `session/prompt`. (GOAT 2) `GOAT_ACP_XAI_STOP_REASON`
+//!   (default `end_turn`) and `GOAT_ACP_XAI_AGENT_RESULT` set its `stopReason` and `agentResult`.
 //! - `GOAT_ACP_STDERR_LINE=<text>` (GOAT 2): print this line on stderr at start.
 //! - `GOAT_ACP_STDOUT_LINE=<text>` (GOAT 2): print this non-JSON line on stdout at start.
 
@@ -292,7 +293,7 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
     }
     if flag("GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG") {
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello from grok"}}));
-        agent.notify("_x.ai/session/prompt_complete", json!({"sessionId": session, "promptId": prompt_id, "stopReason": "end_turn", "agentResult": null}));
+        agent.notify("_x.ai/session/prompt_complete", json!({"sessionId": session, "promptId": prompt_id, "stopReason": env("GOAT_ACP_XAI_STOP_REASON").unwrap_or_else(|| "end_turn".into()), "agentResult": env("GOAT_ACP_XAI_AGENT_RESULT")}));
         let _ = cancel_rx.recv();
         return;
     }

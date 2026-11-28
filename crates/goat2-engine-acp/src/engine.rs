@@ -316,6 +316,20 @@ impl Shared {
                     self.settle(&turn_id, seq, Ok(json!({ "stopReason": stop_reason })));
                 }
             }
+            FlavorEvent::PromptFailed { prompt_id, message } => {
+                let current = self
+                    .state
+                    .lock()
+                    .expect("state")
+                    .turn
+                    .as_ref()
+                    .map(|t| (t.turn_id.clone(), t.prompt_seq));
+                if let Some((turn_id, seq)) = current
+                    && prompt_id.is_none_or(|id| id == prompt_id_of(&turn_id, seq))
+                {
+                    self.settle(&turn_id, seq, Err(message));
+                }
+            }
         }
     }
 
