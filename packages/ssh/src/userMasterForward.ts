@@ -5,11 +5,23 @@ import type * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import type { ChildProcessSpawner } from "effect/process";
 import type { SshAuthOptions } from "./auth.ts";
-import { runSshCommand } from "./command.ts";
+import { parseSshResolveOutput, runSshCommand } from "./command.ts";
 
 // ssh -G prints ControlPath expanded; one that still holds % or spaces is not passed back as given.
-const userControlPath = (configuration: string | undefined, platform: NodeJS.Platform) => {
+// Configurations are recorded per alias, so one resolved for another user or port lends nothing.
+const userControlPath = (
+  configuration: string | undefined,
+  platform: NodeJS.Platform,
+  target: DesktopSshEnvironmentTarget,
+) => {
   if (platform === "win32" || configuration === undefined) return undefined;
+  const recorded = parseSshResolveOutput(target.alias, configuration);
+  if (
+    recorded.hostname !== target.hostname ||
+    recorded.username !== target.username ||
+    recorded.port !== target.port
+  )
+    return undefined;
   for (const line of configuration.split(/\r?\n/u)) {
     const path = /^controlpath\s+(\S+)$/iu.exec(line.trim())?.[1];
     if (path !== undefined) return path === "none" || path.includes("%") ? undefined : path;
@@ -25,8 +37,9 @@ const userControlPath = (configuration: string | undefined, platform: NodeJS.Pla
 export const forwardSharingArgs = (
   configuration: string | undefined,
   platform: NodeJS.Platform,
+  target: DesktopSshEnvironmentTarget,
 ): ReadonlyArray<string> => {
-  const socket = userControlPath(configuration, platform);
+  const socket = userControlPath(configuration, platform, target);
   return socket === undefined
     ? ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ControlPersist=no"]
     : ["-o", "ControlMaster=no", "-S", socket];
@@ -42,7 +55,7 @@ export const cancelForwardInUserMaster = Effect.fn("ssh/tunnel.cancelForwardInUs
     readonly configuration: string | undefined;
     readonly platform: NodeJS.Platform;
   }) {
-    const socket = userControlPath(input.configuration, input.platform);
+    const socket = userControlPath(input.configuration, input.platform, input.target);
     if (socket === undefined) return;
     const services = yield* Effect.context<
       ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path

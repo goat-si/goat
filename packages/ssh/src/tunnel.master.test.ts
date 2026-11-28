@@ -491,6 +491,23 @@ describe("scoped SSH master", () => {
       ),
   );
 
+  it.effect("never lends a ControlPath recorded for another user of the alias", () =>
+    // The fixture's ssh -G always reports alex, as if bob's resolution was overwritten by alex's.
+    run("user-path", (f, manager) =>
+      Effect.gen(function* () {
+        const bob = { ...uploadTarget, username: "bob" };
+        yield* manager.ensureEnvironment(bob);
+        const forward = f.commands.find(
+          (c) => commandArgs(c).includes("-N") && !commandArgs(c).includes("-M"),
+        )!;
+        assert.include(commandArgs(forward), "ControlPath=none");
+        assert.notInclude(commandArgs(forward), "-S");
+        yield* manager.disconnectEnvironment(bob);
+        assert.isUndefined(f.commands.find((c) => commandArgs(c).includes("cancel")));
+      }),
+    ),
+  );
+
   it("recognizes user sharing while ignoring OpenSSH defaults", () => {
     assert.isFalse(hasUserSshSharing("controlmaster false\ncontrolpath none\n"));
     assert.isTrue(hasUserSshSharing("controlmaster auto\n"));

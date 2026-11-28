@@ -1642,7 +1642,7 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
     }),
     "-o",
     "ExitOnForwardFailure=yes",
-    ...forwardSharingArgs(configuration, platform),
+    ...forwardSharingArgs(configuration, platform, input.resolvedTarget),
     ...SSH_KEEPALIVE_ARGS,
     "-n",
     "-N",
