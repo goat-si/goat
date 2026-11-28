@@ -212,7 +212,7 @@ function applySnooze(
 
 function applyCompensatingUnsettle(
   thread: OrchestrationV2ThreadShell,
-  reason: "user" | "automatic",
+  reason: "user",
   now: DateTime.Utc,
 ): OrchestrationV2ThreadShell {
   return thread.settledOverride !== "settled"
@@ -651,7 +651,10 @@ export function createThreadEnvironmentAtoms<R, E>(
             input: { threadId, commandId, reason: action.reason },
           });
         case "unsnooze":
-          return unsnoozeSend.run(registry, { environmentId, input: { threadId, commandId } });
+          return unsnoozeSend.run(registry, {
+            environmentId,
+            input: { threadId, commandId, reason: action.reason },
+          });
       }
     },
   });
@@ -741,7 +744,10 @@ export function createThreadEnvironmentAtoms<R, E>(
       (thread, input, now, accepted) => applySnooze(thread, input.snoozedUntil, now, accepted),
     ),
     unsnooze: optimistic.wrap(
-      triage.cancelQueued(commands.unsnooze, "snooze", () => ({ type: "unsnooze" })),
+      triage.cancelQueued(commands.unsnooze, "snooze", (input) => ({
+        type: "unsnooze",
+        reason: input.reason,
+      })),
       (thread) => ({
         ...thread,
         snoozedUntil: null,

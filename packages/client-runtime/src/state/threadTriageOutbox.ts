@@ -14,7 +14,6 @@ import * as Semaphore from "effect/Semaphore";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
-  type DisplacedPendingThreadTriage,
   type PendingThreadTriage,
   type PendingThreadTriages,
   type ThreadTriageOutboxStorageError,
@@ -106,16 +105,12 @@ export function createThreadTriageOutbox<R, E>(input: {
   const supersededCommandIds = new Set<CommandId>();
   // Write-ahead replacement IDs already definitively rejected whose restore write has not finished.
   const rejectedReplacementIds = new Set<CommandId>();
-  const flattenDisplaced = (
+  const collectDisplaced = (
     entries: ReadonlyArray<PendingThreadTriage>,
-  ): ReadonlyArray<DisplacedPendingThreadTriage> =>
-    entries.flatMap((entry) => {
-      if (entry.displaced !== undefined && entry.displaced.length > 0) {
-        return entry.displaced;
-      }
-      const { displaced: _displaced, ...rest } = entry;
-      return [rest];
-    });
+  ): ReadonlyArray<PendingThreadTriage> =>
+    entries.flatMap((entry) =>
+      rejectedReplacementIds.has(entry.commandId) ? (entry.displaced ?? []) : [entry],
+    );
   // Storage is shared with other tabs, so memory takes each result in the order storage gave it.
   const order = Semaphore.makeUnsafe(1);
   // Per-thread lock serializing replay check+send against queue persistence and cancel/undo.
@@ -530,7 +525,7 @@ export function createThreadTriageOutbox<R, E>(input: {
                 yield* update(registry, (stored) => {
                   if (!stored.some(needsWriteAheadSwap)) return stored;
                   const displacedEntries = stored.filter(isSupersededEntry);
-                  const displaced = flattenDisplaced(displacedEntries);
+                  const displaced = collectDisplaced(displacedEntries);
                   replacedIds.push(...displacedEntries.map((entry) => entry.commandId));
                   writeAheadEntry = {
                     environmentId,
@@ -581,7 +576,7 @@ export function createThreadTriageOutbox<R, E>(input: {
                 // Restore write failed transiently; keep writeAheadEntry (with displaced) on disk
                 // and let replay retry the restore without re-sending the rejected replacement.
                 triggerReplayIfLive(registry, environmentId);
-                return AsyncResult.failure(restored.cause);
+                return yield* Effect.failCause(restored.cause);
               }
               if (!hasUnavailableReason(result.cause) || !applicable) {
                 return result;

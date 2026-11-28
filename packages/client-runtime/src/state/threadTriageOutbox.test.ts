@@ -43,6 +43,8 @@ const FUTURE = DateTime.makeUnsafe("2099-01-01T00:00:00.000Z");
 
 const SNAPSHOT: OrchestrationV2ShellSnapshot = {
   snapshotSequence: 1,
+  schemaVersion: 2,
+  archivedThreads: [],
   projects: [],
   threads: [
     {
@@ -54,17 +56,28 @@ const SNAPSHOT: OrchestrationV2ShellSnapshot = {
       interactionMode: "default",
       branch: null,
       worktreePath: null,
-      status: "idle",
+      createdBy: "user",
+      creationSource: "web",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      lineage: { rootThreadId: THREAD_ID, parentThreadId: null, relationshipToParent: null },
+      forkedFrom: null,
+      activeProviderThreadId: null,
       latestRunId: null,
-      latestRun: null,
+      activeRunId: null,
+      status: "idle",
       pendingRuntimeRequest: null,
-      hasPendingApproval: false,
-      hasPendingUserInput: false,
+      latestVisibleMessage: null,
       itemCount: 0,
-      hasUnreadActivity: false,
+      visibleItemCount: 0,
+      deletedAt: null,
       createdAt: CREATED_AT,
       updatedAt: CREATED_AT,
-      deletedAt: null,
+      archivedAt: null,
+      settledOverride: null,
+      settledAt: null,
+      pullRequests: [],
+      latestUserMessageAt: null,
+      hasActionableProposedPlan: false,
     },
   ],
 };
@@ -665,6 +678,119 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
         yield* Deferred.succeed(replayedUndo.reply, { sequence: 3 });
         yield* waitFor(h.registry, h.pendingSyncAtom, (s) => s.size === 0);
         expect(yield* h.store.update((e) => e)).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "preserves consecutive write-ahead replacements and unwinds each layer on rejection across restart",
+    () =>
+      Effect.gen(function* () {
+        const storage = { value: null as string | null };
+        const snoozeA = {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, snoozedUntil: "2099-02-01T00:00:00.000Z" },
+        };
+        const snoozeB = {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, snoozedUntil: "2099-03-01T00:00:00.000Z" },
+        };
+        const before = yield* makeHarness({ connected: false, storage });
+        yield* Effect.promise(() => before.commands.snooze.run(before.registry, snooze));
+        yield* before.reconnect();
+        const sent = yield* Queue.take(before.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* before.disconnect();
+
+        // Offline undo queues compensating unsnooze; first live replay fails transiently.
+        yield* Effect.promise(() => before.commands.unsnooze.run(before.registry, undo));
+        const serverSnoozed: OrchestrationV2ShellSnapshot = {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, snoozedUntil: FUTURE, snoozedAt: CREATED_AT }],
+        };
+        before.registry.set(before.snapshotAtom(ENVIRONMENT_ID), serverSnoozed);
+        yield* before.reconnect();
+        const failedUndo = yield* Queue.take(before.requests);
+        expect(failedUndo.command.type).toBe("thread.unsnooze");
+        yield* Deferred.fail(
+          failedUndo.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+
+        // Replacement A displaces unsnooze and fails transiently.
+        const firstReplace = before.commands.snooze.run(before.registry, snoozeA);
+        const reqA = yield* Queue.take(before.requests);
+        expect(reqA.command).toMatchObject({
+          type: "thread.snooze",
+          snoozedUntil: "2099-02-01T00:00:00.000Z",
+        });
+        yield* Deferred.fail(
+          reqA.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        expect((yield* Effect.promise(() => firstReplace))._tag).toBe("Success");
+        // Fail the immediate live replay retry of A transiently so replay backs off before B runs.
+        const retryA = yield* Queue.take(before.requests);
+        expect(retryA.command).toMatchObject({
+          type: "thread.snooze",
+          commandId: reqA.command.commandId,
+        });
+        yield* Deferred.fail(
+          retryA.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+
+        // Replacement B displaces A (preserving A and its nested unsnooze) and fails transiently.
+        const secondReplace = before.commands.snooze.run(before.registry, snoozeB);
+        const reqB = yield* Queue.take(before.requests);
+        expect(reqB.command).toMatchObject({
+          type: "thread.snooze",
+          snoozedUntil: "2099-03-01T00:00:00.000Z",
+        });
+        yield* Deferred.fail(
+          reqB.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        expect((yield* Effect.promise(() => secondReplace))._tag).toBe("Success");
+        yield* before.disconnect();
+
+        // After restart: B is rejected -> restores & replays A; A is rejected -> restores & replays unsnooze.
+        const afterRestart = yield* makeHarness({ connected: false, storage });
+        afterRestart.registry.set(afterRestart.snapshotAtom(ENVIRONMENT_ID), serverSnoozed);
+        yield* afterRestart.reconnect();
+        const replayedB = yield* Queue.take(afterRestart.requests);
+        expect(replayedB.command).toMatchObject({
+          type: "thread.snooze",
+          snoozedUntil: "2099-03-01T00:00:00.000Z",
+        });
+        yield* Deferred.fail(replayedB.reply, new Error("Snooze B rejected"));
+
+        const replayedA = yield* Queue.take(afterRestart.requests);
+        expect(replayedA.command).toMatchObject({
+          type: "thread.snooze",
+          commandId: reqA.command.commandId,
+          snoozedUntil: "2099-02-01T00:00:00.000Z",
+        });
+        yield* Deferred.fail(replayedA.reply, new Error("Snooze A rejected"));
+
+        const replayedUndo = yield* Queue.take(afterRestart.requests);
+        expect(replayedUndo.command.type).toBe("thread.unsnooze");
+        yield* Deferred.succeed(replayedUndo.reply, { sequence: 3 });
+        yield* waitFor(afterRestart.registry, afterRestart.pendingSyncAtom, (s) => s.size === 0);
+        expect(yield* afterRestart.store.update((e) => e)).toEqual([]);
       }),
   );
 

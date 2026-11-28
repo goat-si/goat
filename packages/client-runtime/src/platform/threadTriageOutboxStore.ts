@@ -1,5 +1,6 @@
 import { CommandId, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
+import type * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -8,36 +9,58 @@ import * as Semaphore from "effect/Semaphore";
 const PendingThreadTriageAction = Schema.Union([
   Schema.Struct({ type: Schema.Literal("settle") }),
   Schema.Struct({ type: Schema.Literal("snooze"), snoozedUntil: Schema.String }),
-  Schema.Struct({
-    type: Schema.Literal("unsettle"),
-    reason: Schema.Literals(["user", "automatic"]),
-  }),
-  Schema.Struct({ type: Schema.Literal("unsnooze") }),
+  Schema.Struct({ type: Schema.Literal("unsettle"), reason: Schema.Literal("user") }),
+  Schema.Struct({ type: Schema.Literal("unsnooze"), reason: Schema.Literal("user") }),
 ]);
 
-const PendingThreadTriageFields = {
-  environmentId: EnvironmentId,
-  threadId: ThreadId,
-  commandId: CommandId,
-  action: PendingThreadTriageAction,
-  queuedAt: Schema.DateTimeUtcFromString,
+type PendingThreadTriageAction = typeof PendingThreadTriageAction.Type;
+
+export interface PendingThreadTriage {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly commandId: CommandId;
+  readonly action: PendingThreadTriageAction;
+  readonly queuedAt: DateTime.Utc;
   /** The thread as the user saw it; if it shows otherwise on reconnect, the change is dropped. */
-  seen: Schema.String,
+  readonly seen: string;
   /** Set before replay sends over the wire so offline undo knows the server may have committed it. */
-  attempted: Schema.optionalKey(Schema.Literal(true)),
+  readonly attempted?: true;
   /** Set when queued behind a compensating undo whose replay mutates server triage timestamps. */
-  afterCompensation: Schema.optionalKey(Schema.Literal(true)),
-};
-
-const DisplacedPendingThreadTriage = Schema.Struct(PendingThreadTriageFields);
-export type DisplacedPendingThreadTriage = typeof DisplacedPendingThreadTriage.Type;
-
-export const PendingThreadTriage = Schema.Struct({
-  ...PendingThreadTriageFields,
+  readonly afterCompensation?: true;
   /** Displaced entries persisted with a write-ahead replacement so definitive rejection restores them in order. */
-  displaced: Schema.optionalKey(Schema.Array(DisplacedPendingThreadTriage)),
-});
-export type PendingThreadTriage = typeof PendingThreadTriage.Type;
+  readonly displaced?: ReadonlyArray<PendingThreadTriage>;
+}
+
+interface PendingThreadTriageEncoded {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly commandId: string;
+  readonly action: PendingThreadTriageAction;
+  readonly queuedAt: string;
+  readonly seen: string;
+  readonly attempted?: true;
+  readonly afterCompensation?: true;
+  readonly displaced?: ReadonlyArray<PendingThreadTriageEncoded>;
+}
+
+export const PendingThreadTriage: Schema.Codec<PendingThreadTriage, PendingThreadTriageEncoded> =
+  Schema.Struct({
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    commandId: CommandId,
+    action: PendingThreadTriageAction,
+    queuedAt: Schema.DateTimeUtcFromString,
+    seen: Schema.String,
+    attempted: Schema.optionalKey(Schema.Literal(true)),
+    afterCompensation: Schema.optionalKey(Schema.Literal(true)),
+    displaced: Schema.optionalKey(
+      Schema.Array(
+        Schema.suspend(
+          (): Schema.Codec<PendingThreadTriage, PendingThreadTriageEncoded> => PendingThreadTriage,
+        ),
+      ),
+    ),
+  });
 export type PendingThreadTriages = ReadonlyArray<PendingThreadTriage>;
 
 const Stored = Schema.fromJsonString(Schema.Struct({ entries: Schema.Array(PendingThreadTriage) }));
