@@ -9,6 +9,7 @@ import { ServerSettingsError } from "@goat/contracts";
 import * as ServerConfig from "./config.ts";
 import * as Settings from "./serverSettings.ts";
 import * as ThemePublication from "./themePublication.ts";
+import { acquireThemePublishLock } from "./environmentTheme.ts";
 
 const theme = {
   name: "Nightfall",
@@ -64,6 +65,33 @@ it.layer(NodeServices.layer)("theme publication", (it) => {
           assert.equal(result.defaultAppearance, "dark");
           assert.isNotEmpty(result.defaultAppearanceSetAt);
           yield* service.set({ appearance: "invalid", agent: true }, Effect.void).pipe(Effect.flip);
+        }).pipe(Effect.provide(layer));
+      }),
+    ),
+  );
+  it.effect("refuses server publication while a CLI publisher holds the catalog lock", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const base = yield* fs.makeTempDirectoryScoped({ prefix: "goat-theme-publish-lock-" });
+        const folder = path.join(base, "userdata", "themes");
+        const layer = ThemePublication.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              Settings.layerTest({ enableAgentThemeWrites: true }),
+              ServerConfig.layerTest(process.cwd(), base),
+            ),
+          ),
+        );
+        yield* acquireThemePublishLock(folder, "cli-theme");
+        yield* Effect.gen(function* () {
+          const service = yield* ThemePublication.ThemePublicationService;
+          const failure = yield* service
+            .set({ themeId: "nightfall", theme, agent: true }, Effect.void)
+            .pipe(Effect.flip);
+          assert.include(failure.message, "busy");
+          assert.isFalse(yield* fs.exists(path.join(folder, "nightfall.json")));
         }).pipe(Effect.provide(layer));
       }),
     ),
