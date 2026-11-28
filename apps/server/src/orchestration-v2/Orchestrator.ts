@@ -309,6 +309,7 @@ import {
   queuedStartFailureKind,
   stopTerminationKind as classifyStopTerminationKind,
 } from "./runTerminationCause.ts";
+import { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import {
@@ -9568,7 +9569,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* emitEvent({
         ...base,
         type: "turn-item.updated",
-        payload: RunExecutionService.makeInterruptResultTurnItem({
+        payload: makeInterruptResultTurnItem({
           idAllocator,
           run,
           rootNode,
