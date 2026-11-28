@@ -4741,3 +4741,38 @@ async fn a_continuation_and_a_runless_request_do_not_outlive_their_session() {
         "the continuation is never sent as a prompt"
     );
 }
+
+#[tokio::test]
+async fn a_runless_request_carries_its_card_inline_and_an_oversized_card_never_fences() {
+    let t = setup(manual()).await;
+    let id = idle_with_session(&t, "card").await;
+    let card = |key: &str, text: &str| goat2_host::engine::EngineEvent::SessionRequestOpened {
+        key: key.into(),
+        item_id: None,
+        kind: RequestKind::Question,
+        summary: "Pick one".into(),
+        item: Some(Box::new(late_text(&id, &format!("card-{key}"), text))),
+    };
+    t.fake.emit(&id, card("k1", "Which branch? main or dev"));
+    eventually("filed", || open_requests(&t, &id).len() == 1).await;
+    let open = open_requests(&t, &id).remove(0);
+    let item = open.item.expect("the waiting card is inline");
+    assert_eq!(item.thread_id, id);
+    assert_eq!(item.run_id, None);
+    assert!(matches!(
+        &item.body,
+        goat2_contracts::TurnItemBody::AssistantMessage { text, .. } if text.contains("main or dev")
+    ));
+    // A card past the line limit is left out; the request is still filed, the thread unfenced.
+    let huge = "x".repeat(goat2_contracts::limits::BLOB_THRESHOLD_BYTES + 1024);
+    t.fake.emit(&id, card("k2", &huge));
+    eventually("second filed", || open_requests(&t, &id).len() == 2).await;
+    let second = open_requests(&t, &id)
+        .into_iter()
+        .find(|r| r.request_id != open.request_id)
+        .unwrap();
+    assert!(second.item.is_none());
+    assert_eq!(second.summary, "Pick one");
+    send(&t, &id, "card-next", "still writable", InputMode::Followup).await;
+    eventually("next turn runs", || running(&t, &id)).await;
+}

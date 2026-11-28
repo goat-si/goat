@@ -739,7 +739,13 @@ impl Actor {
     /// `SessionRequestOpened`: a request the engine raised outside any GOAT turn, filed with no
     /// run. It counts in openAsks and the inbox like any open request, and is answered through
     /// the session. One request per key; each key is settled at most once per session.
-    async fn on_session_request(&mut self, key: String, kind: RequestKind, summary: String) {
+    async fn on_session_request(
+        &mut self,
+        key: String,
+        kind: RequestKind,
+        summary: String,
+        item: Option<Box<goat2_contracts::TurnItem>>,
+    ) {
         if self.settled_session_keys.contains(&key)
             || self.session_requests.iter().any(|(k, _)| *k == key)
         {
@@ -747,11 +753,17 @@ impl Actor {
             return;
         }
         let request_id = RequestId::new(new_id("req"));
-        // The waiting item cannot be stored without a run (item.completed needs one); the
-        // synthetic item id marks the request as a runless engine request across a restart.
+        // The synthetic item id marks the request as a runless engine request across a restart.
         let item_id =
             goat2_contracts::ItemId::new(format!("{SESSION_REQUEST_ITEM_PREFIX}{request_id}"));
-        let recorded = self.append(vec![LogEvent::RequestOpened(RequestOpened {
+        // A runless request carries its waiting card (approval, question with its choices)
+        // inline: there is no run for an item.completed.
+        let item = item.map(|mut item| {
+            item.thread_id = self.id.clone();
+            item.run_id = None;
+            item
+        });
+        let mut opened = RequestOpened {
             request_id: request_id.clone(),
             run_id: None,
             item_id: Some(item_id),
@@ -763,7 +775,20 @@ impl Actor {
             context: None,
             options: None,
             recommended: None,
-        })]);
+            item,
+        };
+        // The store refuses a request.opened over the line limit, and a refused write fences
+        // the thread: a card that large is left out and the summary alone is filed.
+        let too_large = |o: &RequestOpened| {
+            serde_json::to_vec(&LogEvent::RequestOpened(o.clone())).map_or(true, |b| {
+                b.len() > goat2_contracts::limits::BLOB_THRESHOLD_BYTES
+            })
+        };
+        if opened.item.is_some() && too_large(&opened) {
+            tracing::warn!(thread = %self.id, "a runless request card is too large to store: filed with its summary only");
+            opened.item = None;
+        }
+        let recorded = self.append(vec![LogEvent::RequestOpened(opened)]);
         if recorded.is_none() {
             // Nobody can see or answer an unrecorded request: decline it now so the engine does
             // not wait forever. The engine's error text can name the key: not logged.
@@ -1426,9 +1451,13 @@ impl Actor {
             },
             // Engine work outside a GOAT-started turn (Muse, Pi, OpenCode background turns).
             EngineEvent::SessionRequestOpened {
-                key, kind, summary, ..
+                key,
+                kind,
+                summary,
+                item,
+                ..
             } => {
-                self.on_session_request(key, kind, summary).await;
+                self.on_session_request(key, kind, summary, item).await;
             }
             EngineEvent::ContinuationRequested { key, text } => {
                 self.on_continuation(key, text).await;
