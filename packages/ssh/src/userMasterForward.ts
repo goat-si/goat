@@ -5,29 +5,32 @@ import type * as Path from "effect/Path";
 import * as Scope from "effect/Scope";
 import type { ChildProcessSpawner } from "effect/process";
 import type { SshAuthOptions } from "./auth.ts";
-import { hasUserSshSharing, runSshCommand } from "./command.ts";
+import { runSshCommand } from "./command.ts";
 
-const joinsUserMaster = (configuration: string | undefined, platform: NodeJS.Platform) =>
-  platform !== "win32" && configuration !== undefined && hasUserSshSharing(configuration);
-
-const hasControlPath = (configuration: string) =>
-  configuration.split(/\r?\n/u).some((line) => {
-    const [key, value] = line.trim().split(/\s+/u);
-    return key?.toLowerCase() === "controlpath" && value !== undefined && value !== "none";
-  });
+// ssh -G prints ControlPath expanded; one that still holds % or spaces is not passed back as given.
+const userControlPath = (configuration: string | undefined, platform: NodeJS.Platform) => {
+  if (platform === "win32" || configuration === undefined) return undefined;
+  for (const line of configuration.split(/\r?\n/u)) {
+    const path = /^controlpath\s+(\S+)$/iu.exec(line.trim())?.[1];
+    if (path !== undefined) return path === "none" || path.includes("%") ? undefined : path;
+  }
+  return undefined;
+};
 
 /**
- * With sharing in the user's config (Pen's ControlMaster auto + ControlPath), a forward joins a
- * live master instead of running its own ProxyCommand. It never becomes the master: one it started
- * would keep its ProxyCommand in this forward's process group, which closing the forward kills.
+ * With a ControlPath in the user's config (Pen sets one), a forward joins that live master instead
+ * of running its own ProxyCommand. It never becomes the master: one it started would keep its
+ * ProxyCommand in this forward's process group, which closing the forward kills.
  */
 export const forwardSharingArgs = (
   configuration: string | undefined,
   platform: NodeJS.Platform,
-): ReadonlyArray<string> =>
-  joinsUserMaster(configuration, platform)
-    ? ["-o", "ControlMaster=no"]
-    : ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ControlPersist=no"];
+): ReadonlyArray<string> => {
+  const socket = userControlPath(configuration, platform);
+  return socket === undefined
+    ? ["-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ControlPersist=no"]
+    : ["-o", "ControlMaster=no", "-S", socket];
+};
 
 /** A master keeps the forwards its clients asked for after they exit, so closing one cancels it. */
 export const cancelForwardInUserMaster = Effect.fn("ssh/tunnel.cancelForwardInUserMaster")(
@@ -39,16 +42,17 @@ export const cancelForwardInUserMaster = Effect.fn("ssh/tunnel.cancelForwardInUs
     readonly configuration: string | undefined;
     readonly platform: NodeJS.Platform;
   }) {
-    if (!joinsUserMaster(input.configuration, input.platform)) return;
-    if (input.configuration === undefined || !hasControlPath(input.configuration)) return;
+    const socket = userControlPath(input.configuration, input.platform);
+    if (socket === undefined) return;
     const services = yield* Effect.context<
       ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
     >();
+    // OpenSSH cancels only a forward with this exact listen and connect address.
     yield* Scope.addFinalizer(
       input.scope,
       runSshCommand(input.target, {
         ...input.auth,
-        preHostArgs: ["-O", "cancel", "-L", input.forward],
+        preHostArgs: ["-S", socket, "-O", "cancel", "-L", input.forward],
         timeoutMs: 2_000,
       }).pipe(Effect.provideContext(services), Effect.ignore),
     );

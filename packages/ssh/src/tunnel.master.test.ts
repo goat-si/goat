@@ -449,20 +449,26 @@ describe("scoped SSH master", () => {
         Effect.gen(function* () {
           yield* manager.ensureEnvironment(uploadTarget);
           assert.include(f.events, "standalone-forward");
+          const userSocket = "/private/user/socket";
+          const socketOf = (args: ReadonlyArray<string>) =>
+            args.includes("-S") ? args[args.indexOf("-S") + 1] : undefined;
           if (mode === "user-path" || mode === "user-master" || mode === "windows") {
             assert.notInclude(f.events, "master");
-            for (const command of f.commands) assert.notInclude(commandArgs(command), "-S");
+            // Only the user's own ControlPath is ever named, never a GOAT master socket.
+            for (const command of f.commands)
+              assert.include([undefined, userSocket], socketOf(commandArgs(command)));
           }
           const forward = f.commands.find(
             (c) => commandArgs(c).includes("-N") && !commandArgs(c).includes("-M"),
           )!;
-          const joinsUserMaster = mode === "user-path" || mode === "user-master";
+          // controlmaster auto without a ControlPath cannot share, so it keeps the isolated forward.
+          const joinsUserMaster = mode === "user-path";
           assert.include(commandArgs(forward), "ControlMaster=no");
           for (const option of ["ControlPath=none", "ControlPersist=no"])
             if (joinsUserMaster) assert.notInclude(commandArgs(forward), option);
             else assert.include(commandArgs(forward), option);
-          assert.notInclude(commandArgs(forward), "-S");
-          if (joinsUserMaster) {
+          assert.equal(socketOf(commandArgs(forward)), joinsUserMaster ? userSocket : undefined);
+          if (mode === "user-path" || mode === "user-master") {
             const remote = f.commands.find((c) => commandArgs(c).includes("sh"))!;
             assert.notInclude(commandArgs(remote), "ControlPath=none");
             assert.equal(forward._tag, "StandardCommand");
@@ -478,6 +484,7 @@ describe("scoped SSH master", () => {
           if (mode === "user-path") {
             const spec = (args: ReadonlyArray<string>) => args[args.indexOf("-L") + 1];
             assert.equal(spec(commandArgs(cancel!)), spec(commandArgs(forward)));
+            assert.equal(socketOf(commandArgs(cancel!)), userSocket);
             assert.isAbove(f.events.indexOf("cancel"), f.events.indexOf("kill-forward"));
           } else assert.isUndefined(cancel);
         }),

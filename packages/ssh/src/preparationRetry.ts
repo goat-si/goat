@@ -123,7 +123,7 @@ export function makePreparationRetries<E, R>(options: {
   /** Refusal copy for a ready-only caller while the host reconnects on its own. */
   const refusal = (key: string, host: string) =>
     loops.has(key)
-      ? `GOAT lost its SSH connection to ${host} and is reconnecting automatically. Try again in a minute.`
+      ? `GOAT lost its SSH connection to ${host} and is reconnecting automatically. Try again in a few minutes.`
       : undefined;
   return { failed, cancel, refusal };
 }

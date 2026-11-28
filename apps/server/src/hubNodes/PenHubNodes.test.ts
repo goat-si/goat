@@ -574,7 +574,7 @@ describe("PenHubNodes", () => {
     ),
   );
 
-  it.effect("retries only unsettled members and stops until a new view", () =>
+  it.effect("an unsettled member stops re-inspection after the schedule until a new view", () =>
     reconcile(({ pinned, inspected, pass, rows }) =>
       Effect.gen(function* () {
         pinned.set(alias("a"), key("a"));
@@ -583,12 +583,33 @@ describe("PenHubNodes", () => {
           Effect.forkChild,
         );
         yield* TestClock.adjust("25 minutes");
-        expect(inspected.filter((name) => name === alias("a"))).toHaveLength(1);
+        // Each round re-reads trusted members too, so a revocation lands within the pass.
+        expect(inspected.filter((name) => name === alias("a"))).toHaveLength(5);
         expect(inspected.filter((name) => name === alias("b"))).toHaveLength(5);
         yield* Fiber.join(running);
         pinned.set(alias("b"), key("b"));
         yield* pass(ready(["a", "a"], ["b", "b"]));
         expect(yield* rows).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("a failed close keeps retrying past the inspection schedule", () =>
+    reconcile(({ pinned, pass, rows, state }) =>
+      Effect.gen(function* () {
+        pinned.set(alias("a"), key("a"));
+        yield* pass(ready(["a", "a"]));
+        expect(yield* rows).toHaveLength(1);
+        state.releaseFails = true;
+        const running = yield* pass(ready()).pipe(Effect.orDie, Effect.forkChild);
+        yield* TestClock.adjust("1 hour");
+        expect(
+          state.events.filter((event) => event === `release ${alias("a")}`).length,
+        ).toBeGreaterThan(5);
+        state.releaseFails = false;
+        yield* TestClock.adjust("10 minutes");
+        yield* Fiber.join(running);
+        expect(yield* rows).toEqual([]);
       }),
     ),
   );
