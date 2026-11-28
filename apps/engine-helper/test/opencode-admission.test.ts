@@ -113,6 +113,29 @@ test("native activity after an early idle supersedes it before an uncertain stee
   } finally { await session.shutdown(); }
 });
 
+test("busy supersedes an in-flight idle reconciliation for an accepted steer", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const prompt = fake.holdPrompt(); const status = fake.holdStatus();
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "steer", text: "unread-steer", attachments: [] }]); await prompt.reached;
+      fake.setNativeStatus(session.engineRef, "idle"); await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+      prompt.release(); assert.equal((await steering).status, "accepted"); await status.reached;
+      await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+      status.release(); await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+      const terminal = events.find((event) => event.type === "turn_finished");
+      assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "done");
+    } finally { prompt.release(); status.release(); }
+  } finally { await session.shutdown(); }
+});
+
 test("accepted steers settle before the turn finishes, including unread cancellation", async () => {
   for (const read of [true, false]) {
     fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();

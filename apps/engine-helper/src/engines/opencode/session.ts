@@ -292,12 +292,12 @@ export class OpenCodeSession implements EngineSession {
     if (!a.idle) { a.pending = false; return; }
     try {
       const result = await this.api.session.status({}, { throwOnError: true, signal: AbortSignal.timeout(10_000) });
-      if (this.active !== turn || turn.admission !== a) return;
+      if (this.active !== turn || turn.admission !== a || !a.pending || !a.idle) return;
       if (!result.data) throw new Error("missing status");
       const status = result.data?.[this.engineRef];
       if (!status || status.type === "idle") { a.pending = false; this.finish(turn, turn.interrupted ? { type: "interrupted" } : turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
       else a.pending = false;
-    } catch { if (this.active === turn && turn.admission === a) this.broken("OpenCode admission status could not be reconciled"); }
+    } catch { if (this.active === turn && turn.admission === a && a.pending && a.idle) this.broken("OpenCode admission status could not be reconciled"); }
   }
   private async route(event: Event, replay = false) {
     if ((event.type === "session.created" || event.type === "session.updated") && event.properties.info.parentID && (event.properties.info.parentID === this.engineRef || this.childSessions.has(event.properties.info.parentID))) {
