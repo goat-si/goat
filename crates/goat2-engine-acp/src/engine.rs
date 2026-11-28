@@ -11,6 +11,12 @@
 //! - `packages/provider-acp/src/server/acpAppContext.ts`: context the session has not seen goes in
 //!   front of the next prompt; GOAT 2 sends `Instructions.first_message_preamble` and, for agents
 //!   without a system prompt channel, `append_system_prompt` that way.
+//! - Background work (v1 `deferredBackground.ts:13-233`, `adapter.ts:3880-3899,7874-8082`): a flavor
+//!   with `defers_finalize_for_background_work` keeps the turn open after its prompt answers while
+//!   background tasks or subagents run, finishes it a debounce after the work ends, finishes it at
+//!   once on the agent's own wake turn, and with `preserve_runtime_on_settled_interrupt` ends it on
+//!   interrupt without cancelling or restarting the agent. v1's post-settle continuation runs (wake
+//!   frames replayed as a new run) need host support and are not carried.
 //!
 //! Requests are built from `agent_client_protocol::v1::schema` types. Inbound traffic is taken as
 //! `UntypedMessage` so v1's normalization (`normalize.rs`) and each flavor's fixes run on the JSON
@@ -1525,6 +1531,19 @@ impl EngineSession for AcpSession {
             cancel = cancel.meta(meta);
         }
         let _ = shared.notify("session/cancel", json_or_null(&cancel));
+        if shared.flavor.settles_prompt_on_cancel() {
+            let prompt_seq = shared
+                .state
+                .lock()
+                .expect("state")
+                .turn
+                .as_ref()
+                .filter(|t| t.turn_id == turn_id)
+                .map(|t| t.prompt_seq);
+            if let Some(seq) = prompt_seq {
+                shared.settle(turn_id, seq, Ok(json!({"stopReason": "cancelled"})));
+            }
+        }
         let waited = tokio::time::timeout(shared.timeouts.cancel, async {
             while !*settled_rx.borrow() {
                 if settled_rx.changed().await.is_err() {

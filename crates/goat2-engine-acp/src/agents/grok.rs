@@ -229,6 +229,10 @@ impl AcpFlavor for Grok {
     fn preserve_runtime_on_settled_interrupt(&self) -> bool {
         true
     }
+    /// v1 `makeXAiPromptCompletionRuntime.cancel` (xaiAcpExtension.ts:1553-1560).
+    fn settles_prompt_on_cancel(&self) -> bool {
+        true
+    }
     /// v1 `deferFinalizeForBackgroundWork` (adapter.ts:471).
     fn defers_finalize_for_background_work(&self) -> bool {
         true

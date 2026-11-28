@@ -464,6 +464,12 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn preserve_runtime_on_settled_interrupt(&self) -> bool {
         false
     }
+    /// v1 xAI `cancel` (`xaiAcpExtension.ts:1323-1357,1553-1560`, `abortPendingPromptCompletions`):
+    /// once `session/cancel` is sent the open prompt counts as cancelled, without waiting for an
+    /// answer the agent may never send.
+    fn settles_prompt_on_cancel(&self) -> bool {
+        false
+    }
 }
 
 /// v1 default approval options: what the request's option kinds allow, plus cancel.
