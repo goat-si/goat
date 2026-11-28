@@ -52,6 +52,10 @@ pub struct HostOptions {
     pub memory_sample: Duration,
     /// Longest `thread.wait` / `thread.start {mode: wait}` block.
     pub max_wait: Duration,
+    /// Receipt guard timers for a person's messages to a bot (v1 20 s / 55 s).
+    pub bot_guards: crate::bot::guards::GuardOptions,
+    /// The engine steers a message into a running turn (Codex: yes); see [crate::bot::engine_steers].
+    pub bot_steering: bool,
 }
 
 impl HostOptions {
@@ -75,6 +79,8 @@ impl HostOptions {
             memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
             memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
+            bot_guards: crate::bot::guards::GuardOptions::default(),
+            bot_steering: true,
         }
     }
 }
@@ -171,6 +177,7 @@ pub(crate) struct Inner {
     fences: Mutex<HashMap<ThreadId, Arc<tokio::sync::Mutex<()>>>>,
     pub sessions: Mutex<HashMap<ThreadId, LiveSession>>,
     pub bots: Mutex<Vec<BotProfile>>,
+    pub bot: crate::bot::BotState,
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
@@ -225,6 +232,7 @@ impl Host {
                 fences: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 bots: Mutex::new(Vec::new()),
+                bot: crate::bot::BotState::default(),
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
@@ -278,7 +286,7 @@ impl Host {
         let started = Instant::now();
         settle::settle_and_resume(self, settled).await?;
         self.spawn_flusher();
-        commands::load_bots(self)?;
+        crate::bot::registry::load_bots(self)?;
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
         self.inner.stall.note(
@@ -405,6 +413,16 @@ impl Host {
             offset,
             text: text.to_owned(),
         });
+    }
+
+    /// An item of the thread is streaming text now.
+    pub(crate) fn is_streaming(&self, id: &ThreadId) -> bool {
+        self.inner
+            .live
+            .lock()
+            .expect("live")
+            .get(id)
+            .is_some_and(|l| !l.streaming.is_empty())
     }
 
     pub(crate) fn stream_done(&self, id: &ThreadId, item_id: &ItemId) {

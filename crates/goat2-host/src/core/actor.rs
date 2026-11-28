@@ -177,6 +177,8 @@ struct Actor {
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
     tx: mpsc::UnboundedSender<Msg>,
+    /// A new engine session of a bot thread: its first turn carries the brief.
+    brief_due: Option<goat2_contracts::EngineRef>,
 }
 
 pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> {
@@ -199,6 +201,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         idle_gen: 0,
         session_signins: Vec::new(),
         tx: tx.clone(),
+        brief_due: None,
     };
     let task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -386,6 +389,7 @@ impl Actor {
             .ok_or_else(|| Refusal::new(Reason::ThreadNotFound, "thread not found"))?;
         let mode = input
             .mode
+            .or_else(|| crate::bot::input_mode(&self.host, &card, &input.from))
             .unwrap_or_else(|| input_mode_for(card.follow_up_mode));
         // A person's input or a parent's `thread.send` releases a Stop hold (v1: the next send
         // releases it); child results and answers do not.
@@ -406,6 +410,7 @@ impl Actor {
         self.host
             .append(&self.id, events)
             .map_err(|e| self.store_err(e))?;
+        crate::bot::input_accepted(&self.host, &card, &input_id, &input.from);
         self.host.runtime_update(&self.id, |rt| rt.busy = true);
         let queued = QueuedInput {
             input_id: input_id.clone(),
@@ -467,6 +472,7 @@ impl Actor {
         match session.steer(&turn_id, vec![to_engine(q)]).await {
             SteerResult::Accepted => {
                 self.append(vec![delivered(DeliveryOutcome::Accepted)]);
+                crate::bot::inputs_bound(&self.host, &run_id, std::slice::from_ref(&q.input_id));
                 Ok(Some(run_id))
             }
             SteerResult::Declined { .. } => {
@@ -567,21 +573,34 @@ impl Actor {
             self.phase = Phase::Idle;
             return;
         }
-        if self.session.is_some() {
-            self.begin_run(permit, None).await;
-            return;
-        }
         let Some(card) = self.host.inner.store.card(&self.id) else {
             self.phase = Phase::Idle;
             return;
         };
+        // A bot whose profile or notes changed since its session was briefed starts a fresh
+        // engine session (v1 channelBotSessionRotation.ts).
+        let rotate = crate::bot::rotation_due(&self.host, &card, card.engine_ref.as_ref());
+        if let Some(why) = rotate
+            && self.session.is_some()
+        {
+            self.stop_session(&format!("bot session rotation: {why}"))
+                .await;
+        }
+        if self.session.is_some() {
+            self.begin_run(permit, None).await;
+            return;
+        }
         self.pgen += 1;
         let pgen = self.pgen;
         let token = self.host.issue_token(&self.id, pgen);
         let spec = SessionSpec {
             thread_id: self.id.clone(),
             engine: card.engine.clone(),
-            resume: card.engine_ref.clone(),
+            resume: if rotate.is_some() {
+                None
+            } else {
+                card.engine_ref.clone()
+            },
             mcp: McpEndpoint {
                 url: self.host.inner.mcp_url.get().cloned().unwrap_or_default(),
                 bearer_token: token,
@@ -622,6 +641,15 @@ impl Actor {
         };
         match result {
             Ok(handle) => {
+                let before = self
+                    .host
+                    .inner
+                    .store
+                    .card(&self.id)
+                    .and_then(|c| c.engine_ref);
+                if before.as_ref() != Some(&handle.engine_ref) {
+                    self.brief_due = Some(handle.engine_ref.clone());
+                }
                 let session: Arc<dyn EngineSession> = Arc::from(handle.session);
                 self.host
                     .inner
@@ -723,7 +751,17 @@ impl Actor {
             model_selection: card.engine.model_selection.clone(),
             runtime_mode: card.engine.runtime_mode,
         };
-        let inputs: Vec<EngineInput> = batch.iter().map(to_engine).collect();
+        let mut inputs: Vec<EngineInput> = batch.iter().map(to_engine).collect();
+        let brief = match self.brief_due.take() {
+            Some(engine_ref) if card.kind == goat2_contracts::ThreadKind::Bot => {
+                crate::bot::apply_brief(&self.host, &self.id, &engine_ref, &mut inputs)
+                    .map(|b| (engine_ref, b))
+            }
+            other => {
+                self.brief_due = other;
+                None
+            }
+        };
         let delivered = |outcome| {
             input_ids
                 .iter()
@@ -748,6 +786,10 @@ impl Actor {
                 })];
                 events.extend(delivered(DeliveryOutcome::Accepted));
                 self.append(events);
+                crate::bot::inputs_bound(&self.host, &run_id, &input_ids);
+                if let Some((_, brief)) = brief {
+                    crate::bot::brief_taken(&self.host, brief);
+                }
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id,
@@ -757,6 +799,9 @@ impl Actor {
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
+                if let Some((engine_ref, _)) = brief {
+                    self.brief_due = Some(engine_ref);
+                }
                 // A start onto a native turn GOAT never owned fails closed: the inputs leave the
                 // queue and are never retried (v1 CodexTurnStartGuard.ts:113-172).
                 let run_id_for_report = run_id.clone();
@@ -774,6 +819,9 @@ impl Actor {
                 self.maybe_start();
             }
             TurnStartResult::Declined { reason } => {
+                if let Some((engine_ref, _)) = brief {
+                    self.brief_due = Some(engine_ref);
+                }
                 // Declined before anything ran: inputs stay queued; hold so they are not retried
                 // in a loop. The next send or resume_queue releases it.
                 let run_id_for_report = run_id.clone();
@@ -791,6 +839,9 @@ impl Actor {
                     .await;
             }
             TurnStartResult::Unknown { reason } => {
+                if let Some((engine_ref, _)) = brief {
+                    self.brief_due = Some(engine_ref);
+                }
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id: String::new(),
@@ -1065,6 +1116,11 @@ impl Actor {
             }));
         }
         self.append(events);
+        if let Some(rt) = self.host.runtime_of(&self.id)
+            && let Some(kind) = rt.kind
+        {
+            crate::bot::run_finished(&self.host, kind, &self.id, &run.run_id, &rt.last_answer);
+        }
         self.host.runtime_update(&self.id, |rt| {
             rt.active_run = None;
             rt.run_slot = None;

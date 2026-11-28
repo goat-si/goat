@@ -5,9 +5,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use goat2_contracts::limits::BLOB_THRESHOLD_BYTES;
 use goat2_contracts::{
-    BotFace, BotId, BotProfile, BotRole, ChildStarted, EngineConfig, FollowUpMode, InputSource,
-    ItemId, LogEvent, ModelSelection, ParentRef, ProviderInstanceId, RuntimeMode, ThreadCard,
-    ThreadChanged, ThreadCreated, ThreadId, ThreadKind, ThreadStatus,
+    BotId, BotProfile, BotRole, ChildStarted, EngineConfig, FollowUpMode, InputSource, ItemId,
+    LogEvent, ModelSelection, ParentRef, RuntimeMode, ThreadCard, ThreadChanged, ThreadCreated,
+    ThreadId, ThreadKind, ThreadStatus,
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, oneshot};
@@ -102,7 +102,7 @@ pub(crate) const DEFAULT_RUNTIME_MODE: RuntimeMode = RuntimeMode::FullAccess;
 /// v1 `DEFAULT_MODEL` for Codex (`packages/contracts/src/model.ts:126,143`).
 pub(crate) const DEFAULT_CODEX_MODEL: &str = "gpt-6-astra";
 
-fn engine_config(
+pub(crate) fn engine_config(
     selection: &ModelSelection,
     runtime_mode: RuntimeMode,
     cwd: String,
@@ -388,16 +388,30 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             runtime_mode,
             follow_up_mode,
             ..
-        } => change(
-            host,
-            &thread_id,
-            ThreadChanged {
+        } => {
+            let reply = change(
+                host,
+                &thread_id,
+                ThreadChanged {
+                    model_selection: model_selection.clone(),
+                    runtime_mode,
+                    follow_up_mode,
+                    ..Default::default()
+                },
+            )?;
+            // The bot settings model picker changes the bot's own thread (provider wire, lane
+            // P2-M): the profile's default model follows it.
+            if let (Some(selection), Some(bot)) = (
                 model_selection,
-                runtime_mode,
-                follow_up_mode,
-                ..Default::default()
-            },
-        ),
+                crate::bot::registry::bot_of_thread(host, &thread_id),
+            ) {
+                crate::bot::registry::update_bot(host, &bot.bot_id, |b| {
+                    b.default_model_selection = selection
+                })
+                .map_err(store_error)?;
+            }
+            Ok(reply)
+        }
         Command::EditQueued {
             thread_id,
             input_id,
@@ -426,8 +440,15 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             model_selection,
             ..
         } => {
-            let profile = create_bot(host, name, purpose, face, model_selection, BotRole::Member)
-                .map_err(store_error)?;
+            let profile = crate::bot::registry::create_bot(
+                host,
+                name,
+                purpose,
+                face,
+                model_selection,
+                BotRole::Member,
+            )
+            .map_err(store_error)?;
             Ok(CommandValue {
                 bot_id: Some(profile.bot_id.clone()),
                 thread_id: Some(profile.session_thread_id.clone()),
@@ -478,112 +499,6 @@ async fn queue(host: &Host, thread_id: &ThreadId, edit: QueueEdit) -> CommandRep
         thread_id: Some(thread_id.clone()),
         ..Default::default()
     })
-}
-
-// ---------------------------------------------------------------- bots
-
-fn bots_dir(host: &Host) -> std::path::PathBuf {
-    host.inner.opts.data_dir.join("bots")
-}
-
-fn save_bot(host: &Host, profile: &BotProfile) -> Result<(), StoreError> {
-    let dir = bots_dir(host);
-    std::fs::create_dir_all(&dir)?;
-    let tmp = dir.join(format!("{}.json.tmp", profile.bot_id));
-    std::fs::write(
-        &tmp,
-        serde_json::to_vec_pretty(profile).map_err(std::io::Error::other)?,
-    )?;
-    std::fs::rename(tmp, dir.join(format!("{}.json", profile.bot_id)))?;
-    Ok(())
-}
-
-fn create_bot(
-    host: &Host,
-    name: String,
-    purpose: String,
-    face: BotFace,
-    model_selection: ModelSelection,
-    role: BotRole,
-) -> Result<BotProfile, StoreError> {
-    let bot_id = if role == BotRole::Main {
-        BotId::new("goat")
-    } else {
-        BotId::new(new_id("bot"))
-    };
-    let card = create_thread(
-        host,
-        None,
-        NewThread {
-            kind: ThreadKind::Bot,
-            title: name.clone(),
-            bot_id: Some(bot_id.clone()),
-            parent: None,
-            engine: engine_config(
-                &model_selection,
-                DEFAULT_RUNTIME_MODE,
-                host.inner.opts.default_cwd.clone(),
-            ),
-        },
-    )?;
-    let profile = BotProfile {
-        bot_id,
-        name,
-        purpose,
-        face,
-        role,
-        session_thread_id: card.id,
-        default_model_selection: model_selection,
-        instructions: None,
-    };
-    save_bot(host, &profile)?;
-    host.inner.bots.lock().expect("bots").push(profile.clone());
-    let _ = host
-        .inner
-        .cards_tx
-        .send(CardUpdate::BotChanged(Arc::new(profile.clone())));
-    Ok(profile)
-}
-
-/// Load `bots/*.json`; create the main bot GOAT on first start.
-pub(crate) fn load_bots(host: &Host) -> Result<(), StoreError> {
-    let dir = bots_dir(host);
-    let mut bots = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json")
-                && let Ok(bytes) = std::fs::read(&path)
-                && let Ok(profile) = serde_json::from_slice::<BotProfile>(&bytes)
-            {
-                bots.push(profile);
-            }
-        }
-    }
-    bots.sort_by(|a, b| {
-        (a.role != BotRole::Main, &a.name).cmp(&(b.role != BotRole::Main, &b.name))
-    });
-    let has_main = bots.iter().any(|b| b.role == BotRole::Main);
-    *host.inner.bots.lock().expect("bots") = bots;
-    if !has_main {
-        create_bot(
-            host,
-            "GOAT".to_owned(),
-            "Your main bot".to_owned(),
-            BotFace {
-                shape: "goat".to_owned(),
-                color: "#0169CC".to_owned(),
-                goat: true,
-            },
-            ModelSelection {
-                instance_id: ProviderInstanceId::new("codex"),
-                model: DEFAULT_CODEX_MODEL.to_owned(),
-                options: None,
-            },
-            BotRole::Main,
-        )?;
-    }
-    Ok(())
 }
 
 /// Rebuild the recent-id table from `input.accepted.clientRequestId` of active and recent

@@ -635,9 +635,19 @@ impl McpHost for Host {
             Err(e) => return *e,
         };
         let mut first = false;
-        self.runtime_update(&caller.thread_id, |rt| {
-            first = rt.notified.insert(args.kind)
-        });
+        if caller.kind == ThreadKind::Bot {
+            // A bot run can carry several messages: one ack and one result per message.
+            first = crate::bot::guards::may_send(self, &caller.run_id, args.kind);
+            if first {
+                self.runtime_update(&caller.thread_id, |rt| {
+                    rt.notified.insert(args.kind);
+                });
+            }
+        } else {
+            self.runtime_update(&caller.thread_id, |rt| {
+                first = rt.notified.insert(args.kind)
+            });
+        }
         if !first {
             return err(
                 ErrorCode::Conflict,
@@ -650,12 +660,17 @@ impl McpHost for Host {
             vec![LogEvent::UserNotified(UserNotified {
                 run_id: Some(caller.run_id.clone()),
                 kind: args.kind,
-                text: args.text,
+                text: args.text.clone(),
                 // Written by the agent's own session (v1 ChannelLedger source "session").
                 source: Some(goat2_contracts::NotificationSource::Session),
             })],
         ) {
-            Ok(_) => SurfaceResult::ok(json!({ "sent": true })),
+            Ok(_) => {
+                if caller.kind == ThreadKind::Bot {
+                    crate::bot::guards::sent(self, &caller.run_id, args.kind, &args.text);
+                }
+                SurfaceResult::ok(json!({ "sent": true }))
+            }
             Err(e) => internal(e),
         }
     }

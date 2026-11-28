@@ -6,6 +6,7 @@
 //! `docs/lanes/PART1.md` and `structure/`.
 
 pub mod api;
+pub mod bot;
 pub mod config;
 pub mod core;
 pub mod engine;
