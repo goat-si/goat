@@ -95,6 +95,30 @@ const pending = (kind: string) =>
 
 /** The store's lineage rows and its shell reads by id, over a fixed set of shells. */
 const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
+  listMcpThreadPage: (input: {
+    projectId?: ProjectId | undefined;
+    threadIds?: ReadonlyArray<ThreadId> | undefined;
+    settled?: boolean | undefined;
+    statuses?: ReadonlyArray<string> | undefined;
+    includeSubagents: boolean;
+    offset: number;
+    limit: number;
+  }) => {
+    const matches = shells.filter(
+      (shell) =>
+        (input.projectId === undefined || shell.projectId === input.projectId) &&
+        (input.threadIds === undefined || input.threadIds.includes(shell.id)) &&
+        (input.settled === undefined || (shell.settledOverride === "settled") === input.settled) &&
+        (input.statuses === undefined ||
+          input.statuses.includes(shell.activityRunStatus ?? shell.status)) &&
+        (input.includeSubagents ||
+          (shell.lineage.relationshipToParent !== "subagent" && shell.sideChatOf == null)),
+    );
+    return Effect.succeed({
+      total: matches.length,
+      threads: matches.slice(input.offset, input.offset + input.limit),
+    });
+  },
   listLaunchEdges: () =>
     Effect.succeed(
       shells.map((shell) => ({
@@ -157,6 +181,100 @@ const layerFor = (threads: Partial<ThreadManagementService.ThreadManagementServi
   );
 
 describe("goat_thread_list lineage", () => {
+  it.effect("preserves the project-scoped error when listing fails", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.listThreads(scope, { projectId }).pipe(Effect.flip);
+      assert.equal(error.code, "orchestration_error");
+      assert.equal(
+        error.message,
+        `Unable to list threads: Unable to list threads in project ${projectId}.`,
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([]),
+          listMcpThreadPage: () =>
+            Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: parentId })),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    ),
+  );
+  it.effect("preserves the lineage-read error when listing fails", () => {
+    const child = finished(ThreadId.make("thread:error-child"), {
+      launchedBy: launchedBy(parentId),
+    });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const error = yield* service.listThreads(scope, { launchedBy: "self" }).pipe(Effect.flip);
+      assert.equal(error.code, "orchestration_error");
+      assert.equal(
+        error.message,
+        `Failed to load orchestration projection for thread ${parentId}.`,
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([child]),
+          listMcpThreadPage: () =>
+            Effect.fail(new Orchestrator.OrchestratorProjectionError({ threadId: parentId })),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
+  it.effect("title filters keep Unicode case folding when scanning candidate pages", () => {
+    const matching = finished(ThreadId.make("thread:title-a"), { title: "Kelvin" });
+    const other = finished(ThreadId.make("thread:title-b"), { title: "Other" });
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, { projectId, titleContains: "k", limit: 1 });
+      assert.equal(result.total, 1);
+      assert.deepEqual(
+        result.threads.map((thread) => thread.threadId),
+        [matching.id],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads([other, matching]),
+          listProjectThreads: () => Effect.die("title filters must use bounded pages"),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
+  it.effect("complex filters count and page across SQL-ordered candidate batches", () => {
+    const shells = Array.from({ length: 505 }, (_, index) =>
+      finished(ThreadId.make(`thread:batch-${String(index).padStart(3, "0")}`), {
+        activityRunStatus: index % 3 === 0 ? "waiting" : null,
+      }),
+    );
+    return Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const result = yield* service.listThreads(scope, {
+        projectId,
+        statuses: ["waiting"],
+        cursor: 165,
+        limit: 3,
+      });
+      assert.equal(result.total, 169);
+      assert.equal(result.nextCursor, 168);
+      assert.deepEqual(
+        result.threads.map((thread) => thread.threadId),
+        ["thread:batch-495", "thread:batch-498", "thread:batch-501"],
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...shellReads(shells),
+          listProjectThreads: () => Effect.die("complex filters must use bounded pages"),
+          getThreadRecords: () => Effect.succeed(parentProjection([])),
+        }),
+      ),
+    );
+  });
   it.effect("refuses a project that does not exist", () =>
     Effect.gen(function* () {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;

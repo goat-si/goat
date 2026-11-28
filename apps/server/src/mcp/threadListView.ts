@@ -1,5 +1,4 @@
 import {
-  isSideChatThread,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
@@ -86,10 +85,6 @@ export function matchesLineage(
       delegatedBy === filter.childrenOf)
   );
 }
-
-/** What goat_thread_list shows without includeSubagents:false, like the user's thread list. */
-export const listedByDefault = (shell: OrchestrationV2ThreadShell) =>
-  shell.lineage.relationshipToParent !== "subagent" && !isSideChatThread(shell);
 
 const LIVE_RUN_STATUSES: ReadonlySet<string> = new Set([
   "preparing",
@@ -354,15 +349,16 @@ export const makeLineageReads = (
     threadIds.length === 0
       ? Effect.succeed([])
       : threads.getShellSnapshot({ location: "active", threadIds }).pipe(
-          Effect.map(({ threads: shells }) =>
-            shells
-              .filter((shell) => threadIds.includes(shell.id))
+          Effect.map(({ threads: shells }) => {
+            const requested = new Set(threadIds);
+            return shells
+              .filter((shell) => requested.has(shell.id))
               .toSorted(
                 (left, right) =>
                   DateTime.toEpochMillis(right.updatedAt) -
                     DateTime.toEpochMillis(left.updatedAt) || right.id.localeCompare(left.id),
-              ),
-          ),
+              );
+          }),
           Effect.mapError(onFailure),
         );
   const readSummary = Effect.fn("OrchestratorMcpService.readSummary")(function* (

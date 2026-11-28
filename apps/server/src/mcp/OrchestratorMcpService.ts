@@ -122,7 +122,6 @@ import type {
 } from "../orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { delegatedTaskRevision } from "../orchestration-v2/DelegatedTaskRevision.ts";
-import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import { userFacingDispatchErrorMessage } from "../orchestration-v2/UserFacingErrors.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -153,6 +152,7 @@ import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { runStop, STOP_TURN_ITEM_TYPES, statusFromShell, threadRun } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
+import { listThreadPage } from "./threadListPage.ts";
 import { isLiveCallerShell, threadNotFound } from "./threadLookupFailure.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import type { OrchestratorMcpServiceShape } from "./OrchestratorMcpServiceShape.ts";
@@ -3153,45 +3153,45 @@ const make = Effect.gen(function* () {
       const listFailure = (error: unknown) =>
         failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`);
       const edges = yield* threadManagement.listLaunchEdges().pipe(Effect.mapError(listFailure));
-      const projectThreads = View.hasLineageFilter(lineage)
-        ? (yield* readShells(
-            edges.flatMap((edge) =>
-              (projectId === undefined || edge.projectId === projectId) &&
-              View.matchesLineage(edge, lineage)
-                ? [edge.id]
-                : [],
-            ),
-          )).filter((thread) => input.includeSubagents !== false || View.listedByDefault(thread))
-        : yield* threadManagement
-            .listProjectThreads({ projectId, includeSubagents: input.includeSubagents !== false })
-            .pipe(Effect.mapError(listFailure));
-      const nowMs = yield* Clock.currentTimeMillis;
-      // An empty list is no filter: clients that fill every optional field send `[]`.
-      const statuses =
-        input.statuses === undefined || input.statuses.length === 0
-          ? null
-          : new Set(input.statuses);
-      const titleContains = input.titleContains?.toLocaleLowerCase();
-      const filtered = projectThreads
-        .filter((thread) => statuses === null || statuses.has(View.listedThreadStatus(thread)))
-        .filter(
-          (thread) =>
-            input.settled === undefined || View.threadSettlement(thread).settled === input.settled,
-        )
-        .filter(
-          (thread) => input.snoozed === undefined || isSnoozed(thread, nowMs) === input.snoozed,
-        )
-        .filter(
-          (thread) =>
-            titleContains === undefined || thread.title.toLocaleLowerCase().includes(titleContains),
-        );
       const cursor = input.cursor ?? 0;
       const limit = input.limit ?? DEFAULT_THREAD_LIST_LIMIT;
-      const page = filtered.slice(cursor, cursor + limit);
-      const nextCursor = cursor + page.length < filtered.length ? cursor + page.length : null;
+      const lineageIds = View.hasLineageFilter(lineage)
+        ? edges.flatMap((edge) =>
+            (projectId === undefined || edge.projectId === projectId) &&
+            View.matchesLineage(edge, lineage)
+              ? [edge.id]
+              : [],
+          )
+        : undefined;
+      const nowMs = yield* Clock.currentTimeMillis;
+      const { threads: page, total } = yield* listThreadPage(
+        threadManagement,
+        input,
+        {
+          projectId,
+          includeSubagents: input.includeSubagents !== false,
+          settled: input.settled,
+          threadIds: lineageIds,
+          offset: cursor,
+          limit,
+        },
+        nowMs,
+      ).pipe(
+        Effect.mapError((cause) =>
+          lineageIds === undefined
+            ? listFailure(
+                new ThreadManagementService.ThreadManagementProjectThreadsListError({
+                  ...(projectId === undefined ? {} : { projectId }),
+                  cause,
+                }),
+              )
+            : threadManagementFailure(cause),
+        ),
+      );
+      const nextCursor = cursor + page.length < total ? cursor + page.length : null;
       // Fold states need only the shells of what is folded under this page.
       const graph = launchGraph(edges);
-      const shells = new Map(projectThreads.map((thread) => [thread.id, thread] as const));
+      const shells = new Map(page.map((thread) => [thread.id, thread] as const));
       const folded = [...graph.reach(page.map((thread) => thread.id))];
       for (const thread of yield* readShells(folded.filter((id) => !shells.has(id))))
         shells.set(thread.id, thread);
@@ -3210,7 +3210,7 @@ const make = Effect.gen(function* () {
           ),
         ),
         nextCursor,
-        total: filtered.length,
+        total,
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {

@@ -107,6 +107,7 @@ const threadsLayer = (
     ThreadManagementService.ThreadManagementService,
     ThreadManagementService.ThreadManagementService.of({
       listOlderSettledThreads: unused,
+      listMcpThreadPage: unused,
       listAppOwnedChildThreadIds: unused,
       awaitBackgroundTasks: unused,
       getLaunchedPendingQuestions: unused,

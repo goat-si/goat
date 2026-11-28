@@ -72,6 +72,7 @@ it.effect(
         Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
           active: () =>
             Deferred.succeed(joined, undefined).pipe(Effect.andThen(flight.run(false, load))),
+          projectDeltas: (events, project) => project(events),
         }),
         Effect.provideService(OrchestrationEventStore.OrchestrationEventStore, {
           ...store,

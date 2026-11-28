@@ -129,6 +129,7 @@ export const makeTestRelay = Effect.fnUntraced(function* (
   const shellReads: ThreadId[] = [];
   const catchUp = { shellSnapshotReads: 0 };
   const threads = ThreadManagementService.ThreadManagementService.of({
+    listMcpThreadPage: () => Effect.die("unused listMcpThreadPage"),
     getLaunchedPendingQuestions: () => Effect.die("Unused launched question query"),
     assertReviewTaskSendAllowed: unused,
     getThreadNewestRun: unused,

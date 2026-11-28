@@ -6,10 +6,12 @@ import {
   type OrchestrationV2ShellThreadStatus,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ShellSnapshotOptions } from "./ProjectionStore.ts";
 import type { ShellRun } from "./threadShellProjection.ts";
+import { reduceShellChunks } from "./shellChunks.ts";
 
 export type ShellSubscriberOptions = Pick<
   ShellSnapshotOptions,
@@ -400,7 +402,8 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
   return { selectShellThreadRows, isIdleCompactionMessage, isIdleCompactionRun, isSilentShellRun };
 };
 
-export function selectShellDecodeRows(input: {
+// These row helpers run inside the enclosing snapshot or thread-read span.
+export const selectShellDecodeRows = Effect.fnUntraced(function* (input: {
   readonly targetThreadIds: ReadonlySet<ThreadId>;
   readonly threadRows: ReadonlyArray<ShellThreadRow>;
   readonly providerThreadRows: ReadonlyArray<{
@@ -412,47 +415,63 @@ export function selectShellDecodeRows(input: {
   readonly pendingTurnItemRows: ReadonlyArray<{ readonly thread_id: string }>;
 }) {
   const { targetThreadIds, threadRows, providerThreadRows, pendingTurnItemRows } = input;
-  const subagentRows = threadRows.filter(
-    (row) =>
-      targetThreadIds.has(ThreadId.make(row.thread_id)) && row.lineage_relationship === "subagent",
+  const shellIndex = yield* reduceShellChunks(
+    threadRows,
+    { subagentThreadIds: [] as ThreadId[], subagentParentIds: new Set<string>() },
+    (result, row) => {
+      if (
+        targetThreadIds.has(ThreadId.make(row.thread_id)) &&
+        row.lineage_relationship === "subagent"
+      ) {
+        result.subagentThreadIds.push(ThreadId.make(row.thread_id));
+        if (row.lineage_parent_thread_id !== null)
+          result.subagentParentIds.add(row.lineage_parent_thread_id);
+      }
+    },
   );
-  const shellIndex = {
-    subagentThreadIds: subagentRows.map((row) => ThreadId.make(row.thread_id)),
-    subagentParentIds: new Set(
-      subagentRows.flatMap((row) =>
-        row.lineage_parent_thread_id === null ? [] : [row.lineage_parent_thread_id],
-      ),
-    ),
-  };
-  const providerIds = new Set(
-    providerThreadRows
-      .filter((row) => row.has_pending_background_tasks === 1)
-      .flatMap((row) => (row.owner_thread_id === null ? [] : [row.owner_thread_id])),
+  const providerIds = yield* reduceShellChunks(
+    providerThreadRows,
+    new Set<string>(),
+    (ids, row) => {
+      if (row.has_pending_background_tasks === 1 && row.owner_thread_id !== null)
+        ids.add(row.owner_thread_id);
+    },
   );
-  const pendingIds = new Set(pendingTurnItemRows.map((row) => row.thread_id));
-  const keep = new Set(
-    threadRows
-      .filter(
-        (row) =>
-          row.lineage_relationship !== "subagent" ||
-          shellIndex.subagentParentIds.has(row.thread_id) ||
-          row.activity_run_status !== null ||
-          row.active_run_id !== null ||
-          (row.latest_run_status !== null &&
-            !["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
-              row.latest_run_status,
-            )) ||
-          row.pending_request_payload_json !== null ||
-          row.pending_secret_request_payload_json !== null ||
-          row.has_pull_request_watch === 1 ||
-          providerIds.has(row.thread_id) ||
-          pendingIds.has(row.thread_id),
+  const pendingIds = yield* reduceShellChunks(
+    pendingTurnItemRows,
+    new Set<string>(),
+    (ids, row) => {
+      ids.add(row.thread_id);
+    },
+  );
+  const { keep, rowsById } = yield* reduceShellChunks(
+    threadRows,
+    { keep: new Set<string>(), rowsById: new Map<string, ShellThreadRow>() },
+    (result, row) => {
+      result.rowsById.set(row.thread_id, row);
+      if (
+        row.lineage_relationship !== "subagent" ||
+        shellIndex.subagentParentIds.has(row.thread_id) ||
+        row.activity_run_status !== null ||
+        row.active_run_id !== null ||
+        (row.latest_run_status !== null &&
+          !["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+            row.latest_run_status,
+          )) ||
+        row.pending_request_payload_json !== null ||
+        row.pending_secret_request_payload_json !== null ||
+        row.has_pull_request_watch === 1 ||
+        providerIds.has(row.thread_id) ||
+        pendingIds.has(row.thread_id)
       )
-      .map((row) => row.thread_id),
+        result.keep.add(row.thread_id);
+    },
   );
-  const rowsById = new Map(threadRows.map((row) => [row.thread_id, row]));
   const pending = [...keep];
+  let processed = 0;
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    if (processed > 0 && processed % 250 === 0) yield* Effect.yieldNow;
+    processed++;
     const row = rowsById.get(next);
     if (row === undefined) continue;
     for (const dependency of [
@@ -467,7 +486,7 @@ export function selectShellDecodeRows(input: {
     }
   }
   return { shellIndex, keep };
-}
+});
 
 export function shellStatusFromStoredRunStatus(
   status: string | null,
@@ -510,26 +529,22 @@ export type ShellItemCountRow = {
   readonly runless_item_count: number;
 };
 
-export function shellForkSourceIds(
+export const shellForkSourceIds = Effect.fnUntraced(function* (
   rows: ReadonlyArray<{ readonly forked_from_run_source_thread_id: string | null }>,
-): ReadonlyArray<ThreadId> {
-  return [
-    ...new Set(
-      rows.flatMap((row) =>
-        row.forked_from_run_source_thread_id === null
-          ? []
-          : [ThreadId.make(row.forked_from_run_source_thread_id)],
-      ),
-    ),
-  ];
-}
+) {
+  const ids = yield* reduceShellChunks(rows, new Set<ThreadId>(), (result, row) => {
+    if (row.forked_from_run_source_thread_id !== null)
+      result.add(ThreadId.make(row.forked_from_run_source_thread_id));
+  });
+  return [...ids];
+});
 
-export const runMapsByThreadId = (input: {
+export const runMapsByThreadId = Effect.fnUntraced(function* (input: {
   readonly runRows: ReadonlyArray<ShellRunRow>;
   readonly itemCountRows: ReadonlyArray<ShellRunItemCountRow>;
-}) => {
+}) {
   const runsByThreadId = new Map<ThreadId, Map<RunId, ShellRun>>();
-  for (const row of input.runRows) {
+  yield* reduceShellChunks(input.runRows, runsByThreadId, (_, row) => {
     const threadId = ThreadId.make(row.thread_id);
     const runId = RunId.make(row.run_id);
     const existing = runsByThreadId.get(threadId) ?? new Map<RunId, ShellRun>();
@@ -538,36 +553,33 @@ export const runMapsByThreadId = (input: {
       rolledBackAt: row.rolled_back_at === null ? null : DateTime.makeUnsafe(row.rolled_back_at),
     });
     runsByThreadId.set(threadId, existing);
-  }
+  });
   const itemCountsByThreadId = new Map<ThreadId, Map<RunId, number>>();
-  for (const row of input.itemCountRows) {
+  yield* reduceShellChunks(input.itemCountRows, itemCountsByThreadId, (_, row) => {
     const threadId = ThreadId.make(row.thread_id);
     const runId = RunId.make(row.run_id);
     const existing = itemCountsByThreadId.get(threadId) ?? new Map<RunId, number>();
     existing.set(runId, row.item_count);
     itemCountsByThreadId.set(threadId, existing);
-  }
+  });
   return { runsByThreadId, itemCountsByThreadId };
-};
+});
 
-export const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>
-  new Map(
-    rows.map(
-      (row) =>
-        [
-          ThreadId.make(row.thread_id),
-          { itemCount: row.item_count, runlessItemCount: row.runless_item_count },
-        ] as const,
-    ),
+export const shellItemCountMap = Effect.fnUntraced(function* (
+  rows: ReadonlyArray<ShellItemCountRow>,
+) {
+  return yield* reduceShellChunks(
+    rows,
+    new Map<ThreadId, { itemCount: number; runlessItemCount: number }>(),
+    (result, row) =>
+      result.set(ThreadId.make(row.thread_id), {
+        itemCount: row.item_count,
+        runlessItemCount: row.runless_item_count,
+      }),
   );
+});
 
 export const worktreePathsMatch = (path: string | null, target: string | undefined) =>
   target === undefined ||
   (path !== null &&
     normalizeProjectPathForComparison(path) === normalizeProjectPathForComparison(target));
-
-export const filterWorktreeRows = (
-  rows: ReadonlyArray<ShellThreadRow>,
-  target: string | undefined,
-) =>
-  target === undefined ? rows : rows.filter((row) => worktreePathsMatch(row.worktree_path, target));

@@ -3,11 +3,16 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import type { OrchestrationV2ShellStreamItem } from "@goat/contracts";
 
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import { loadShellSnapshotParts } from "./ShellStream.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import type * as Orchestrator from "./Orchestrator.ts";
+import type * as ProjectService from "../project/ProjectService.ts";
+import { makeShellDeltaLoads } from "./ShellDeltaLoads.ts";
+import type { ShellApplicationEvent } from "./ShellStream.ts";
 
 // A joiner may receive an older snapshot and must replay from that snapshot's sequence.
 export const makeSingleFlight = Effect.fn("ShellSnapshotLoads.makeSingleFlight")(function* <
@@ -77,10 +82,20 @@ const makeLoad = (
   });
 
 type Load = ReturnType<typeof makeLoad>;
+type Delta = Extract<OrchestrationV2ShellStreamItem, { readonly sequence: number }>;
+type DeltaError = Orchestrator.OrchestratorV2Error | ProjectService.ProjectOperationError;
 
 export class ShellSnapshotLoads extends Context.Service<
   ShellSnapshotLoads,
-  { readonly active: (omitIdleSubagents: boolean) => Load }
+  {
+    readonly active: (omitIdleSubagents: boolean) => Load;
+    readonly projectDeltas: (
+      events: ReadonlyArray<ShellApplicationEvent>,
+      load: (
+        events: ReadonlyArray<ShellApplicationEvent>,
+      ) => Effect.Effect<ReadonlyArray<Delta>, DeltaError>,
+    ) => Effect.Effect<ReadonlyArray<Delta>, DeltaError>;
+  }
 >()("goat/orchestration-v2/ShellSnapshotLoads") {}
 
 export const layer = Layer.effect(
@@ -91,6 +106,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectStore.ProjectStoreV2;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const singleFlight = yield* makeSingleFlight<Effect.Success<Load>, Effect.Error<Load>>();
+    const deltas = yield* makeShellDeltaLoads<Delta, DeltaError>();
     return ShellSnapshotLoads.of({
       active: Effect.fn("ShellSnapshotLoads.active")((omitIdleSubagents: boolean) =>
         singleFlight.run(
@@ -98,6 +114,7 @@ export const layer = Layer.effect(
           makeLoad(sql, threadManagement, projects, applicationEvents, omitIdleSubagents),
         ),
       ),
+      projectDeltas: deltas.run,
     });
   }),
 );
