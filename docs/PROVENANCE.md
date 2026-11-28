@@ -56,7 +56,6 @@ names and literals kept. Full table: `crates/goat2-contracts/PROVENANCE.md`. Gen
 
 New in GOAT 2 (no source): goat2-contracts events, Fold, CardFile, subscribe frames and cursors, command frames, limits,
 codegen and tests (design: goat2-design prd-src/part1, goat2 structure/).
-||||||| parent of 7445429b537 (feat(thread-store): startup bench, fewer syncs on settlement, v1 rule ports, design doc)
 ## goat2-thread-store (lane A, 2026-11-28)
 
 Behaviour ported from GOAT v1 `origin/dev` `916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4` (read with
