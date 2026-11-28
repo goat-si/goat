@@ -1,3 +1,4 @@
+import { useScheduledTaskBase } from "./useScheduledTaskBase";
 import * as Schema from "effect/Schema";
 import { AuthOrchestrationOperateScope, ScheduledTaskNotificationPolicy } from "@goat/contracts";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
@@ -58,7 +59,7 @@ import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { usePreparedConnection } from "../../state/session";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
+import { useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -489,16 +490,7 @@ function TaskForm({
   const tasks = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
-  // Pinned first. The chosen project stays listed after it is archived.
-  const projects = useProjects()
-    .filter(
-      (project) =>
-        project.environmentId === environmentId &&
-        (project.archivedAt == null ||
-          project.id === draft.projectId ||
-          project.id === draft.task?.projectId),
-    )
-    .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
+  const { projects, baseLoading, worktreeBase } = useScheduledTaskBase(environmentId, draft);
   const config = useEnvironmentServerConfig(environmentId);
   const threadModes = config?.environment?.capabilities?.scheduledTaskThreadModes === true;
   const canOperate = useAtomValue(
@@ -532,7 +524,8 @@ function TaskForm({
       saving ||
       dictationPending ||
       taskMissing ||
-      environmentUnavailable
+      environmentUnavailable ||
+      baseLoading
     )
       return;
     // Preserve signatures edited on other clients by sending the task's current value.
@@ -565,7 +558,7 @@ function TaskForm({
       return;
     }
     const context = scheduledTaskContextFields(
-      draft,
+      { ...draft, baseRef: worktreeBase },
       projects.map((project) => project.id),
     );
     if (!draft.title.trim() || !draft.prompt.trim() || !schedule || context.kind === "incomplete") {
@@ -690,6 +683,7 @@ function TaskForm({
           locked={saving || dictationPending || environmentUnavailable}
           onPickModel={() => navigation.navigate("SettingsScheduledTaskModel")}
           onPickBranch={() => navigation.navigate("SettingsScheduledTaskBranch")}
+          baseBranch={baseLoading ? null : worktreeBase}
         />
 
         <SettingsSection title="Schedule">
@@ -910,7 +904,9 @@ function TaskForm({
         tone="primary"
         fullWidth
         loading={saving}
-        disabled={!canOperate || dictationPending || taskMissing || environmentUnavailable}
+        disabled={
+          !canOperate || dictationPending || taskMissing || environmentUnavailable || baseLoading
+        }
         onPress={() => void save()}
         label={saving ? "Saving…" : draft.task ? "Save changes" : "Create task"}
       />

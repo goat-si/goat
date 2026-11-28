@@ -49,6 +49,7 @@ it("formats headless serve output with the connection string, token, pairing url
   });
 
   expect(output).toContain("Connection string: http://192.168.1.42:3773");
+  expect(output).toContain("Warning: this address uses plain HTTP.");
   expect(output).toContain("Token: PAIRCODE");
   expect(output).toContain("Pairing URL: http://192.168.1.42:3773/pair#token=PAIRCODE");
   expect(output).toContain(
@@ -58,6 +59,15 @@ it("formats headless serve output with the connection string, token, pairing url
   expect(output).toContain(
     renderTerminalQrCode(buildMobilePairingLink("http://192.168.1.42:3773/pair#token=PAIRCODE")),
   );
+});
+
+it("does not warn about plain HTTP on loopback", () => {
+  const output = formatHeadlessServeOutput({
+    connectionString: "http://localhost:3773",
+    token: "PAIRCODE",
+    pairingUrl: "http://localhost:3773/pair#token=PAIRCODE",
+  });
+  expect(output).not.toContain("Warning: this address uses plain HTTP.");
 });
 
 it("skips public and container addresses for a private-network listener", () => {
@@ -89,6 +99,20 @@ it("prefers a LAN address over a tailnet one for a private-network pairing URL",
       privateNetworkOnly: true,
     }),
   ).toBe("http://192.168.1.42:3773");
+});
+
+it("skips Windows VirtualBox and VMware host-only adapters for a private-network listener", () => {
+  expect(
+    resolveHeadlessConnectionString("0.0.0.0", 3773, {
+      interfaces: {
+        "VirtualBox Host-Only Network": [{ ...ipv4("192.168.56.1"), mac: "0a:00:27:00:00:0a" }],
+        "VMware Network Adapter VMnet8": [{ ...ipv4("192.168.159.1"), mac: "00:50:56:c0:00:08" }],
+        "Wi-Fi": [{ ...ipv4("192.168.1.20"), mac: "3c:22:fb:12:34:56" }],
+      },
+      privateNetworkOnly: true,
+      platform: "win32",
+    }),
+  ).toBe("http://192.168.1.20:3773");
 });
 
 describe("acceptsPrivateNetworkConnection", () => {

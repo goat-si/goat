@@ -1,3 +1,4 @@
+import * as SessionClosing from "./providerSessionClosing.ts";
 import {
   claimIdleThreadUnload,
   detachIdleThreads,
@@ -2194,7 +2195,7 @@ export const layerWithOptions = (
           ),
       );
 
-      const startEventPump = (entry: LiveSessionEntry) => {
+      const startEventPump = (entry: LiveSessionEntry, sessionClosed: SessionClosing.Signal) => {
         let stoppedByProvider = false;
         let lastSessionStatus = entry.runtime.providerSession.status;
         const retryStalls = makeRetryStallWatch({
@@ -2208,7 +2209,7 @@ export const layerWithOptions = (
           projectionStore,
           runtime: entry.exposedRuntime,
         });
-        return entry.runtime.events.pipe(
+        return SessionClosing.interrupt(entry.runtime.events, sessionClosed).pipe(
           Stream.runForEach((nativeEvent) => {
             if (shutdownSignal.received) return Effect.void;
             // Live output bypasses persistence and subscribers so floods cannot delay domain events.
@@ -2533,7 +2534,7 @@ export const layerWithOptions = (
                     return existing.exposedRuntime;
                   }
 
-                  const sessionScope = yield* Scope.fork(sessionScopes);
+                  const { sessionScope, sessionClosed } = yield* SessionClosing.make(sessionScopes);
                   if (Option.isSome(codexRoutes))
                     yield* codexRoutes.value.reserveUse(input.modelSelection.instanceId).pipe(
                       Effect.provideService(Scope.Scope, sessionScope),
@@ -2684,7 +2685,7 @@ export const layerWithOptions = (
                         ).pipe(logReleaseFailure(input.providerSessionId)),
                       ),
                     );
-                    yield* startEventPump(entry);
+                    yield* startEventPump(entry, sessionClosed);
                     yield* scheduleIdleRelease(input.providerSessionId);
                     return exposedRuntime;
                   }).pipe(

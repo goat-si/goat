@@ -74,8 +74,10 @@ export function ScheduledTaskContextSections({
   locked,
   onPickModel,
   onPickBranch,
+  baseBranch,
 }: {
   readonly draft: Draft;
+  readonly baseBranch: string | null;
   readonly setDraft: (draft: Draft) => void;
   readonly config: ServerConfig | null;
   readonly projects: ReadonlyArray<EnvironmentProject>;
@@ -230,7 +232,7 @@ export function ScheduledTaskContextSections({
           <PickerRow
             label="Base branch"
             value={resolveNewTaskBranchLabel({
-              branchName: draft.baseRef,
+              branchName: baseBranch,
               startFromOrigin: draft.startFromOrigin,
               workspaceMode: "worktree",
             })}

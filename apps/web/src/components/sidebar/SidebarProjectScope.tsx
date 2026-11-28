@@ -1,6 +1,6 @@
 import { type EnvironmentId, type EnvironmentMachineKind } from "@goat/contracts";
 import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
-import { FolderIcon, ListFilterIcon, SettingsIcon } from "~/components/solar";
+import { FolderIcon, FolderPlusIcon, SettingsIcon } from "~/components/solar";
 import {
   useReducer,
   useRef,
@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import {
+  ADD_PROJECT_SCOPE_ITEM_VALUE,
   filterSidebarProjectScopeItems,
   reduceSidebarProjectScopeMenuState,
 } from "../Sidebar.logic";
@@ -28,6 +29,7 @@ import {
 import { SidebarHeaderIconButton } from "./SidebarThreadHeader";
 
 export function SidebarProjectScope(props: {
+  readonly onAddProject: () => void;
   readonly projectGroups: readonly SidebarProjectSnapshot[];
   readonly scopedProjectGroups: readonly SidebarProjectSnapshot[];
   readonly projectScopeKeys: readonly string[];
@@ -38,6 +40,7 @@ export function SidebarProjectScope(props: {
   readonly environmentMachineById: ReadonlyMap<EnvironmentId, EnvironmentMachineKind>;
 }) {
   const {
+    onAddProject,
     projectGroups,
     scopedProjectGroups,
     projectScopeKeys,
@@ -59,6 +62,7 @@ export function SidebarProjectScope(props: {
     projectGroups.map((project) => [project.projectKey, project] as const),
   );
   const projectScopeItems = [
+    { value: ADD_PROJECT_SCOPE_ITEM_VALUE, label: "Add project" },
     { value: "all", label: "All projects" },
     ...pickableProjectGroups(projectGroups).map((project) => ({
       value: project.projectKey,
@@ -69,7 +73,7 @@ export function SidebarProjectScope(props: {
     projectScopeKeys.length > 1
       ? null
       : (projectScopeItems.find((item) => item.value === (projectScopeKeys[0] ?? "all")) ??
-        projectScopeItems[0] ??
+        projectScopeItems.find((item) => item.value === "all") ??
         null);
   const filteredProjectScopeItems = filterSidebarProjectScopeItems({
     items: projectScopeItems,
@@ -117,7 +121,10 @@ export function SidebarProjectScope(props: {
           return;
         }
         if (!item) return;
-        if (item.value === "all") setProjectScopeKeys([]);
+        if (item.value === ADD_PROJECT_SCOPE_ITEM_VALUE) {
+          dispatchProjectScopeMenu({ type: "open-changed", open: false });
+          onAddProject();
+        } else if (item.value === "all") setProjectScopeKeys([]);
         else if (eventDetails.event instanceof MouseEvent && eventDetails.event.shiftKey) {
           eventDetails.cancel();
           toggleProjectScopeKey(item.value);
@@ -148,7 +155,7 @@ export function SidebarProjectScope(props: {
             <ProjectFavicon project={scopedProjectGroup} className="size-4" />
           </span>
         ) : (
-          <ListFilterIcon className="size-4" />
+          <FolderIcon className="size-4" />
         )}
       </ComboboxTrigger>
       <ComboboxPopup
@@ -196,6 +203,14 @@ export function SidebarProjectScope(props: {
         <ComboboxEmpty>No matching projects.</ComboboxEmpty>
         <ComboboxList aria-multiselectable>
           {(item: (typeof projectScopeItems)[number]) => {
+            if (item.value === ADD_PROJECT_SCOPE_ITEM_VALUE) {
+              return (
+                <ComboboxItem key={item.value} hideIndicator value={item}>
+                  <FolderPlusIcon className="size-4 shrink-0" />
+                  <span className="min-w-0 truncate text-sm">{item.label}</span>
+                </ComboboxItem>
+              );
+            }
             const project = projectGroupByScopeKey.get(item.value) ?? null;
             return (
               <ComboboxItem

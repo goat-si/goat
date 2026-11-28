@@ -7,7 +7,7 @@ import type {
   ServerProvider,
 } from "@goat/contracts";
 import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
-import { fileBasename } from "@goat/shared/path";
+import { fileDisplayName } from "@goat/shared/path";
 import { isTerminalSubagentStatus } from "./subagentRuntime.ts";
 
 export function subagentGroupSummary(
@@ -105,7 +105,7 @@ export function resolveSubagentMetadata(input: {
               : input.childThread?.worktreePath
                 ? "Worktree"
                 : "Workspace",
-            value: input.childThread?.branch ?? fileBasename(childWorkspace),
+            value: input.childThread?.branch ?? fileDisplayName(childWorkspace),
           },
         ]
       : []),

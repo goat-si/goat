@@ -44,7 +44,6 @@ import { newLaunchWatch } from "./launchWatch.ts";
 import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
 import { fakeCloudCapabilities } from "../orchestration-v2/testkit/FakeCloudAdapter.ts";
 import * as Gate from "../provider/ProviderCliGate.ts";
-
 const projectId = ProjectId.make("project:cloud-launch");
 const instanceId = ProviderInstanceId.make("fakeCloud");
 const modelSelection = { instanceId, model: "fake" };
@@ -358,13 +357,14 @@ it.effect(
         {
           title: "Cloud",
           message: "Inspect",
+          generateTitle: true,
           standingInstructions: false,
           workspaceStrategy: { type: "worktree", baseRef: "dev", branch: "existing-local-branch" },
         },
         { runtimeMode: "full-access", interactionMode: "default" },
       );
       expect(f.sources).toEqual([{ cwd: "/repo", branch: "dev", restriction: "published-ref" }]);
-      expect(f.launched).toHaveLength(1);
+      expect(f.launched[0]?.generateTitle).toBe(true);
     }).pipe(Effect.provide(f.layer));
   },
 );

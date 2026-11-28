@@ -38,7 +38,7 @@ import * as ManagedRelay from "../relay/managedRelay.ts";
 import { request, subscribeThreadItems } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
-import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
+import { createThreadResumeRetention } from "./threadRetention.ts";
 import { notifyThreadDeleted, threadStateChanges } from "./threadStateAtoms.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
 import { fetchEnvironmentThreadHistoryPage } from "./threadHistoryHttp.ts";
@@ -49,6 +49,7 @@ import {
   EMPTY_THREAD_HISTORY_META,
   isActiveHistoryRequestCursor,
   mergeOlderHistoryIntoProjection,
+  mergeOlderSubagentsIntoProjection,
   type ThreadHistoryMeta,
 } from "./threadHistoryMerge.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
@@ -727,12 +728,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                   {
                     ...latest,
                     data: Option.some(
-                      mergeOlderHistoryIntoProjection(
-                        latest.data.value,
-                        page.items,
-                        workAnchorId === undefined
-                          ? undefined
-                          : { anchorId: workAnchorId, nextCursor: page.nextCursor },
+                      mergeOlderSubagentsIntoProjection(
+                        mergeOlderHistoryIntoProjection(
+                          latest.data.value,
+                          page.items,
+                          workAnchorId === undefined
+                            ? undefined
+                            : { anchorId: workAnchorId, nextCursor: page.nextCursor },
+                        ),
+                        page.subagents,
                       ),
                     ),
                     status:
@@ -1023,23 +1027,16 @@ export function createEnvironmentThreadStateAtoms<R, E>(
 ) {
   // Cache definitions must outlive collectible live-atom definitions. The
   // registry retains these nodes without retaining environment or RPC scopes.
-  const resumeFamily = Atom.family((key: string) =>
-    Atom.make((): ThreadResumeCache => ({
-      snapshot: undefined,
-      owner: undefined,
-    })).pipe(
-      Atom.setIdleTTL(THREAD_SNAPSHOT_IDLE_TTL_MS),
-      Atom.withLabel(`environment-thread-resume:${key}`),
-    ),
-  );
+  const retention = createThreadResumeRetention();
   const family = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
-    const resumeAtom = resumeFamily(key);
+    const resumeAtom = retention.family(key);
     return runtime
       .atom(
         (get) => {
           get.mount(resumeAtom);
           const resume = get.once(resumeAtom);
+          get.addFinalizer(retention.activate(get.registry, resume));
           const live = threadStateChanges(
             makeEnvironmentThreadState,
             environmentId,

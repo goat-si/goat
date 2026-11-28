@@ -2,6 +2,7 @@ import {
   CommandId,
   ThreadId,
   type OrchestrationV2ThreadShell,
+  type PullRequestChecksState,
   type PullRequestUnavailableError,
 } from "@goat/contracts";
 import * as Cause from "effect/Cause";
@@ -70,7 +71,11 @@ export class PullRequestWatchService extends Context.Service<
       readonly target: PullRequestTarget;
       readonly watching: boolean;
     }) => Effect.Effect<
-      ResolvedTarget & { readonly watching: boolean; readonly wasWatching: boolean },
+      ResolvedTarget & {
+        readonly watching: boolean;
+        readonly wasWatching: boolean;
+        readonly checksState?: PullRequestChecksState;
+      },
       | PullRequestWatchFailedError
       | PullRequestNotOpenError
       | PullRequestWatchFromSubagentError
@@ -123,8 +128,9 @@ const make = Effect.gen(function* () {
     if (watching && before?.snapshot?.state === "merged") {
       return yield* new PullRequestNotOpenError({ state: "merged" });
     }
+    let checksState: PullRequestChecksState | undefined;
     if (watching && before?.watch === undefined) {
-      yield* pullRequests
+      const summary = yield* pullRequests
         .summary(
           {
             projectId: thread.projectId,
@@ -136,16 +142,16 @@ const make = Effect.gen(function* () {
           { recoverTransientFailure: false, bypassCache: true },
         )
         .pipe(
-          Effect.flatMap((summary) =>
-            summary.state === "merged"
-              ? Effect.fail(new PullRequestNotOpenError({ state: "merged" }))
-              : Effect.void,
+          Effect.filterOrFail(
+            (summary) => summary.state !== "merged",
+            () => new PullRequestNotOpenError({ state: "merged" }),
           ),
           Effect.catchTags({
             // Host and transport errors can recover while the watch is active.
-            PullRequestOperationError: () => Effect.void,
+            PullRequestOperationError: () => Effect.undefined,
           }),
         );
+      checksState = summary?.checksState ?? undefined;
     }
     const uuid = yield* random.uuidV4().pipe(Effect.orDie);
     yield* engine
@@ -171,6 +177,7 @@ const make = Effect.gen(function* () {
       ...target,
       watching: watchedLink(after)?.watch !== undefined,
       wasWatching: before?.watch !== undefined,
+      ...(checksState !== undefined ? { checksState } : {}),
     };
   });
 

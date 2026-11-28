@@ -79,7 +79,10 @@ export async function findFileLinkTarget(input: {
       match =
         otherRoots.length === 0
           ? null
-          : pickProjectLinkMatch(relativePath, await Promise.all(otherRoots.map(searchRoot)));
+          : pickProjectLinkMatch(relativePath, [
+              own,
+              ...(await Promise.all(otherRoots.map(searchRoot))),
+            ]);
     }
     if (!match || match === relativePath || signal.aborted) return relativePath;
     const metadata = await executeAtomQuery(

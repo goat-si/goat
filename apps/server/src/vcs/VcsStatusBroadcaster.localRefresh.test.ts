@@ -21,6 +21,26 @@ import {
 } from "./vcsStatusBroadcaster.testkit.ts";
 
 describe("VcsStatusBroadcaster local-only refresh", () => {
+  it.effect("turn-end PR lookup reuses the preceding divergence read once", () => {
+    const state: Parameters<typeof layerTestFor>[0] = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: remoteStatusWithPr,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+      remoteStatusReusedDetails: [],
+    };
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      yield* broadcaster.getStatus({ cwd: "/repo" });
+      yield* broadcaster.refreshLocalStatus("/repo");
+      yield* broadcaster.refreshPullRequestStatus("/repo");
+      yield* broadcaster.refreshPullRequestStatus("/repo");
+      assert.deepStrictEqual(state.remoteStatusReusedDetails, [false, true, false]);
+    }).pipe(Effect.provide(layerTestFor(state)));
+  });
+
   it.effect("a local-only refresh that overlaps the first remote poll keeps its PR", () => {
     const state: Parameters<typeof layerTestFor>[0] = {
       currentLocalStatus: baseLocalStatus,

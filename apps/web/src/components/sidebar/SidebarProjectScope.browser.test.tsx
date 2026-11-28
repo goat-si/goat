@@ -42,6 +42,7 @@ function ScopeFixture({ projectGroups = groups }: { projectGroups?: typeof group
       <SidebarProvider>
         <div>
           <SidebarProjectScope
+            onAddProject={() => {}}
             projectGroups={projectGroups}
             scopedProjectGroups={projectGroups.filter((group) => keys.includes(group.projectKey))}
             projectScopeKeys={keys}

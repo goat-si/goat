@@ -33,7 +33,7 @@ export function useSidebarSnooze(timestampFormat: TimestampFormat) {
     /** The environment's presets are read when the menu opens. */
     resolveSnoozePresets: (now: Date, environmentId: EnvironmentId) =>
       resolveSharedSnoozePresets(now, {
-        ...snoozeOptions(timestampFormat, environmentId),
+        ...snoozeOptions(timestampFormat, environmentId, locale),
         locale,
         formatLabel,
       }),
@@ -46,7 +46,7 @@ export function useSidebarSnooze(timestampFormat: TimestampFormat) {
         shown,
         id,
         now: new Date(),
-        ...snoozeOptions(timestampFormat, environmentId),
+        ...snoozeOptions(timestampFormat, environmentId, locale),
       });
       if (!picked) {
         toastManager.add({
@@ -60,12 +60,16 @@ export function useSidebarSnooze(timestampFormat: TimestampFormat) {
   };
 }
 
-function snoozeOptions(timestampFormat: TimestampFormat, environmentId: EnvironmentId) {
+function snoozeOptions(
+  timestampFormat: TimestampFormat,
+  environmentId: EnvironmentId,
+  locale: string,
+) {
   const presets = appAtomRegistry.get(
     serverEnvironment.settingsValueAtom(environmentId),
   )?.snoozePresets;
   return {
     ...(presets ? { presets } : {}),
-    formatTime: (date: Date) => formatShortTimestamp(date.toISOString(), timestampFormat),
+    formatTime: (date: Date) => formatShortTimestamp(date.toISOString(), timestampFormat, locale),
   };
 }

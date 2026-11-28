@@ -1,3 +1,4 @@
+import { logMissingWorktreeSettleScript } from "./settlementMissingWorktree.ts";
 import { isPendingApprovalRequest } from "@goat/contracts";
 import {
   backgroundWorkHoldsCompletion,
@@ -832,7 +833,11 @@ export const make = Effect.gen(function* () {
       if (settled.settledOverride !== "settled") return;
       yield* terminals.closeOnSettle({ threadId });
       const worktreePath = settled.worktreePath;
-      if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
+      if (worktreePath === null) return;
+      if (!(yield* fileSystem.exists(worktreePath))) {
+        yield* logMissingWorktreeSettleScript(settled, worktreePath, projectStore, settingsService);
+        return;
+      }
       // Recheck after closing and worktree I/O; re-engaged threads must not be cleaned up.
       const thread = yield* readThreadMetadata(threadId);
       if (thread.settledOverride !== "settled") return;

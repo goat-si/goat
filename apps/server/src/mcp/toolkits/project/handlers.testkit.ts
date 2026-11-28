@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   type ModelSelection,
   type Project as ProjectRecord,
+  type ProjectScript,
   type RuntimeMode,
   type ServerProvider,
 } from "@goat/contracts";
@@ -108,6 +109,7 @@ export const clientLaunchHarness = (input: {
   readonly defaultRuntimeMode?: RuntimeMode;
   /** Where Settings saves a project's model; the legacy project field stays null. */
   readonly overrideModel?: ModelSelection;
+  readonly overrideScripts?: ProjectScript[];
   readonly launched: Array<ThreadLaunch.ThreadLaunchInput>;
   readonly workspaceRoot?: string;
   readonly checkWorktreeBase?: ThreadLaunch.ThreadLaunchService["Service"]["checkWorktreeBase"];
@@ -124,12 +126,19 @@ export const clientLaunchHarness = (input: {
       ...(input.defaultRuntimeMode === undefined
         ? {}
         : { defaultRuntimeMode: input.defaultRuntimeMode }),
-      ...(input.overrideModel === undefined
+      ...(input.overrideModel === undefined && input.overrideScripts === undefined
         ? {}
         : {
             projectSettingsFolded: true,
             projectSettingsOverrides: {
-              [projectId]: { defaultModelSelection: input.overrideModel },
+              [projectId]: {
+                ...(input.overrideModel === undefined
+                  ? {}
+                  : { defaultModelSelection: input.overrideModel }),
+                ...(input.overrideScripts === undefined
+                  ? {}
+                  : { defaultProjectScripts: input.overrideScripts }),
+              },
             },
           }),
     }),

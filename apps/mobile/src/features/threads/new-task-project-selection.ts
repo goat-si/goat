@@ -1,3 +1,4 @@
+import { isRepositoryRootProject } from "@goat/client-runtime/state/project-grouping";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { repositoryGroupingKeyOf, type EnvironmentId } from "@goat/contracts";
 import { fileBasename } from "@goat/shared/path";
@@ -21,8 +22,12 @@ export function getProjectScopeSelectionTarget(
   connectedEnvironmentIds: ReadonlySet<EnvironmentId>,
 ): EnvironmentProject {
   const rank = (project: EnvironmentProject) =>
-    project.environmentId === preferredEnvironmentId ? 0 : project === scope.representative ? 1 : 2;
-  const ordered = [...scope.projects].sort((left, right) => rank(left) - rank(right));
+    project.environmentId === preferredEnvironmentId ? 0 : 1;
+  const ordered = [...scope.projects].sort(
+    (left, right) =>
+      rank(left) - rank(right) ||
+      Number(isRepositoryRootProject(right)) - Number(isRepositoryRootProject(left)),
+  );
   return (
     ordered.find((project) => connectedEnvironmentIds.has(project.environmentId)) ??
     ordered[0] ??

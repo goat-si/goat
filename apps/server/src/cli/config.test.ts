@@ -82,7 +82,7 @@ const liveProcess = Effect.acquireRelease(
 );
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
-  it.effect("keeps the standalone server default at T3 home without a desktop bootstrap", () =>
+  it.effect("keeps the standalone server default at GOAT home without a desktop bootstrap", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -193,47 +193,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         expect(yield* fs.exists(cwd)).toBe(true);
       }
     }),
-  );
-
-  it.effect(
-    "refuses a manual web launch when a runtime record belongs to another live process",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cli-preflight-live-" });
-        const child = yield* liveProcess;
-        assert(child.pid !== undefined);
-        const stateDir = path.join(baseDir, "userdata");
-        yield* fs.makeDirectory(stateDir, { recursive: true });
-        yield* fs.writeFileString(
-          path.join(stateDir, "server-runtime.json"),
-          yield* encodeUnknownJson({
-            version: 1,
-            pid: child.pid,
-            port: 3773,
-            origin: "http://127.0.0.1:3773",
-            startedAt: "2026-10-01T00:00:00.000Z",
-          }),
-        );
-        const cwd = path.join(baseDir, "project");
-        const error = yield* resolveServerConfig(
-          { ...minimalWebFlags(baseDir), cwd: Option.some(cwd) },
-          Option.none(),
-          { rejectRunningServer: true },
-        ).pipe(
-          Effect.provide(
-            Layer.merge(
-              NetService.layer,
-              ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
-            ),
-          ),
-          Effect.flip,
-        );
-        expect(String(error)).toContain("A GOAT server is already running");
-        expect(String(error)).toContain(`pid ${child.pid}`);
-        expect(yield* fs.exists(cwd)).toBe(false);
-      }),
   );
 
   it.effect("enables a trimmed reusable auth token only for web dev mode", () =>

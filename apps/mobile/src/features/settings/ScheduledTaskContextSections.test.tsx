@@ -113,6 +113,7 @@ async function renderSections(goatBotRoutine: boolean) {
         saving={false}
         locked={false}
         onPickModel={vi.fn()}
+        baseBranch="main"
         onPickBranch={vi.fn()}
       />,
     );
@@ -164,6 +165,7 @@ function Editor({ initial, threadModes }: { initial: ScheduledTaskDraft; threadM
         saving={false}
         locked={false}
         onPickModel={vi.fn()}
+        baseBranch="main"
         onPickBranch={vi.fn()}
       />
       <ScheduledTaskNotificationPolicySection

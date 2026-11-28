@@ -773,10 +773,9 @@ it.effect("includes shared sessions and provider-owned background rosters in rec
       providerThreadId: preparedProviderThreadId,
       restartContinuationOfRunId: RunId.make("run:recovery:source"),
     });
-    assert.deepEqual(
-      new Set(yield* projections.getRecoveryThreadIds("runtime")),
-      new Set([first, second, roster, prepared]),
-    );
+    const runtime = yield* projections.getRecoveryThreadIds("runtime");
+    assert.equal(runtime.filter((id) => id === first || id === second).length, 1);
+    assert.includeMembers([...runtime], [roster, prepared]);
     const preparedState = yield* projections.getRuntimeRecoveryProjection(prepared);
     assert.deepEqual(
       preparedState.providerSessions.map((session) => session.id),

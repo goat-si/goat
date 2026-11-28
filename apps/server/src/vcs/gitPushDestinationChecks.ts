@@ -84,7 +84,7 @@ export const resolveGonePushDestination = Effect.fn("GitVcsDriver.resolveGonePus
       branch: string,
       fallback: string | null,
     ) => Effect.Effect<string | null, GitCommandError>,
-    resolveBranch: (cwd: string, branch: string) => Effect.Effect<string>,
+    resolveBranch: (cwd: string, branch: string, remote: string) => Effect.Effect<string>,
   ) {
     const mergeRef = yield* readConfig(cwd, `branch.${branch}.merge`);
     const mergeBranch = mergeRef?.startsWith("refs/heads/")
@@ -106,7 +106,7 @@ export const resolveGonePushDestination = Effect.fn("GitVcsDriver.resolveGonePus
       ? gone.branchName
       : configuredRemoteName === "."
         ? branch
-        : yield* resolveBranch(cwd, branch);
+        : yield* resolveBranch(cwd, branch, remoteName);
     return {
       remoteName,
       branchName,

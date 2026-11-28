@@ -76,5 +76,8 @@ export async function findChatFileLinkMatch(input: {
     });
     if (metadata._tag !== "Success" || metadata.value.entries[0] !== null) return null;
   }
-  return pickProjectLinkMatch(workspaceRelativePath, await Promise.all(otherRoots.map(searchRoot)));
+  return pickProjectLinkMatch(workspaceRelativePath, [
+    own,
+    ...(await Promise.all(otherRoots.map(searchRoot))),
+  ]);
 }

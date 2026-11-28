@@ -84,6 +84,7 @@ describe("VcsStatusBroadcaster", () => {
         currentRemoteStatus: { ...remoteStatusWithPr, aheadCount: 2, behindCount: 3 },
         localStatusCalls: 0,
         remoteStatusCalls: 0,
+        refSnapshot: "refs",
         localInvalidationCalls: 0,
         remoteInvalidationCalls: 0,
       };
@@ -91,7 +92,10 @@ describe("VcsStatusBroadcaster", () => {
       return Effect.gen(function* () {
         const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
         const initial = yield* broadcaster.getStatus({ cwd: "/repo" });
-        const refreshed = yield* broadcaster.refreshStatus("/repo", { localOnly: true });
+        const { refsDigest, ...refreshed } = yield* broadcaster.refreshStatus("/repo", {
+          localOnly: true,
+        });
+        assert.isString(refsDigest);
         assert.deepStrictEqual(refreshed, initial);
         assert.deepStrictEqual(yield* broadcaster.getStatus({ cwd: "/repo" }), refreshed);
         assert.equal(state.localInvalidationCalls, 1);

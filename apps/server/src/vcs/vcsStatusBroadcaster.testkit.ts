@@ -12,6 +12,7 @@ import type { BackgroundScope, VcsStatusLocalResult, VcsStatusRemoteResult } fro
 import { GitManagerError } from "@goat/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
+import { VcsRefSnapshot } from "./VcsRefSnapshot.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
@@ -53,12 +54,14 @@ export const remoteStatusWithPr: VcsStatusRemoteResult = {
 export function layerTestFor(state: {
   currentLocalStatus: VcsStatusLocalResult;
   currentRemoteStatus: VcsStatusRemoteResult | null;
+  refSnapshot?: string | null;
   currentDivergence?: Pick<VcsStatusRemoteResult, "aheadCount" | "behindCount">;
   localStatusCalls: number;
   remoteStatusCalls: number;
   localInvalidationCalls: number;
   remoteInvalidationCalls: number;
   remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  remoteStatusReusedDetails?: Array<boolean>;
   localStatusBranchChanges?: Array<boolean>;
   remoteStatusError?: GitManagerError;
   backgroundWorkEnabled?: boolean;
@@ -75,7 +78,15 @@ export function layerTestFor(state: {
   fileSystem?: FileSystem.FileSystem;
   pullCurrentBranch?: GitWorkflowService.GitWorkflowService["Service"]["pullCurrentBranch"];
 }) {
-  return VcsStatusBroadcaster.layer.pipe(
+  const broadcasterLayer =
+    "refSnapshot" in state
+      ? VcsStatusBroadcaster.layer.pipe(
+          Layer.provide(
+            Layer.succeed(VcsRefSnapshot, () => Effect.sync(() => state.refSnapshot ?? null)),
+          ),
+        )
+      : VcsStatusBroadcaster.layer;
+  return broadcasterLayer.pipe(
     Layer.provideMerge(
       state.fileSystem
         ? Layer.merge(Layer.succeed(FileSystem.FileSystem, state.fileSystem), Path.layer)
@@ -125,15 +136,29 @@ export function layerTestFor(state: {
             () => state.branchRead?.() ?? Effect.succeed(state.currentLocalStatus.refName),
           ),
         upstreamDivergence: () =>
-          Effect.sync(() =>
-            state.currentRemoteStatus?.hasUpstream && state.currentLocalStatus.refName !== null
-              ? {
-                  refName: state.currentLocalStatus.refName,
-                  aheadCount: (state.currentDivergence ?? state.currentRemoteStatus).aheadCount,
-                  behindCount: (state.currentDivergence ?? state.currentRemoteStatus).behindCount,
-                }
-              : null,
-          ),
+          Effect.sync(() => {
+            const branch = state.currentLocalStatus.refName;
+            if (!state.currentRemoteStatus?.hasUpstream || branch === null) return null;
+            const { aheadCount, behindCount } =
+              state.currentDivergence ?? state.currentRemoteStatus;
+            return {
+              refName: branch,
+              aheadCount,
+              behindCount,
+              details: {
+                isRepo: true,
+                hasPrimaryRemote: true,
+                defaultBranch: "main",
+                isDefaultBranch: false,
+                branch,
+                upstreamRef: `origin/${branch}`,
+                hasUpstream: true,
+                aheadCount,
+                behindCount,
+                aheadOfDefaultCount: aheadCount,
+              },
+            };
+          }),
         remoteStatus: (input, options) =>
           Effect.suspend(() => {
             return (state.beforeRemoteStatus ?? Effect.void).pipe(
@@ -141,6 +166,7 @@ export function layerTestFor(state: {
                 Effect.sync(() => {
                   state.remoteStatusCalls += 1;
                   state.remoteStatusRefreshUpstreamValues?.push(options?.refreshUpstream);
+                  state.remoteStatusReusedDetails?.push(options?.statusDetails !== undefined);
                   return state.currentRemoteStatus;
                 }),
               ),

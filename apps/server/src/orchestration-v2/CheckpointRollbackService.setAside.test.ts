@@ -130,6 +130,7 @@ const rollBackOverLeftover = (row: Row) =>
     const projection = {
       thread: {
         id: threadId,
+        deletedAt: null,
         projectId,
         worktreePath,
         branch,

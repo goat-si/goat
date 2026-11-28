@@ -3,6 +3,10 @@ import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
+const ReviewMergeBase = Schema.String.check(
+  Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64}|HEAD)$/),
+);
+
 export const ReviewDiffPreviewSourceKind = Schema.Literals([
   "working-tree",
   "branch-range",
@@ -16,6 +20,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
   /** Read only this comparison. Omitted for legacy clients requesting both original views. */
   scope: Schema.optionalKey(ReviewDiffPreviewSourceKind),
   baseRef: Schema.optional(TrimmedNonEmptyString),
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   metadataOnly: Schema.optionalKey(Schema.Boolean),
   trackedOnly: Schema.optionalKey(Schema.Boolean),
@@ -23,6 +28,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
+      changeType: Schema.optionalKey(Schema.String),
       sourceKind: ReviewDiffPreviewSourceKind,
     }),
   ),
@@ -61,6 +67,7 @@ export const ReviewDiffPreviewSource = Schema.Struct({
   title: TrimmedNonEmptyString,
   baseRef: Schema.NullOr(TrimmedNonEmptyString),
   headRef: Schema.NullOr(TrimmedNonEmptyString),
+  mergeBase: Schema.optionalKey(ReviewMergeBase),
   diff: Schema.String,
   diffHash: TrimmedNonEmptyString,
   truncated: Schema.Boolean,

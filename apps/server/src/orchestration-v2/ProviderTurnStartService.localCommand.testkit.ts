@@ -64,6 +64,7 @@ export const layerWorktreeLocation = (
 export function makeLocalCommandHarness(input: {
   readonly oomKilled?: boolean;
   readonly text: string;
+  readonly sideChatParentMissing?: boolean;
   readonly ensureCodexAdmission?: CodexSurvivors.CodexSurvivors["Service"]["ensureAdmission"];
   readonly worktreePath?: string;
   /** Where the thread points by the time the start takes its workspace lease. */
@@ -726,21 +727,25 @@ export function makeLocalCommandHarness(input: {
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
           getThreadShell: () =>
-            Effect.succeed({
-              ...projection.thread,
-              ...(input.reboundWorktreePath === undefined
-                ? {}
-                : { worktreePath: input.reboundWorktreePath }),
-              activityRunStatus: "running" as const,
-              activeRunId:
-                input.memory?.currentRun === undefined
-                  ? runId
-                  : (input.memory.currentRun() ?? null),
-            } as NonNullable<
-              Effect.Success<
-                ReturnType<ProjectionStore.ProjectionStoreV2["Service"]["getThreadShell"]>
-              >
-            >),
+            Effect.succeed(
+              input.sideChatParentMissing
+                ? null
+                : ({
+                    ...projection.thread,
+                    ...(input.reboundWorktreePath === undefined
+                      ? {}
+                      : { worktreePath: input.reboundWorktreePath }),
+                    activityRunStatus: "running" as const,
+                    activeRunId:
+                      input.memory?.currentRun === undefined
+                        ? runId
+                        : (input.memory.currentRun() ?? null),
+                  } as NonNullable<
+                    Effect.Success<
+                      ReturnType<ProjectionStore.ProjectionStoreV2["Service"]["getThreadShell"]>
+                    >
+                  >),
+            ),
           getThreadRecords,
           getTurnStartContext,
           getRuntimeRecoveryProjection,

@@ -6,6 +6,7 @@ export const GIT_FOR_WINDOWS_BUILDS = ["ucrt64", "clangarm64", "mingw64", "mingw
 // `*` is one argument that is not an option. These forms read refs or config
 // only, so git starts no hook, helper, pager, editor or lazy fetch for them.
 const CONSOLE_FREE_GIT_READS = [
+  "rev-parse --path-format=absolute --git-path index --git-common-dir --show-toplevel",
   "rev-parse --git-path index",
   "rev-parse --git-common-dir",
   "rev-parse --show-toplevel",

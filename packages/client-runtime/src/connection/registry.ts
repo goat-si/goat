@@ -27,6 +27,7 @@ import {
 import * as ConnectionCredentialStore from "./credentialStore.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
 import * as Connectivity from "./connectivity.ts";
+import { makeEnvironmentEstablishmentSlots } from "./establishmentGate.ts";
 import type {
   ConnectionAttemptError,
   ConnectionTarget,
@@ -44,6 +45,7 @@ import { makeLeaseLock } from "./registryLeaseLock.ts";
 import { withRoutes } from "./registryRoutes.ts";
 import {
   PullRequestRoutingPermissions,
+  forgetRoutingTrust,
   pullRequestRoutingConnectionKey,
 } from "./pullRequestRoutingPermissions.ts";
 import {
@@ -268,6 +270,7 @@ export const make = Effect.gen(function* () {
   );
   const started = yield* Ref.make(false);
   const withLeaseLock = yield* makeLeaseLock;
+  const establishmentSlot = makeEnvironmentEstablishmentSlots();
 
   const getEntry = Effect.fn("EnvironmentRegistry.getEntry")(function* (
     environmentId: EnvironmentId,
@@ -305,6 +308,7 @@ export const make = Effect.gen(function* () {
             // Seed the intent to avoid publishing a false switched-off state
             // before an enabled, compatible environment starts connecting.
             initiallyDesired: entry.enabled && entry.unsupportedReason === undefined,
+            establishmentSlot: establishmentSlot(entry),
             learnRoutes: (input) => learnRoutes({ environmentId, ...input }),
           }).pipe(
             Effect.provideService(Connectivity.Connectivity, connectivity),
@@ -449,20 +453,6 @@ export const make = Effect.gen(function* () {
     yield* createServiceScope(entry);
   });
 
-  const forgetRoutingTrust = (
-    environmentId: EnvironmentId,
-    operation: "register-connection" | "set-connection-routes",
-  ) =>
-    pullRequestRoutingPermissions.forget(environmentId).pipe(
-      Effect.mapError(
-        (error) =>
-          new Persistence.ConnectionPersistenceError({
-            operation,
-            message: error.message,
-          }),
-      ),
-    );
-
   const persistedRoutes = (entry: ConnectionCatalogEntry) =>
     connectionRoutes(entry).map((route) => route.target as PersistedConnectionTarget);
 
@@ -506,7 +496,11 @@ export const make = Effect.gen(function* () {
           );
           const next = withRoutes(previous, upsertRoute(routes, route));
           if (next.addressesChanged) {
-            yield* forgetRoutingTrust(environmentId, "register-connection");
+            yield* forgetRoutingTrust(
+              pullRequestRoutingPermissions,
+              environmentId,
+              "register-connection",
+            );
           }
           entry = next.entry;
         }
@@ -527,7 +521,11 @@ export const make = Effect.gen(function* () {
     const environmentId = previous.target.environmentId;
     const next = withRoutes(previous, routes);
     if (next.addressesChanged) {
-      yield* forgetRoutingTrust(environmentId, "set-connection-routes");
+      yield* forgetRoutingTrust(
+        pullRequestRoutingPermissions,
+        environmentId,
+        "set-connection-routes",
+      );
     }
     yield* registrations.setRoutes(environmentId, persistedRoutes(next.entry));
     yield* installEntryLocked(next.entry);

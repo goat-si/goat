@@ -2,7 +2,7 @@ import { isProviderSkillUserInvocable } from "@goat/client-runtime/providerSkill
 import type { ServerProviderSkill } from "@goat/contracts";
 import { assistantCitationLabel } from "@goat/shared/assistantCitations";
 import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
-import { fileBasename } from "@goat/shared/path";
+import { fileDisplayName } from "@goat/shared/path";
 import { turnCapabilityForContextId } from "@goat/shared/turnCapabilities";
 import {
   CircleDashedIcon,
@@ -120,7 +120,7 @@ export function CollapsedComposerPromptPreview(props: PreviewProps) {
             key={key}
             kind="mention"
             icon={<PierreEntryIcon pathValue={segment.path} kind="file" theme={props.theme} />}
-            label={fileBasename(segment.path)}
+            label={fileDisplayName(segment.path)}
           />
         );
       case "context-reference": {

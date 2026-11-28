@@ -1,3 +1,9 @@
+import {
+  isComposerEmpty,
+  useComposerHasAttachments,
+  useComposerHasSshAttachments,
+  useComposerNonPromptContent,
+} from "./chat/composerEmpty";
 import { threadHasStarted } from "../lib/chatThreadActions";
 import { useComposerDraftModelState } from "../composerModelState";
 import { isThreadEnvironmentLocked } from "./chat/threadEnvironmentLock";
@@ -222,7 +228,6 @@ import {
   useSidebarPendingFileDropStore,
 } from "../sidebarPendingFileDropStore";
 import {
-  composerDraftHasUserContent,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -315,12 +320,7 @@ import {
   shouldShowProviderStatusBanner,
   useProviderStatusBannerDismissed,
 } from "./chat/ProviderStatusBanner";
-import {
-  getThreadErrorBannerKey,
-  resolveThreadErrorBanner,
-  isThreadErrorBannerDismissedForSession,
-  shouldShowThreadErrorBanner,
-} from "./chat/ThreadErrorBanner";
+import { resolveThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { QueuedRunsControl, type QueuedRunsControlHandle } from "./chat/QueuedRunsControl";
 import { useThreadLinkedPullRequest } from "./pullRequest/useThreadLinkedPullRequest";
 import { useProactivePanels } from "../hooks/useProactivePanels";
@@ -568,20 +568,8 @@ export default function ChatView(props: ChatViewProps) {
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
-  const composerHasAttachments = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return (draft?.images.length ?? 0) > 0 || (draft?.files.length ?? 0) > 0;
-  });
-  const composerHasSshAttachments = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return (
-      draft != null &&
-      (draft.images.length > 0 ||
-        draft.files.length > 0 ||
-        draft.nonPersistedImageIds.length > 0 ||
-        draft.persistedAttachments.length > 0)
-    );
-  });
+  const composerHasAttachments = useComposerHasAttachments(composerDraftTarget);
+  const composerHasSshAttachments = useComposerHasSshAttachments(composerDraftTarget);
   const referencedThreadContexts = useComposerDraftStore(
     useShallow((store) => {
       const draft = store.getComposerDraft(composerDraftTarget);
@@ -591,10 +579,7 @@ export default function ChatView(props: ChatViewProps) {
       return draft.threadContexts.filter((record) => referenced.has(record.contextId));
     }),
   );
-  const composerHasNonPromptContent = useComposerDraftStore((store) => {
-    const draft = store.getComposerDraft(composerDraftTarget);
-    return draft ? composerDraftHasUserContent({ ...draft, prompt: "" }) : false;
-  });
+  const composerHasNonPromptContent = useComposerNonPromptContent(composerDraftTarget);
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
@@ -868,20 +853,18 @@ export default function ChatView(props: ChatViewProps) {
           threadId: parentSubagentThreadRef.threadId,
           title: parentSubagentThread?.title ?? "Parent thread",
         };
-  const { threadError, sessionDismissal } = resolveThreadErrorBanner(
+  const {
+    key: threadErrorBannerKey,
+    error: threadError,
+    visible: visibleThreadError,
+  } = resolveThreadErrorBanner({
+    threadKey: routeThreadKey,
     isServerThread,
     localServerError,
     localDraftError,
-    serverRuntime?.lastError ?? null,
-  );
-  const threadErrorBannerKey = getThreadErrorBannerKey(routeThreadKey, sessionDismissal);
-  const visibleThreadError = shouldShowThreadErrorBanner(
-    routeThreadKey,
-    threadError,
-    isThreadErrorBannerDismissedForSession(threadErrorBannerKey),
-  )
-    ? threadError
-    : null;
+    runtimeError: serverRuntime?.lastError ?? null,
+    runtimeSource: serverRuntime?.lastErrorSource ?? null,
+  });
   const [, setThreadErrorBannerDismissTick] = useState(0);
   const threadErrorIsServerRuntimeError =
     localServerError === null && visibleThreadError === serverRuntime?.lastError;
@@ -2761,6 +2744,12 @@ export default function ChatView(props: ChatViewProps) {
     composerFocus: document.activeElement?.getAttribute("data-testid") === "composer-editor",
     draftThreadRoute: routeKind === "draft",
     turnRunning: phase === "running",
+    composerEmpty: isComposerEmpty(
+      queuedRunEdit.isEditing,
+      pendingUserInputs.length,
+      composerHasNonPromptContent,
+      promptRef.current,
+    ),
     composerRequiresModifier: composerRequiresModifier(settings.sendShortcut, promptRef.current),
     isWeb: !isElectron,
     isDesktop: isElectron,

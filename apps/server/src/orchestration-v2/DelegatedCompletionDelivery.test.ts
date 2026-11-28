@@ -1,3 +1,4 @@
+import { completionTask } from "./test/completionTask.ts";
 import {
   reconcileCommandId,
   runEvent,
@@ -557,7 +558,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
           runId,
           nodeId: id,
           occurredAt: now,
-          payload: { ...task, id, result, status, title: "Inspect regression" },
+          payload: completionTask(task, id, result, status),
         })),
       });
       yield* orchestrator.dispatch({
@@ -583,7 +584,7 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
       const deferredTaskId = testCase.inlineFirst ? secondTaskId : firstTaskId;
       assert.include(
         message.text,
-        `Delegated task ${deferredTaskId} (Inspect regression) [${testCase.inlineFirst ? "cancelled" : "failed"}]`,
+        `Delegated task ${deferredTaskId} (Inspect regression) in child thread thread:inline-budget-child:${deferredTaskId} [${testCase.inlineFirst ? "cancelled" : "failed"}]`,
       );
       assert.include(message.text, `args: {taskId: "${deferredTaskId}"}`);
       assert.deepEqual(message.delegatedCompletion?.taskIds, [firstTaskId, secondTaskId]);
@@ -898,7 +899,6 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
           deliveryState: "acknowledged",
           now,
         });
-        // A delegated child with a running task on the parent and a running run of its own.
         const delegate = (name: string) =>
           Effect.gen(function* () {
             const taskId = NodeId.make(`node:late-settle-${key}-${name}`);

@@ -30,6 +30,7 @@ import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -39,14 +40,12 @@ import type {
   RelayManagedEndpointOrigin,
   RelayManagedEndpointRuntimeConfig,
 } from "@goat/contracts/relay";
-
 import * as RelayConfiguration from "../Config.ts";
 import { managedEndpointForHostname } from "../deploymentConfig.ts";
 import * as CloudflareApiPause from "./CloudflareApiPause.ts";
 import * as ManagedEndpointAllocations from "./ManagedEndpointAllocations.ts";
 import * as ManagedEndpointCleanup from "./ManagedEndpointCleanup.ts";
 import * as ManagedTunnelLimits from "./ManagedTunnelLimits.ts";
-
 export class ManagedEndpointProvisioningNotConfigured extends Schema.TaggedError<ManagedEndpointProvisioningNotConfigured>()(
   "ManagedEndpointProvisioningNotConfigured",
   {
@@ -61,7 +60,6 @@ export class ManagedEndpointProvisioningNotConfigured extends Schema.TaggedError
     return `Managed endpoint provisioning is not configured for user '${this.userId}', environment '${this.environmentId}': missing ${this.missingSettings.join(", ")}`;
   }
 }
-
 const ManagedEndpointProvisioningStage = Schema.Literals([
   "derive-environment-hash",
   "check-tunnel-limit",
@@ -79,7 +77,6 @@ const ManagedEndpointProvisioningStage = Schema.Literals([
   "verify-tunnel",
   "sync-origin",
 ]);
-
 const ManagedEndpointProvisioningFailureReason = Schema.Literals([
   "claim-lost",
   "endpoint-mismatch",
@@ -268,7 +265,10 @@ export class ManagedEndpointTunnelClient extends Context.Service<
     readonly get: (
       tunnelId: string,
     ) => Effect.Effect<ManagedEndpointTunnel, ManagedEndpointTunnelClientError>;
-    readonly list: (request: ManagedEndpointTunnelListRequest) => Effect.Effect<
+    readonly list: (
+      request: ManagedEndpointTunnelListRequest,
+      options?: { readonly timeout?: Duration.Input },
+    ) => Effect.Effect<
       {
         readonly result: ReadonlyArray<ManagedEndpointTunnel>;
         readonly resultInfo?: {
@@ -1509,8 +1509,8 @@ export const layerCloudflareBindings = (
                       }),
                   ),
                 ),
-              list: (request) =>
-                gate(tunnelClient.list(request)).pipe(
+              list: (request, options) =>
+                gate(tunnelClient.list(request), options?.timeout).pipe(
                   Effect.mapError(
                     (cause) =>
                       new ManagedEndpointTunnelClientError({

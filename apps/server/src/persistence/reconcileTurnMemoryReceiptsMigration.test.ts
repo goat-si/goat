@@ -18,11 +18,10 @@ const readReceipts = Effect.gen(function* () {
 it.effect("appends turn receipts to an up-to-date dev ledger", () =>
   Effect.gen(function* () {
     yield* runMigrations({ toMigrationInclusive: 184 });
-    assert.deepStrictEqual(yield* runMigrations(), [
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 185 }), [
       [185, "TurnMemoryReceipts"],
-      [186, "ConversationMemoryPolicy"],
-      [187, "ConversationMemoryExcludedMessages"],
     ]);
+    yield* runMigrations();
     assert.deepStrictEqual(yield* readLedger, migrationManifest);
     assert.deepStrictEqual(yield* readReceipts, []);
     assert.deepStrictEqual(yield* runMigrations(), []);

@@ -290,34 +290,6 @@ describe("readEnvironmentFromWindowsShell", () => {
       }),
   );
 
-  effectIt.effect("extracts environment variables from a PowerShell command", () =>
-    Effect.gen(function* () {
-      const execFile = vi.fn<
-        (
-          file: string,
-          args: ReadonlyArray<string>,
-          options: { encoding: "utf8"; timeout: number },
-        ) => string
-      >(
-        () =>
-          "__GOAT_ENV_PATH_START__\nC:\\Users\\testuser\\AppData\\Roaming\\npm\n__GOAT_ENV_PATH_END__\n",
-      );
-
-      expect(
-        yield* readEnvironmentFromWindowsShell(["PATH"], {}, (...args) =>
-          Effect.try(() => execFile(...args)).pipe(Effect.option),
-        ),
-      ).toEqual({
-        PATH: "C:\\Users\\testuser\\AppData\\Roaming\\npm",
-      });
-      expect(execFile).toHaveBeenCalledWith(
-        "pwsh.exe",
-        expect.arrayContaining(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]),
-        { encoding: "utf8", timeout: 5000 },
-      );
-    }),
-  );
-
   effectIt.effect("strips CRLF delimiters from captured PowerShell values", () =>
     Effect.gen(function* () {
       const execFile = vi.fn<

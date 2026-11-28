@@ -43,6 +43,7 @@ import * as CloudMachineService from "../cloudMachines/CloudMachineService.ts";
 import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as RemoteDispatchCoordinator from "../remoteReports/RemoteDispatchCoordinator.ts";
 import * as RepositoryLaunchMcpService from "./RepositoryLaunchMcpService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const scope = (
   access: "read-only" | "full-access" = "full-access",
@@ -95,7 +96,12 @@ const toolkitFixture = Effect.gen(function* () {
     McpHttpServer.toolkitRegistration(ProjectToolkit, ProjectHandlers.layer),
     McpHttpServer.toolkitRegistration(SshToolkit, SshHandlers.layer),
   ).pipe(
-    Layer.provide(Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest()))),
+    Layer.provide(
+      Layer.merge(
+        ServerSettings.layerTest(),
+        Profiles.layer.pipe(Layer.provide(PermissionSettings.layerTest())),
+      ),
+    ),
     Layer.provide(
       Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
         validateLaunchAttachments: (attachments) => Effect.succeed(attachments),

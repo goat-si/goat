@@ -33,7 +33,7 @@ function inhibitorCommand(
       return {
         command: "systemd-inhibit",
         args: [
-          "--what=idle:sleep",
+          "--what=sleep",
           "--who=GOAT",
           "--why=Agents are working",
           "--mode=block",

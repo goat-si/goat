@@ -1,8 +1,10 @@
-import type {
-  OrchestrationV2ContextHandoff,
-  OrchestrationV2ProviderThread,
-  ThreadId,
-  TurnItemId,
+import {
+  isCompactionCommandMessage,
+  parseGoalCommand,
+  type OrchestrationV2ContextHandoff,
+  type OrchestrationV2ProviderThread,
+  type ThreadId,
+  type TurnItemId,
 } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { ContextHandoffBudgetError } from "@goat/provider-core/server/failure";
@@ -31,6 +33,31 @@ export interface ReplayedHandoffInput {
   readonly threadId: ThreadId;
   readonly runOrdinal: number;
 }
+
+// Only commands GOAT itself recognizes defer pending context: compaction, and /goal where the
+// session runs goals natively. A provider command and a path-led prompt look alike.
+export const isSlashCommandMessage = (
+  message: {
+    readonly role: string;
+    readonly text: string;
+    readonly attachments?: ReadonlyArray<unknown> | undefined;
+  },
+  nativeGoals: boolean,
+): boolean =>
+  message.role === "user" &&
+  (isCompactionCommandMessage(message) || (nativeGoals && parseGoalCommand(message) !== null));
+
+export const slashCommandMessageIds = <
+  M extends Parameters<typeof isSlashCommandMessage>[0] & { readonly id: string },
+>(
+  messages: ReadonlyArray<M>,
+  nativeGoals: boolean,
+) =>
+  new Set(
+    messages
+      .filter((message) => isSlashCommandMessage(message, nativeGoals))
+      .map((message) => message.id),
+  );
 
 /** Persist around injection; ambiguous delivery requires a fresh native thread. Call unsent if refused before prompt consumption. */
 export const deliverContextHandoffs = Effect.fn("orchestrationV2.deliverContextHandoffs")(

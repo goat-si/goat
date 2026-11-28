@@ -173,12 +173,14 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
-`composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
+`composerFocus`, `draftThreadRoute`, `turnRunning`, `composerEmpty`, `editableFocus`, `fileViewFocus`,
 `fileTreeFocus`, `isWeb`, and `isDesktop`.
 In a thread, `rightPanelOpen` is true while its right panel is open. The default
 `mod+t` also requires `!terminalFocus` and opens the new-tab menu.
 `draftThreadRoute` is true in a new thread, including a restored draft, before you
 send its first message.
+`composerEmpty` is true while the composer has no text, attachments, or context, and is not
+editing a queued message or answering a question.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `fileViewFocus` is true while the Files panel or an open file has
 the keyboard, and `fileTreeFocus` while the Files panel has it. `isWeb` is true in a browser tab. `isDesktop` is true in the
@@ -257,6 +259,8 @@ if the browser takes it first.
 
 Many defaults include `!terminalFocus` so they do not intercept terminal input.
 Keep that condition when remapping them if you want the same behavior.
+`sidebar.toggle` never takes a Ctrl chord from a focused terminal, so tmux's `Ctrl+B`
+prefix reaches it. On macOS, `Cmd+B` still toggles the sidebar there.
 
 ## Desktop quit shortcut
 

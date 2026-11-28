@@ -11,7 +11,7 @@ import { isPreviewDependencyPath } from "./previewAssetExtensions.ts";
 interface WorkspaceFilePath {
   readonly workspaceRoot: string;
   readonly relativePath: string;
-  readonly previewDependency?: true;
+  readonly previewBaseRelativePath?: string;
 }
 
 export const optionOnNotFound = <A, R>(
@@ -46,7 +46,17 @@ const inspectCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWor
     const path = yield* Path.Path;
     const relative = path.relative(canonicalRoot.value, canonicalFile.value);
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
-    if (input.previewDependency && !isPreviewDependencyPath(relative, path)) return null;
+    if (input.previewBaseRelativePath !== undefined) {
+      const canonicalBase = yield* optionOnNotFound(
+        fileSystem.realPath(path.join(canonicalRoot.value, input.previewBaseRelativePath)),
+      );
+      const belowBase = Option.isSome(canonicalBase)
+        ? path.relative(canonicalBase.value, canonicalFile.value)
+        : "..";
+      const dependency =
+        belowBase.startsWith("..") || path.isAbsolute(belowBase) ? relative : belowBase;
+      if (!isPreviewDependencyPath(dependency, path)) return null;
+    }
 
     const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
     if (Option.isNone(info) || info.value.type !== "File") return null;

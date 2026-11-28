@@ -121,8 +121,15 @@ export function registerReleasedBackgroundWorkChecks({
           toolName: "mcp__goat__goat_worktree_handoff",
           input: {},
         }) satisfies OrchestrationV2TurnItem;
+      const cutOffNodeId = idAllocator.derive.nodeFromProviderItem({
+        driver: CODEX_DRIVER,
+        nativeItemId: "cut-off",
+      });
       const seededToolCalls = {
-        cutOff: toolCall("cut-off", providerThreads[0], "running", now),
+        cutOff: {
+          ...toolCall("cut-off", providerThreads[0], "running", now),
+          nodeId: cutOffNodeId,
+        },
         finished: toolCall("finished", providerThreads[0], "completed", now),
         otherSession: toolCall("other-session", providerThreads[1], "running", now),
         // Started by a replacement session after the release.
@@ -148,6 +155,35 @@ export function registerReleasedBackgroundWorkChecks({
             ],
           });
         });
+      yield* eventSink.write({
+        events: [
+          {
+            id: yield* idAllocator.allocate.event({ threadId }),
+            type: "node.updated",
+            threadId,
+            nodeId: cutOffNodeId,
+            driver: CODEX_DRIVER,
+            occurredAt: now,
+            payload: {
+              id: cutOffNodeId,
+              threadId,
+              runId: null,
+              parentNodeId: null,
+              rootNodeId: cutOffNodeId,
+              kind: "tool_call",
+              status: "running",
+              countsForRun: true,
+              providerThreadId: providerThreads[0].id,
+              providerTurnId: null,
+              nativeItemRef: null,
+              runtimeRequestId: null,
+              checkpointScopeId: null,
+              startedAt: now,
+              completedAt: null,
+            },
+          },
+        ],
+      });
       yield* Effect.forEach(Object.values(seededToolCalls), writeToolCall);
       yield* manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
       const toolCallStatus = (id: OrchestrationV2TurnItem["id"]) =>
@@ -185,6 +221,12 @@ export function registerReleasedBackgroundWorkChecks({
         writeToolCall,
         toolCalls,
         toolCallStatus,
+        cutOffNodeStatus: Effect.gen(function* () {
+          const store = yield* ProjectionStore.ProjectionStoreV2;
+          return (yield* store.getThreadProjection(threadId)).nodes.find(
+            (node) => node.id === cutOffNodeId,
+          )?.status;
+        }),
       };
     });
 
@@ -464,6 +506,7 @@ export function registerReleasedBackgroundWorkChecks({
             toolCalls,
             seededToolCalls,
             writeToolCall,
+            cutOffNodeStatus,
           } = yield* openSessionWithBackgroundCommand("provider-session-manager-detach-roster");
           const runtime = Option.getOrThrow(yield* manager.get(providerSessionId));
           if (runtime.subscribeEvents === undefined) return assert.fail("no event subscription");
@@ -527,6 +570,7 @@ export function registerReleasedBackgroundWorkChecks({
 
           assert.isTrue(Option.isNone(yield* manager.get(providerSessionId)));
           assert.deepStrictEqual(yield* rosters, [[], ["dev-server"]]);
+          assert.equal(yield* cutOffNodeStatus, "interrupted");
           assert.deepStrictEqual(yield* toolCalls, {
             cutOff: "interrupted",
             finished: "completed",
