@@ -181,3 +181,145 @@ priority aging and parked waits (core/sched.rs), 4 children per parent and depth
 coalescing and record-before-wake (core/actor.rs), restart wake with `interrupted_by_restart` (core/settle.rs),
 per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine group memory policy, host launch contract
 (server.rs).
+
+## apps/web/src/v1: GOAT v1 lift (lanes F and P2-M, 2026-11-29)
+
+Source: goat-si/goat `origin/dev` 916b5ccc1b2. Layout: v1 `apps/web/src/<X>` -> `apps/web/src/v1/<X>`, v1 `packages/<pkg>/src/<Y>` -> `apps/web/src/v1/packages/<pkg>/src/<Y>`.
+Every lifted file is **verbatim** (byte-identical, imports included). The exact file list is `scripts/v1-lift.d/*.txt` (base.txt and providers.txt P2-M, timeline.txt and contracts.txt lane F) plus the pure modules `scripts/v1-lift.py` lifts transitively (AUTO_LIFT); `python3 scripts/v1-lift.py --check` fails if any lifted file differs from v1. Imports that leave the lift set resolve to the bridges below through `src/v1/aliases.json` (generated) or one-line re-export files at the mirrored path.
+
+Lifted: 708 files.
+
+| GOAT 2 path (under apps/web/src/v1/) | v1 path @916b5ccc | files | How |
+|---|---|---|---|
+| *.ts (top level) | apps/web/src/*.ts | 18 | verbatim |
+| appearance/ | apps/web/src/appearance/ | 1 | verbatim |
+| assets/fonts/ | apps/web/src/assets/fonts/ | 1 | verbatim |
+| browser/ | apps/web/src/browser/ | 1 | verbatim |
+| components/ | apps/web/src/components/ | 7 | verbatim |
+| components/chat/ | apps/web/src/components/chat/ | 49 | verbatim |
+| components/pullRequest/ | apps/web/src/components/pullRequest/ | 1 | verbatim |
+| components/settings/ | apps/web/src/components/settings/ | 39 | verbatim |
+| components/solar/ | apps/web/src/components/solar/ | 4 | verbatim |
+| components/ui/ | apps/web/src/components/ui/ | 33 | verbatim |
+| desktop/ | apps/web/src/desktop/ | 1 | verbatim |
+| hooks/ | apps/web/src/hooks/ | 5 | verbatim |
+| lib/ | apps/web/src/lib/ | 11 | verbatim |
+| notes/ | apps/web/src/notes/ | 1 | verbatim |
+| packages/client-runtime/src/ (files) | packages/client-runtime/src/ | 17 | verbatim |
+| packages/client-runtime/src/environment/ | packages/client-runtime/src/environment/ | 3 | verbatim |
+| packages/client-runtime/src/errors/ | packages/client-runtime/src/errors/ | 6 | verbatim |
+| packages/client-runtime/src/goatBot/ | packages/client-runtime/src/goatBot/ | 8 | verbatim |
+| packages/client-runtime/src/state/ | packages/client-runtime/src/state/ | 9 | verbatim |
+| packages/client-runtime/src/work-log/ | packages/client-runtime/src/work-log/ | 12 | verbatim |
+| packages/contracts/src/ (files) | packages/contracts/src/ | 301 | verbatim |
+| packages/contracts/src/agentSurface/ | packages/contracts/src/agentSurface/ | 69 | verbatim |
+| packages/contracts/src/fixtures/ | packages/contracts/src/fixtures/ | 1 | verbatim |
+| packages/contracts/src/test-snapshots/ | packages/contracts/src/test-snapshots/ | 1 | verbatim |
+| packages/contracts/src/testing/ | packages/contracts/src/testing/ | 2 | verbatim |
+| packages/provider-acp-registry/src/ (files) | packages/provider-acp-registry/src/ | 3 | verbatim |
+| packages/provider-claude-cloud/src/ (files) | packages/provider-claude-cloud/src/ | 1 | verbatim |
+| packages/provider-core/src/ (files) | packages/provider-core/src/ | 1 | verbatim |
+| packages/provider-cursor/src/ (files) | packages/provider-cursor/src/ | 2 | verbatim |
+| packages/provider-devin-cloud/src/ (files) | packages/provider-devin-cloud/src/ | 2 | verbatim |
+| packages/provider-fx/src/ (files) | packages/provider-fx/src/ | 2 | verbatim |
+| packages/provider-grok/src/ (files) | packages/provider-grok/src/ | 2 | verbatim |
+| packages/provider-muse/src/ (files) | packages/provider-muse/src/ | 2 | verbatim |
+| packages/provider-opencode/src/ (files) | packages/provider-opencode/src/ | 2 | verbatim |
+| packages/provider-pi/src/ (files) | packages/provider-pi/src/ | 4 | verbatim |
+| packages/shared/src/ (files) | packages/shared/src/ | 64 | verbatim |
+| packages/source-control-azure-devops/src/shared/ | packages/source-control-azure-devops/src/shared/ | 2 | verbatim |
+| packages/source-control-bitbucket/src/shared/ | packages/source-control-bitbucket/src/shared/ | 2 | verbatim |
+| packages/source-control-core/src/shared/ | packages/source-control-core/src/shared/ | 2 | verbatim |
+| packages/source-control-cursor-origin/src/shared/ | packages/source-control-cursor-origin/src/shared/ | 2 | verbatim |
+| packages/source-control-definitions/src/ (files) | packages/source-control-definitions/src/ | 1 | verbatim |
+| packages/source-control-forgejo/src/shared/ | packages/source-control-forgejo/src/shared/ | 2 | verbatim |
+| packages/source-control-gitcafe/src/shared/ | packages/source-control-gitcafe/src/shared/ | 2 | verbatim |
+| packages/source-control-github/src/shared/ | packages/source-control-github/src/shared/ | 4 | verbatim |
+| packages/source-control-gitlab/src/shared/ | packages/source-control-gitlab/src/shared/ | 3 | verbatim |
+| state/ | apps/web/src/state/ | 2 | verbatim |
+
+### Bridges (seam modules, apps/web/src/v1/seam/)
+
+Each seam file's header states the v1 path it replaces and why; the summary is that header.
+
+| Seam file | Replaces (v1 @916b5ccc) | Why |
+|---|---|---|
+| V1Boundary.tsx | - | The [data-v1] boundary every lifted v1 surface renders inside: v1 tokens, base text and preflight apply only here (postcss.config.js). Portals without a container go to the matching [data-v1-portal] root (seam/base-ui). |
+| composerDraftStore.ts | apps/web/src/composerDraftStore.ts | Seam for v1 apps/web/src/composerDraftStore.ts (goat 916b5ccc1b2), shared by lanes F and P2-M. v1's 4,000-line draft store is not carried: GOAT 2 keeps drafts in its own composer. DraftId keeps v1's schema (composerDraftStore.ts:138). The lifted TraitsPicker is always given onModelOptionsChange in GOAT 2, so it never writes options into a draft. |
+| composerHandleContext.ts | apps/web/src/composerHandleContext.ts | Seam for v1 apps/web/src/composerHandleContext.ts (goat 916b5ccc1b2). v1 hands menus the chat composer's handle so a closing menu can refocus the editor; GOAT 2's composer is not the v1 ChatComposer, so there is no handle and menus keep their own focus return (v1 composerEventScope.ts:20-21 handles a null handle). |
+| localApi.ts | apps/web/src/localApi.ts | Seam for v1 apps/web/src/localApi.ts (goat 916b5ccc1b2): the browser branch of v1 createBrowserLocalApi (localApi.ts:15-40). GOAT 2 (Dev) opens links in the system browser through the Electron window-open handler. |
+| npm-aliases.json | npm specifiers | Hand-written map of npm modules answered by the seam (@tanstack/react-router); merged into the alias map by vite-plugin-v1.ts and tsconfig.v1.paths.json. |
+| v1-entry.css | - | Entry for the v1 CSS (devlog 070 audit-3 residual): the copied v1 index.css stays byte-identical; Tailwind's source |
+| base-ui/combobox.parts.ts | @base-ui/react/combobox | Bridge (docs/PROVENANCE.md): @base-ui/react/combobox parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/combobox here) cannot recurse. |
+| base-ui/combobox.ts | @base-ui/react/combobox | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/combobox inside src/v1; same exports, Combobox.Portal wrapped. |
+| base-ui/context-menu.parts.ts | @base-ui/react/context-menu | Bridge (docs/PROVENANCE.md): @base-ui/react/context-menu parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/context-menu here) cannot recurse. |
+| base-ui/context-menu.ts | @base-ui/react/context-menu | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/context-menu inside src/v1; same exports, ContextMenu.Portal wrapped. |
+| base-ui/dialog.parts.ts | @base-ui/react/dialog | Bridge (docs/PROVENANCE.md): @base-ui/react/dialog parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/dialog here) cannot recurse. |
+| base-ui/dialog.ts | @base-ui/react/dialog | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/dialog inside src/v1; same exports, Dialog.Portal wrapped. |
+| base-ui/menu.parts.ts | @base-ui/react/menu | Bridge (docs/PROVENANCE.md): @base-ui/react/menu parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/menu here) cannot recurse. |
+| base-ui/menu.ts | @base-ui/react/menu | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/menu inside src/v1; same exports, Menu.Portal wrapped. |
+| base-ui/popover.parts.ts | @base-ui/react/popover | Bridge (docs/PROVENANCE.md): @base-ui/react/popover parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/popover here) cannot recurse. |
+| base-ui/popover.ts | @base-ui/react/popover | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/popover inside src/v1; same exports, Popover.Portal wrapped. |
+| base-ui/portalRoot.ts | - | Bridge (docs/PROVENANCE.md): lifted v1 ui primitives portal their popups to <body>; GOAT 2 scopes v1 CSS to [data-v1], so a portal without an explicit container mounts into one [data-v1][data-v1-portal] root instead. |
+| base-ui/select.parts.ts | @base-ui/react/select | Bridge (docs/PROVENANCE.md): @base-ui/react/select parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/select here) cannot recurse. |
+| base-ui/select.ts | @base-ui/react/select | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/select inside src/v1; same exports, Select.Portal wrapped. |
+| base-ui/toast.parts.ts | @base-ui/react/toast | Bridge (docs/PROVENANCE.md): @base-ui/react/toast parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/toast here) cannot recurse. |
+| base-ui/toast.ts | @base-ui/react/toast | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/toast inside src/v1; same exports, Toast.Portal wrapped. |
+| base-ui/tooltip.parts.ts | @base-ui/react/tooltip | Bridge (docs/PROVENANCE.md): @base-ui/react/tooltip parts with Portal mounted into the v1 portal root. The real package is imported by its file path so the alias map (which points @base-ui/react/tooltip here) cannot recurse. |
+| base-ui/tooltip.ts | @base-ui/react/tooltip | Bridge (docs/PROVENANCE.md): stands in for @base-ui/react/tooltip inside src/v1; same exports, Tooltip.Portal wrapped. |
+| components/ProviderUpdatesAction.tsx | apps/web/src/components/ProviderUpdatesAction.tsx | Seam for v1 apps/web/src/components/ProviderUpdatesAction.tsx (goat 916b5ccc1b2): GOAT 2 has no provider self-update in Part 2, so the action is not shown. |
+| components/ThreadTerminalDrawer.tsx | apps/web/src/components/ThreadTerminalDrawer.tsx | Seam for v1 apps/web/src/components/ThreadTerminalDrawer.tsx (goat 916b5ccc1b2): only terminalThemeFromApp, used by the terminal sign-in surface, which GOAT 2 does not have (seam terminal/ghostty/surface.ts). |
+| components/chat/ChatGptSharingControl.tsx | apps/web/src/components/chat/ChatGptSharingControl.tsx | Seam for v1 apps/web/src/components/chat/ChatGptSharingControl.tsx (goat 916b5ccc1b2): ChatGPT subscription sharing is a v1 OpenCodex feature GOAT 2 does not have. |
+| components/settings/AcpSessionManagementSection.tsx | apps/web/src/components/settings/AcpSessionManagementSection.tsx | Seam for v1 apps/web/src/components/settings/AcpSessionManagementSection.tsx (goat 916b5ccc1b2): importing native ACP sessions is not in GOAT 2 Part 2. |
+| components/settings/ChatGptConnectionButton.tsx | apps/web/src/components/settings/ChatGptConnectionButton.tsx | Seam for v1 apps/web/src/components/settings/ChatGptConnectionButton.tsx (goat 916b5ccc1b2): ChatGPT connection is a v1 OpenCodex feature GOAT 2 does not have. |
+| components/settings/CodexSetupSection.tsx | apps/web/src/components/settings/CodexSetupSection.tsx | Seam for v1 apps/web/src/components/settings/CodexSetupSection.tsx (goat 916b5ccc1b2): v1 shows these only for managed Codex accounts (OpenCodex Home, setupMode "managed"); GOAT 2 Codex uses the signed-in codex CLI (setupMode "existing"), so they render nothing. Props are v1's (CodexSetupSection.types.ts). |
+| components/settings/ProviderCodexHomeRouteSection.tsx | apps/web/src/components/settings/ProviderCodexHomeRouteSection.tsx | Seam for v1 apps/web/src/components/settings/ProviderCodexHomeRouteSection.tsx (goat 916b5ccc1b2): OpenCodex Home routing is a v1-only service, so the section is not shown. Callback props keep v1's types (:8-20). |
+| components/settings/ProviderHostMatrix.commands.ts | apps/web/src/components/settings/ProviderHostMatrix.commands.ts | Seam for v1 apps/web/src/components/settings/ProviderHostMatrix.commands.ts (goat 916b5ccc1b2): GOAT 2 has one host, so the sync command is never permitted (its permission atom is false and v1 hides the action) and refuses with that reason if run. |
+| components/settings/ProviderHostSyncDialog.tsx | apps/web/src/components/settings/ProviderHostSyncDialog.tsx | Seam for v1 apps/web/src/components/settings/ProviderHostSyncDialog.tsx (goat 916b5ccc1b2): GOAT 2 has one host; there is nothing to sync providers to. |
+| components/settings/SecretReferencePicker.tsx | apps/web/src/components/settings/SecretReferencePicker.tsx | Seam for v1 apps/web/src/components/settings/SecretReferencePicker.tsx (goat 916b5ccc1b2): v1 secret references are behind GOAT_FEATURE_SECRETS (off), and GOAT 2 has no secret store, so the picker is not shown. Props are v1's (:25-35). |
+| components/settings/SecretsSettings.tsx | apps/web/src/components/settings/SecretsSettings.tsx | Seam for v1 apps/web/src/components/settings/SecretsSettings.tsx (goat 916b5ccc1b2): v1 secrets are behind GOAT_FEATURE_SECRETS (off), and GOAT 2 has no secret store. |
+| components/settings/SettingInheritance.tsx | apps/web/src/components/settings/SettingInheritance.tsx | Seam for v1 apps/web/src/components/settings/SettingInheritance.tsx (goat 916b5ccc1b2): project overrides do not exist in GOAT 2 (one environment, no project settings), so nothing is inherited or overridden. |
+| components/settings/SettingsPageLead.tsx | apps/web/src/components/settings/SettingsPageLead.tsx | Seam for v1 apps/web/src/components/settings/SettingsPageLead.tsx (goat 916b5ccc1b2). v1 picks the lead from the router path; GOAT 2 has one settings page here, so the providers lead is fixed. Markup and the first sentence of the text are v1's (settingsNav.ts:67-72); the OpenCodex Home sentence and Hub link are v1-only and dropped. |
+| components/settings/SettingsScopeContext.tsx | apps/web/src/components/settings/SettingsScopeContext.tsx | Seam for v1 apps/web/src/components/settings/SettingsScopeContext.tsx (goat 916b5ccc1b2): GOAT 2 renders settings for its one environment without v1's scope picker, so no scope provider is mounted and useOptionalSettingsScope() is null, the case v1's settingsLayout already handles. The value type keeps the fields v1 readers use. |
+| components/settings/SettingsScopeSentence.tsx | apps/web/src/components/settings/SettingsScopeSentence.tsx | Seam for v1 apps/web/src/components/settings/SettingsScopeSentence.tsx (goat 916b5ccc1b2): GOAT 2 has one environment and no project scopes, so there is no scope to describe. |
+| components/settings/TextGeneratorAndUsageSettings.tsx | apps/web/src/components/settings/TextGeneratorAndUsageSettings.tsx | Seam for v1 apps/web/src/components/settings/TextGeneratorAndUsageSettings.tsx (goat 916b5ccc1b2): usage limits are outside Part 2 (PRD part2/providers, usage row). |
+| components/settings/scopedSettings.ts | apps/web/src/components/settings/scopedSettings.ts | Seam for v1 apps/web/src/components/settings/scopedSettings.ts (goat 916b5ccc1b2): GOAT 2 has no project-scoped settings, so no key is project scoped, nothing is mixed and every value comes from the environment. Types keep v1's shapes (scopedSettings.ts:33-43, 84-91, 166, 382-385). |
+| components/settings/settingsSearch.ts | apps/web/src/components/settings/settingsSearch.ts | Seam for v1 apps/web/src/components/settings/settingsSearch.ts (goat 916b5ccc1b2): v1's settings search registry (1,397 lines across every settings page) is not carried; the provider page's rows keep v1's anchor ids and titles. |
+| components/settings/useScopedSettings.ts | apps/web/src/components/settings/useScopedSettings.ts | Seam for v1 apps/web/src/components/settings/useScopedSettings.ts (goat 916b5ccc1b2): with no project overrides (seam scopedSettings.ts) there is nothing to clear. |
+| components/settings/useTranslatedSearchableSetting.ts | apps/web/src/components/settings/useTranslatedSearchableSetting.ts | Seam for v1 apps/web/src/components/settings/useTranslatedSearchableSetting.ts (goat 916b5ccc1b2): GOAT 2 is English first (owner rule), so titles are returned as registered. |
+| connection/desktopLocal.ts | apps/web/src/connection/desktopLocal.ts | Seam for v1 apps/web/src/connection/desktopLocal.ts (goat 916b5ccc1b2): GOAT 2's one environment is its own local host, never a v1 desktop-local backend or WSL distro. |
+| environments/primary/target.ts | apps/web/src/environments/primary/target.ts | Seam for v1 apps/web/src/environments/primary/target.ts (goat 916b5ccc1b2): GOAT 2 (Dev) always talks to the host its desktop shell started, which v1 calls a desktop-managed primary target. |
+| fixture/V1Fixture.tsx | - | ?v1fixture: checks the v1 CSS scoping and portal root (e2e/v1fixture.spec.ts). A v1 Button, text-work-log text, an open Popover and an open Tooltip inside the boundary; identical plain elements outside it keep browser defaults. |
+| goat2/environment.ts | - | GOAT 2 runs one local host per app (docs/lanes/PART1.md fixed decisions), so the lifted v1 screens see exactly one environment: this machine, whose owner holds every scope. |
+| goat2/globals.d.ts | apps/web/src/vite-env.d.ts | v1 apps/web/src/vite-env.d.ts (goat 916b5ccc1b2) global declarations the lifted files compile against. GOAT 2's shell never sets window.desktopBridge (the lifted env.ts then reports isElectron = false), so these paths stay inert. |
+| goat2/providerPort.ts | - | GOAT 2 seam: the one place provider data enters the lifted v1 provider screens (P2-M). The lifted v1 code reads providers through v1 atoms (state/server.ts serverEnvironment.*) and calls v1 WS methods. The GOAT 2 app installs a ProviderPort that answers those methods from the GOAT 2 host (or the fake host scene) and pushes provider entries; this file turns entries into v1 ServerProvider values (decoded with the lifte |
+| goat2/surfaces.ts | - | @v1/surfaces: every lifted v1 surface GOAT 2 mounts, typed against surfaces.types.ts (see there). Also the typecheck entry of tsconfig.v1.json, so the v1 provider screens are checked even before a GOAT 2 frame mounts them. |
+| goat2/surfaces.types.ts | - | The typed boundary between GOAT 2 code and the lifted v1 tree (@v1/surfaces). GOAT 2's tsconfig resolves @v1/surfaces to this file, so its typecheck never walks v1 internals (v1 needs its own compiler options); vite resolves it to surfaces.ts, and tsconfig.v1.json checks that surfaces.ts implements exactly these declarations. Declarations only, valid under both compiler setups. |
+| hooks/useSettings.ts | apps/web/src/hooks/useSettings.ts | Seam for v1 apps/web/src/hooks/useSettings.ts (goat 916b5ccc1b2): the settings hooks the lifted provider screens use. Server settings live behind the GOAT 2 provider port (server.updateSettings); client settings stay in this browser (localStorage), as v1's browser client does. v1's multi-environment shared-settings sync, project overrides and legacy migrations are not carried: GOAT 2 has one environment. |
+| hooks/useThreadRouteTarget.ts | apps/web/src/hooks/useThreadRouteTarget.ts | Seam for v1 apps/web/src/hooks/useThreadRouteTarget.ts (goat 916b5ccc1b2): GOAT 2 does not use v1's router, so toasts never scope themselves to a v1 thread route. The type is v1's (threadRoutes.ts:8-20). |
+| npm/tanstack-react-router.ts | @tanstack/react-router | Seam for the npm module @tanstack/react-router, which lifted v1 files import (settingsLayout, ModelPickerProviderNotices). GOAT 2 has its own navigation (apps/web/src/ui-state), so this module answers v1's two hooks: useLocation reads the location the GOAT 2 frame sets, and useNavigate hands v1 paths to the GOAT 2 frame (setGoat2Navigator). |
+| packages/client-runtime/src/connection/index.ts | packages/client-runtime/src/connection | Seam for v1 packages/client-runtime/src/connection (goat 916b5ccc1b2). v1's connection catalog (SSH, relay, hub proxy routes, credential profiles) is not carried: GOAT 2 has one local host, which v1 calls the primary target, with no profile and no extra routes. Type shapes follow v1 model.ts/catalog.ts; connectionStatusTitle keeps v1's phase wording (presentation.ts:17-24). |
+| packages/client-runtime/src/environment/index.ts | @goat/client-runtime/environment | Bridge for v1 @goat/client-runtime/environment (packages/client-runtime/src/environment/index.ts, docs/PROVENANCE.md). Re-exports the three pure, byte-identical lifted modules. v1's descriptor.ts (environment descriptor fetch over the v1 HTTP RPC client) is left out: GOAT 2 has one local host and no v1 environment HTTP API. |
+| packages/client-runtime/src/state/runtime.ts | packages/client-runtime/src/state/runtime.ts | Seam for v1 packages/client-runtime/src/state/runtime.ts (goat 916b5ccc1b2): only the atom-command surface the lifted provider screens use. Bodies are copied from v1 (runtime.ts:136-156, 199-207, 352-383, 469-496). v1's RPC runtime, connection registry and schedulers are not carried: GOAT 2 commands run through seam/goat2/providerPort.ts. |
+| state/entities.ts | apps/web/src/state/entities.ts | Seam for v1 apps/web/src/state/entities.ts (goat 916b5ccc1b2), shared by lanes F and P2-M. The provider screens read projects (ACP custom-model editor) and thread shells (which threads a provider change would stop). GOAT 2 has no v1 projects, and P2-M does not wire thread shells: both lists are empty. |
+| state/environments.ts | apps/web/src/state/environments.ts | Seam for v1 apps/web/src/state/environments.ts (goat 916b5ccc1b2): the one GOAT 2 environment, the local host this app's desktop shell started (v1's primary target), connected once the host has sent its provider list. |
+| state/server.ts | apps/web/src/state/server.ts | Seam for v1 apps/web/src/state/server.ts + packages/client-runtime/src/state/server.ts (goat 916b5ccc1b2): the serverEnvironment members the lifted provider screens use, answered by the GOAT 2 provider port. Each command keeps v1's label, input shape ({environmentId, input}) and result schema; results are decoded with the lifted v1 schemas. |
+| state/session.ts | apps/web/src/state/session.ts | Seam for v1 apps/web/src/state/session.ts (goat 916b5ccc1b2): session grants for the one GOAT 2 environment. |
+| terminal/ghostty/surface.ts | apps/web/src/terminal/ghostty/surface.ts | Seam for v1 apps/web/src/terminal/ghostty/surface.ts (goat 916b5ccc1b2). GOAT 2 has no in-app terminal in Part 2, so a terminal sign-in cannot be shown; creating the surface fails and v1's ProviderAuthTerminal says so ("Could not load the sign-in terminal. Cancel and retry sign-in."). |
+
+### Build wiring for the lifted tree (P2-M for lanes F and P2-M; devlog 070 Revision A2 and audit-3 residuals)
+
+| GOAT 2 path | v1 source @916b5ccc | How / why |
+|---|---|---|
+| apps/web/vite-plugin-v1.ts | - (new) | Resolves imports from src/v1 through src/v1/aliases.json + seam/npm-aliases.json, so lifted files stay byte-identical; only importers under src/v1 are aliased (GOAT 2 keeps the real @base-ui/react). Also resolves @v1/surfaces for GOAT 2 code. |
+| apps/web/tsconfig.v1.paths.json (generated by scripts/v1-lift.py) | - | The same alias map as TypeScript paths; no second hand-kept copy. |
+| apps/web/tsconfig.v1.json, tsconfig.v1-all.json | v1 apps/web/tsconfig.json (compiler options) | v1 code needs v1's options (no verbatimModuleSyntax/erasableSyntaxOnly); tsconfig.v1.json typechecks what @v1/surfaces reaches and is part of `pnpm typecheck`; v1-all is the whole tree, not a gate yet. |
+| apps/web/src/v1/seam/goat2/surfaces.ts + surfaces.types.ts | - (new) | @v1/surfaces: the only way GOAT 2 code reaches v1. GOAT 2's tsconfig sees the declarations; tsconfig.v1.json checks the implementation against them. |
+| apps/web/postcss.config.js + apps/web/v1-css-scope.js | - (new) | @tailwindcss/postcss (source detection limited to src/v1), then postcss-prefix-selector on src/v1 CSS only: :root/:host -> [data-v1]; html/body -> [data-v1-body] (v1 page rules: height 100%, overflow hidden, position relative, 100svh, grain; opt-in for a full-page v1 surface); every other top-level rule -> :where([data-v1]) <sel>. Class rules are scoped too because v1 uses @theme inline (utilities carry literal values, e.g. text-work-log 0.78125rem, and would style GOAT 2 elements); :where() adds no specificity, so v1's cascade is unchanged. .dark variants never activate. |
+| apps/web/src/v1/seam/v1-entry.css | apps/web/src/index.css (imported unchanged) | @import of the byte-identical index.css + @source for src/v1; plus v1's body typography (font-family var(--font-sans), color var(--foreground)) on every [data-v1], since body maps to the opt-in [data-v1-body]; and pointer-events back for portal descendants (zero specificity, v1's pointer-events-none still wins). |
+| apps/web/src/v1/seam/V1Boundary.tsx | - (new) | The [data-v1] element a v1 surface renders inside; imports v1-entry.css. |
+| apps/web/src/v1/seam/base-ui/portalRoot.ts + base-ui/<part>.ts, <part>.parts.ts (combobox, context-menu, dialog, menu, popover, select, toast, tooltip) | @base-ui/react/<part> (npm, v1 lock version) | v1 portals go to <body>; GOAT 2 scopes v1 CSS, so a Portal without a container (tooltip passes container={undefined}) mounts into one [data-v1][data-v1-portal] root under <body>: fixed, viewport-sized like body (shrink-to-fit popups keep their width), pointer-events none on the root itself. The real package is imported by file path (no alias recursion); named namespaces and Portal.Props/State types kept. Only parts that render a Portal are wrapped (scripts/v1-lift.py detects them). |
+| apps/web/src/main.tsx (v1-entry.css import, ?v1fixture) | - | v1 CSS loads with the app, so the 7 bot-home pixel baselines (maxDiffPixels 0) prove it leaks nothing; ?v1fixture mounts seam/fixture/V1Fixture.tsx for e2e/v1fixture.spec.ts (tokens inside, browser defaults outside, both popups painted inside the portal root). |
+| apps/web/e2e/baseline.spec.ts-snapshots/*.png | - | Recaptured on mac-studio from clean goat2_ui 6f79579 (the origin-Mac captures differ by font rasterization before any change). |
+
+Global names (audit-3 residual): v1's @keyframes (fleet-*, goat-arrive, goat-mobile-*, goat-onboarding-signal, live-activity-focus*, live-tool-shine, preview-loading-progress, scroll-edge-fade, settings-search-target-pulse, sidebar-drag-label-reveal, status-ping, status-pulse, Tailwind's spin) and the Pretendard @font-face stay global. Checked against GOAT 2 CSS and inline styles (apps/web/src outside v1, packages/*): GOAT 2 defines and uses only goat2-spin and goat2-chip-spin and never names Pretendard, so nothing collides.
