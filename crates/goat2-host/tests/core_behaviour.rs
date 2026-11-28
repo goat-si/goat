@@ -4505,3 +4505,59 @@ async fn a_fenced_thread_drops_its_unfinished_streams() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_finished_sign_in_or_install_never_shows_running_again() {
+    let t = setup(manual()).await;
+    let method: goat2_contracts::ProviderAuthMethod = serde_json::from_value(serde_json::json!({
+        "id": "chatgpt", "name": "Sign in with ChatGPT", "description": null, "type": "agent"
+    }))
+    .unwrap();
+    t.fake.set_provider_setup(
+        Some((vec![method], auth_state("codex", "waiting", None))),
+        Some(install_state("downloading")),
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("term-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    // Sign-in: cancelled, then a Waiting the driver queued before the cancel arrives.
+    t.host.command(auth_start("term-1")).await.unwrap();
+    let updates = t.fake.auth_updates().unwrap();
+    let cancelled = t
+        .host
+        .command(ClientFrame::ProviderAuthCancel {
+            req_id: "r".into(),
+            client_request_id: "term-2".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-1".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        cancelled.auth_state.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Cancelled
+    );
+    updates.send(auth_state("codex", "waiting", None)).unwrap();
+    // Install: failed on the stream, then a stale Downloading.
+    t.host
+        .command(ClientFrame::ProviderInstallStart {
+            req_id: "r".into(),
+            client_request_id: "term-3".into(),
+            instance_id: "codex".into(),
+        })
+        .await
+        .unwrap();
+    let installs = t.fake.install_updates().unwrap();
+    installs.send(install_state("failed")).unwrap();
+    installs.send(install_state("downloading")).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert_eq!(
+        codex.auth_flow.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Cancelled
+    );
+    assert_eq!(
+        codex.install.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Failed
+    );
+}
