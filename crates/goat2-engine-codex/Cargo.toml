@@ -8,6 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
+async-trait = "0.1"
+goat2-engine-api = { path = "../goat2-engine-api" }
 goat2-contracts = { path = "../goat2-contracts" }
 serde.workspace = true
 serde_json.workspace = true

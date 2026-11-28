@@ -5,12 +5,17 @@
 //! unknown server requests get JSON-RPC error -32601 so Codex never waits for an answer.
 
 pub mod approvals;
+pub mod capabilities;
 pub mod contract;
+pub mod engine;
 pub mod items;
 pub mod process;
 pub mod protocol;
+pub mod runtime;
 pub mod transcript;
 pub mod transport;
+
+pub use engine::{CodexEngineFactory, CodexEngineOptions, CodexSession};
 
 /// The codex version whose schema is pinned in `schema/`.
 pub const CODEX_SCHEMA_VERSION: &str = "0.167.0";

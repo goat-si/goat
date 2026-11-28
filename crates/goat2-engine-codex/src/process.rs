@@ -334,6 +334,22 @@ impl Drop for ChildProcess {
     }
 }
 
+/// [ChildProcess::group_rss_bytes] for a process group id held elsewhere.
+pub fn group_rss_bytes_of(pgid: u32) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        unix::group_rss_bytes(pgid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "group memory is measured on unix only",
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Signal {
     Term,

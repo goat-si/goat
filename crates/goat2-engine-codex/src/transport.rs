@@ -61,6 +61,8 @@ pub enum Inbound {
     Retired {
         method: String,
     },
+    /// Codex's stdout ended (the process exited or closed it). Nothing more follows.
+    Closed,
     Diagnostic(String),
 }
 
@@ -304,6 +306,7 @@ impl Connection {
                 }
             }
             shared.close();
+            let _ = shared.inbound.send(Inbound::Closed);
         });
 
         (

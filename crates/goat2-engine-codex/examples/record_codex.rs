@@ -1,4 +1,5 @@
-//! Record real `codex app-server` sessions as replay transcripts for the fake codex.
+//! Record real `codex app-server` sessions, driven through the GOAT driver itself
+//! ([CodexEngineFactory] with a recording tap), as replay transcripts for the fake codex.
 //!
 //! cargo run -p goat2-engine-codex --example record_codex -- --scenario <name|all> --out <dir> [--model <m>]
 //!
@@ -12,19 +13,17 @@ mod schema;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use goat2_engine_codex::process::{ChildProcess, Launch};
-use goat2_engine_codex::protocol::client::{
-    InitializeParams, ThreadOpenResponse, ThreadOptions, TurnInterruptParams, TurnStartResponse,
-    TurnSteerResponse, turn_start_params, turn_steer_params,
+use goat2_contracts::{
+    EngineConfig, InputId, ModelSelection, ProviderInstanceId, RequestOutcome, RuntimeMode,
+    ThreadId,
 };
-use goat2_engine_codex::protocol::methods;
-use goat2_engine_codex::protocol::server::{
-    CommandApprovalResponse, CommandDecision, Notification, ServerRequest,
+use goat2_engine_api::{
+    EngineEvent, EngineFactory, EngineHandle, EngineInput, McpEndpoint, RequestAnswer, SessionSpec,
+    TurnSettings, TurnStartResult,
 };
-use goat2_engine_codex::transcript::{ExitKind, Recorder, Redactor, Transcript, privacy_scan};
-use goat2_engine_codex::transport::{Connection, Inbound};
-use serde_json::{Value, json};
-use tokio::sync::mpsc::UnboundedReceiver;
+use goat2_engine_codex::transcript::{Recorder, Redactor, Transcript, privacy_scan};
+use goat2_engine_codex::{CodexEngineFactory, CodexEngineOptions};
+use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(180);
 /// A loopback MCP URL nothing listens on; Codex reports the server as failed, which is fine for
@@ -32,18 +31,58 @@ const WAIT: Duration = Duration::from_secs(180);
 const MCP_URL: &str = "http://127.0.0.1:9/mcp";
 const MCP_TOKEN: &str = "recordingtoken0123456789";
 
-struct Session {
-    child: ChildProcess,
-    conn: Connection,
-    inbound: UnboundedReceiver<Inbound>,
-    recorder: Recorder,
+fn spec(
+    cwd: &Path,
+    model: &str,
+    mode: RuntimeMode,
+    resume: Option<goat2_contracts::EngineRef>,
+) -> SessionSpec {
+    SessionSpec {
+        thread_id: ThreadId::new("goat-thread-1"),
+        engine: EngineConfig {
+            provider_instance_id: ProviderInstanceId::new("codex"),
+            model_selection: selection(model),
+            runtime_mode: mode,
+            cwd: cwd.to_string_lossy().into_owned(),
+        },
+        resume,
+        mcp: McpEndpoint {
+            url: MCP_URL.into(),
+            bearer_token: MCP_TOKEN.into(),
+        },
+        host_generation: 1,
+        process_generation: 1,
+    }
 }
 
-impl Session {
-    async fn spawn(cwd: &Path) -> Session {
-        let mut launch = Launch::new("codex").without_host_identity();
-        for arg in [
-            "app-server",
+fn selection(model: &str) -> ModelSelection {
+    serde_json::from_value(json!({
+        "instanceId": "codex",
+        "model": model,
+        "options": [{"id": "reasoningEffort", "value": "low"}]
+    }))
+    .expect("model selection")
+}
+
+fn settings(model: &str, mode: RuntimeMode) -> TurnSettings {
+    TurnSettings {
+        model_selection: selection(model),
+        runtime_mode: mode,
+    }
+}
+
+fn input(id: &str, text: &str) -> Vec<EngineInput> {
+    vec![EngineInput {
+        input_id: InputId::new(id),
+        text: text.into(),
+        attachments: Vec::new(),
+    }]
+}
+
+async fn start(recorder: &Recorder, spec: SessionSpec) -> EngineHandle {
+    let factory = CodexEngineFactory::new(CodexEngineOptions {
+        tap: Some(recorder.tap()),
+        extra_args: [
             "-c",
             "mcp_servers={}",
             "--disable",
@@ -60,256 +99,145 @@ impl Session {
             "memories",
             "--disable",
             "image_generation",
-        ] {
-            launch = launch.arg(arg);
-        }
-        launch.cwd = Some(cwd.to_path_buf());
-        let mut child = ChildProcess::spawn(&launch).expect("spawn codex app-server");
-        let recorder = Recorder::new();
-        let (conn, inbound) = Connection::start(
-            child.take_stdin().expect("stdin"),
-            child.take_stdout().expect("stdout"),
-            Some(recorder.tap()),
-        );
-        let session = Session {
-            child,
-            conn,
-            inbound,
-            recorder,
-        };
-        let _: Value = session
-            .conn
-            .request(methods::INITIALIZE, &InitializeParams::goat("0.0.0"))
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect(),
+        client_version: "0.0.0".into(),
+        ..CodexEngineOptions::default()
+    });
+    factory.start(spec).await.expect("start codex session")
+}
+
+/// Wait for an event, answering approval requests with `decide`.
+async fn wait_for(
+    handle: &mut EngineHandle,
+    what: &str,
+    mut done: impl FnMut(&EngineEvent) -> bool,
+    decide: Option<RequestOutcome>,
+) -> EngineEvent {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, handle.events.recv())
             .await
-            .expect("initialize");
-        session
-            .conn
-            .notify(methods::INITIALIZED, &Value::Null)
-            .expect("initialized");
-        session
-    }
-
-    /// Wait for a notification (answering server requests with `decide`).
-    async fn wait_for(
-        &mut self,
-        what: &str,
-        mut done: impl FnMut(&Notification) -> bool,
-        decide: &mut dyn FnMut(&ServerRequest) -> Value,
-    ) -> Notification {
-        let deadline = tokio::time::Instant::now() + WAIT;
-        loop {
-            let next = tokio::time::timeout_at(deadline, self.inbound.recv())
+            .unwrap_or_else(|_| panic!("timed out waiting for {what}"))
+            .unwrap_or_else(|| panic!("events ended while waiting for {what}"));
+        if let EngineEvent::RequestOpened { key, .. } = &event {
+            let outcome =
+                decide.unwrap_or_else(|| panic!("unexpected request while waiting for {what}"));
+            handle
+                .session
+                .answer_request(
+                    key,
+                    RequestAnswer {
+                        outcome,
+                        text: None,
+                        answers: None,
+                    },
+                )
                 .await
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "timed out waiting for {what}; stderr:\n{}",
-                        self.child.stderr_tail()
-                    )
-                });
-            match next {
-                Some(Inbound::Notification(n)) => {
-                    if done(&n) {
-                        return n;
-                    }
-                }
-                Some(Inbound::Request { id, request }) => {
-                    let answer = decide(&request);
-                    self.conn.respond(&id, answer).expect("respond");
-                }
-                Some(Inbound::Diagnostic(d)) => eprintln!("  diagnostic: {d}"),
-                Some(Inbound::LateResponse { method, .. }) => {
-                    eprintln!("  late answer to {method}")
-                }
-                Some(Inbound::Retired { method }) => panic!("codex went silent after {method}"),
-                None => panic!(
-                    "codex exited while waiting for {what}; stderr:\n{}",
-                    self.child.stderr_tail()
-                ),
-            }
+                .expect("answer request");
+        }
+        if let EngineEvent::Exited { reason } = &event {
+            panic!("codex exited while waiting for {what}: {reason}");
+        }
+        if done(&event) {
+            return event;
         }
     }
-
-    async fn finish(mut self, scenario: &str) -> Transcript {
-        self.conn.close_input();
-        self.child.shutdown().await;
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        self.recorder.finish(scenario, None)
-    }
 }
 
-fn no_requests(request: &ServerRequest) -> Value {
-    panic!("unexpected server request {}", request.method())
+fn finished(event: &EngineEvent) -> bool {
+    matches!(event, EngineEvent::TurnFinished { .. })
 }
 
-fn options(cwd: &Path, model: &str, approval: &str, sandbox: &str) -> ThreadOptions {
-    ThreadOptions {
-        model: Some(model.into()),
-        cwd: cwd.to_string_lossy().into_owned(),
-        approval_policy: Some(approval.into()),
-        sandbox: Some(sandbox.into()),
-        developer_instructions: None,
-        goat_mcp: Some((MCP_URL.into(), MCP_TOKEN.into())),
-    }
-}
-
-async fn start_thread(session: &Session, opts: &ThreadOptions) -> String {
-    let opened: ThreadOpenResponse = session
-        .conn
-        .request(methods::THREAD_START, &opts.start_params())
+async fn accepted(handle: &EngineHandle, text: &str, model: &str, mode: RuntimeMode) -> String {
+    match handle
+        .session
+        .start_turn(input("goat-input-1", text), &settings(model, mode))
         .await
-        .expect("thread/start");
-    opened.thread.id
-}
-
-async fn start_turn(session: &Session, thread: &str, text: &str, effort: &str) -> String {
-    let started = std::time::Instant::now();
-    let response: TurnStartResponse = session
-        .conn
-        .request(
-            methods::TURN_START,
-            &turn_start_params(thread, text, &[], Some("goat-msg-1"), None, Some(effort)),
-        )
-        .await
-        .expect("turn/start");
-    eprintln!(
-        "  turn/start answered in {} ms",
-        started.elapsed().as_millis()
-    );
-    response.turn.id
-}
-
-fn turn_completed(n: &Notification) -> bool {
-    matches!(n, Notification::TurnCompleted(_))
+    {
+        TurnStartResult::Accepted { turn_id } => turn_id,
+        other => panic!("turn not accepted: {other:?}"),
+    }
 }
 
 async fn record(scenario: &str, model: &str, root: &Path) -> Transcript {
     let cwd = root.join(scenario);
     std::fs::create_dir_all(&cwd).expect("scenario dir");
+    let recorder = Recorder::new();
     match scenario {
         "basic" => {
-            let mut s = Session::spawn(&cwd).await;
-            let thread = start_thread(&s, &options(&cwd, model, "never", "read-only")).await;
-            start_turn(&s, &thread, "Reply with exactly: GOAT2-OK", "low").await;
-            s.wait_for("turn/completed", turn_completed, &mut no_requests)
-                .await;
-            s.finish(scenario).await
+            let mode = RuntimeMode::ApprovalRequired;
+            let mut h = start(&recorder, spec(&cwd, model, mode, None)).await;
+            accepted(&h, "Reply with exactly: GOAT2-OK", model, mode).await;
+            wait_for(&mut h, "turn end", finished, None).await;
+            h.session.shutdown().await;
         }
         "steer" => {
-            let mut s = Session::spawn(&cwd).await;
-            let thread = start_thread(&s, &options(&cwd, model, "never", "read-only")).await;
-            let turn = start_turn(
-                &s,
-                &thread,
+            let mode = RuntimeMode::AutoAcceptEdits;
+            let mut h = start(&recorder, spec(&cwd, model, mode, None)).await;
+            let turn = accepted(
+                &h,
                 "Run the shell command `sleep 6` exactly once, then reply with exactly: DONE",
-                "low",
+                model,
+                mode,
             )
             .await;
-            s.wait_for(
-                "item/started",
-                |n| matches!(n, Notification::ItemStarted(_)),
-                &mut no_requests,
-            )
-            .await;
-            let steered: TurnSteerResponse = s
-                .conn
-                .request(
-                    methods::TURN_STEER,
-                    &turn_steer_params(
-                        &thread,
-                        &turn,
+            let steered = h
+                .session
+                .steer(
+                    &turn,
+                    input(
+                        "goat-input-2",
                         "After that, reply with exactly: DONE STEERED",
-                        &[],
-                        Some("goat-msg-2"),
                     ),
                 )
-                .await
-                .expect("turn/steer");
-            assert_eq!(steered.turn_id, turn);
-            s.wait_for("turn/completed", turn_completed, &mut no_requests)
                 .await;
-            s.finish(scenario).await
+            assert_eq!(steered, goat2_engine_api::SteerResult::Accepted, "steer");
+            wait_for(&mut h, "turn end", finished, None).await;
+            h.session.shutdown().await;
         }
         "interrupt" => {
-            let mut s = Session::spawn(&cwd).await;
-            let thread = start_thread(&s, &options(&cwd, model, "never", "read-only")).await;
-            let turn = start_turn(
-                &s,
-                &thread,
+            let mode = RuntimeMode::AutoAcceptEdits;
+            let mut h = start(&recorder, spec(&cwd, model, mode, None)).await;
+            let turn = accepted(
+                &h,
                 "Run the shell command `sleep 30` exactly once, then reply with exactly: DONE",
-                "low",
+                model,
+                mode,
             )
             .await;
-            s.wait_for(
-                "item/started",
-                |n| matches!(n, Notification::ItemStarted(_)),
-                &mut no_requests,
-            )
-            .await;
-            let _: Value = s
-                .conn
-                .request(
-                    methods::TURN_INTERRUPT,
-                    &TurnInterruptParams {
-                        thread_id: thread.clone(),
-                        turn_id: turn,
-                    },
-                )
-                .await
-                .expect("turn/interrupt");
-            s.wait_for("turn/completed", turn_completed, &mut no_requests)
-                .await;
-            s.finish(scenario).await
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            h.session.interrupt(&turn).await.expect("interrupt");
+            wait_for(&mut h, "turn end", finished, None).await;
+            h.session.shutdown().await;
         }
         "approval" => {
-            let mut s = Session::spawn(&cwd).await;
-            let thread =
-                start_thread(&s, &options(&cwd, model, "untrusted", "workspace-write")).await;
-            start_turn(
-                &s,
-                &thread,
-                "Run exactly this shell command once: touch approved.txt  Then reply with exactly: DONE",
-                "low",
-            )
-            .await;
-            let mut approve = |request: &ServerRequest| match request {
-                ServerRequest::CommandApproval(_) => {
-                    serde_json::to_value(CommandApprovalResponse {
-                        decision: CommandDecision::Accept,
-                    })
-                    .unwrap()
-                }
-                other => panic!("unexpected server request {}", other.method()),
-            };
-            s.wait_for("turn/completed", turn_completed, &mut approve)
-                .await;
-            s.finish(scenario).await
+            let mode = RuntimeMode::ApprovalRequired;
+            let mut h = start(&recorder, spec(&cwd, model, mode, None)).await;
+            accepted(&h, "Run exactly this shell command once: touch approved.txt  Then reply with exactly: DONE", model, mode).await;
+            wait_for(&mut h, "turn end", finished, Some(RequestOutcome::Accept)).await;
+            h.session.shutdown().await;
         }
         "resume" => {
             // First process: create the thread (not recorded). Second process: resume + one turn.
-            let mut first = Session::spawn(&cwd).await;
-            let opts = options(&cwd, model, "never", "read-only");
-            let thread = start_thread(&first, &opts).await;
-            start_turn(&first, &thread, "Reply with exactly: FIRST", "low").await;
-            first
-                .wait_for("turn/completed", turn_completed, &mut no_requests)
-                .await;
-            first.conn.close_input();
-            first.child.shutdown().await;
-
-            let mut s = Session::spawn(&cwd).await;
-            let resumed: ThreadOpenResponse = s
-                .conn
-                .request(methods::THREAD_RESUME, &opts.resume_params(&thread))
-                .await
-                .expect("thread/resume");
-            assert_eq!(resumed.thread.id, thread);
-            start_turn(&s, &thread, "Reply with exactly: RESUMED", "low").await;
-            s.wait_for("turn/completed", turn_completed, &mut no_requests)
-                .await;
-            s.finish(scenario).await
+            let mode = RuntimeMode::ApprovalRequired;
+            let first_recorder = Recorder::new();
+            let mut first = start(&first_recorder, spec(&cwd, model, mode, None)).await;
+            accepted(&first, "Reply with exactly: FIRST", model, mode).await;
+            wait_for(&mut first, "turn end", finished, None).await;
+            first.session.shutdown().await;
+            let resume = first.engine_ref.clone();
+            let mut h = start(&recorder, spec(&cwd, model, mode, Some(resume))).await;
+            accepted(&h, "Reply with exactly: RESUMED", model, mode).await;
+            wait_for(&mut h, "turn end", finished, None).await;
+            h.session.shutdown().await;
         }
         other => panic!("unknown scenario {other}"),
     }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    recorder.finish(scenario, None)
 }
 
 #[tokio::main]
@@ -355,10 +283,13 @@ async fn main() {
             }
         };
         transcript.metadata = Some(
-            json!({ "recordedWith": format!("codex 0.167.0, model {model}"), "redaction": "goat2 Redactor (fail-closed)" })
-                .as_object()
-                .cloned()
-                .unwrap(),
+            json!({
+                "recordedWith": format!("codex 0.167.0 via goat2-engine-codex CodexEngineFactory, model {model}"),
+                "redaction": "goat2 Redactor (fail-closed)"
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
         );
         let (failures, counts) = schema::check_transcript(&mut book, &transcript);
         if !failures.is_empty() {
@@ -388,5 +319,4 @@ async fn main() {
     if failed {
         std::process::exit(1);
     }
-    let _ = ExitKind::Success;
 }

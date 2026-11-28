@@ -397,7 +397,12 @@ const KEEP_KEYS: &[&str] = &[
     "execpolicy_amendment",
     "proposedExecpolicyAmendment",
     "environmentId",
+    "model_reasoning_summary",
+    "reasoning_effort",
 ];
+/// Exact pointers kept although their key is redacted elsewhere (`summary` is also reasoning text).
+const KEEP_POINTERS: &[&str] = &["/params/summary"];
+
 /// Keys holding identifiers.
 const ID_KEYS: &[&str] = &[
     "id",
@@ -473,6 +478,7 @@ const KEPT_NOTIFICATIONS: &[&str] = &[
 const KEPT_REQUESTS: &[&str] = &[
     methods::INITIALIZE,
     methods::INITIALIZED,
+    "config/read",
     methods::THREAD_START,
     methods::THREAD_RESUME,
     methods::THREAD_TURNS_LIST,
@@ -560,6 +566,7 @@ impl Redactor {
                         continue;
                     }
                     let mut frame = frame.clone();
+                    self.trim_config_read(&mut frame);
                     self.redact_value(&mut frame, &mut Vec::new(), false, &mut Vec::new())?;
                     out.entries.push(Entry::EmitInbound {
                         label: label.clone(),
@@ -571,6 +578,31 @@ impl Redactor {
             }
         }
         Ok(out)
+    }
+
+    /// A config/read answer carries the user's whole Codex config, whose keys (project paths,
+    /// server names) are personal. Keep only the field the driver reads.
+    fn trim_config_read(&self, frame: &mut Value) {
+        let Some(id) = frame.get("id").filter(|_| frame.get("result").is_some()) else {
+            return;
+        };
+        if self
+            .request_methods
+            .get(&format!("out:{id}"))
+            .map(String::as_str)
+            != Some("config/read")
+        {
+            return;
+        }
+        let summary = frame
+            .pointer("/result/config/model_reasoning_summary")
+            .cloned()
+            .filter(Value::is_string);
+        let mut config = Map::new();
+        if let Some(summary) = summary {
+            config.insert("model_reasoning_summary".into(), summary);
+        }
+        frame["result"] = serde_json::json!({ "config": config, "origins": {} });
     }
 
     fn keep_inbound(&mut self, frame: &Value) -> bool {
@@ -628,6 +660,10 @@ impl Redactor {
             Value::String(text) => {
                 let pointer = pointer_of(path);
                 if pointer == MCP_URL_POINTER || pointer == MCP_AUTH_POINTER {
+                    return Ok(());
+                }
+                // Protocol enums whose key is also used for free text elsewhere.
+                if KEEP_POINTERS.contains(&pointer.as_str()) {
                     return Ok(());
                 }
                 let rule = if forced_text {

@@ -72,6 +72,7 @@ pub fn response_def_for_client_method(method: &str) -> Option<&'static str> {
         "turn/start" => "v2/TurnStartResponse",
         "turn/steer" => "v2/TurnSteerResponse",
         "turn/interrupt" => "v2/TurnInterruptResponse",
+        "config/read" => "v2/ConfigReadResponse",
         _ => return None,
     })
 }

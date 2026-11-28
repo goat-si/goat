@@ -4,7 +4,7 @@
   "version": "0.167.0",
   "scenario": "resume",
   "metadata": {
-    "recordedWith": "codex 0.167.0, model gpt-6-luna",
+    "recordedWith": "codex 0.167.0 via goat2-engine-codex CodexEngineFactory, model gpt-6-luna",
     "redaction": "goat2 Redactor (fail-closed)"
   },
   "entries": [
@@ -21,8 +21,8 @@
             ]
           },
           "clientInfo": {
-            "name": "goat2",
-            "title": "GOAT 2",
+            "name": "T3 Code",
+            "title": "T3 Code",
             "version": "0.0.0"
           }
         }
@@ -39,7 +39,7 @@
           "userAgent": "<redacted>"
         }
       },
-      "afterMs": 380
+      "afterMs": 4223
     },
     {
       "type": "expect_outbound",
@@ -51,9 +51,33 @@
       "type": "expect_outbound",
       "frame": {
         "id": 2,
+        "method": "config/read",
+        "params": {
+          "cwd": "/redacted/1",
+          "includeLayers": false
+        }
+      },
+      "wildcards": [
+        "/params/cwd"
+      ]
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "id": 2,
+        "result": {
+          "config": {},
+          "origins": {}
+        }
+      },
+      "afterMs": 13
+    },
+    {
+      "type": "expect_outbound",
+      "frame": {
+        "id": 3,
         "method": "thread/resume",
         "params": {
-          "approvalPolicy": "never",
           "config": {
             "mcp_servers.goat": {
               "http_headers": {
@@ -65,8 +89,7 @@
           "cwd": "/redacted/1",
           "excludeTurns": true,
           "model": "gpt-6-luna",
-          "sandbox": "read-only",
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
         }
       },
       "wildcards": [
@@ -76,31 +99,31 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870300948,
+        "emittedAtMs": 1795872400466,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "type": "idle"
           },
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
         }
       },
-      "afterMs": 4
+      "afterMs": 1
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "id": 2,
+        "id": 3,
         "result": {
           "activePermissionProfile": null,
-          "approvalPolicy": "never",
+          "approvalPolicy": "untrusted",
           "approvalsReviewer": "user",
           "collaborationMode": {
             "mode": "default",
             "settings": {
-              "developer_instructions": null,
+              "developer_instructions": "<redacted>",
               "model": "gpt-6-luna",
-              "reasoning_effort": "<redacted>"
+              "reasoning_effort": "high"
             }
           },
           "cwd": "/redacted/1",
@@ -127,7 +150,7 @@
             "agentRole": null,
             "canAcceptDirectInput": true,
             "cliVersion": "<redacted>",
-            "createdAt": 1795870294,
+            "createdAt": 1795872396,
             "cwd": "/redacted/3",
             "daybreakEnabled": null,
             "environments": [
@@ -144,7 +167,7 @@
             "forkedFromId": null,
             "gitInfo": null,
             "historyMode": "paginated",
-            "id": "01a22236-0305-78d1-b410-099334a08f91",
+            "id": "01a22256-1406-75c2-a77d-c5112774ac56",
             "model": "gpt-6-luna",
             "modelProvider": "openai",
             "name": null,
@@ -154,30 +177,40 @@
             "preview": "<redacted>",
             "projectId": null,
             "reasoningEffort": "high",
-            "recencyAt": 1795870294,
+            "recencyAt": 1795872396,
             "section": null,
             "sectionEnteredAt": null,
-            "sessionId": "01a22236-0305-78d1-b410-099334a08f91",
+            "sessionId": "01a22256-1406-75c2-a77d-c5112774ac56",
             "source": "vscode",
             "status": {
               "type": "idle"
             },
             "threadSource": null,
             "turns": [],
-            "updatedAt": 1795870300
+            "updatedAt": 1795872400
           },
           "turnsBackwardsCursor": "<redacted>"
         }
       },
-      "afterMs": 4
+      "afterMs": 0
     },
     {
       "type": "expect_outbound",
       "frame": {
-        "id": 3,
+        "id": 4,
         "method": "turn/start",
         "params": {
-          "clientUserMessageId": "goat-msg-1",
+          "approvalPolicy": "untrusted",
+          "approvalsReviewer": "user",
+          "clientUserMessageId": "goat-input-1",
+          "collaborationMode": {
+            "mode": "default",
+            "settings": {
+              "model": "gpt-6-luna",
+              "reasoning_effort": "low"
+            }
+          },
+          "cwd": "/redacted/1",
           "effort": "low",
           "input": [
             {
@@ -186,20 +219,28 @@
               "type": "text"
             }
           ],
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+          "model": "gpt-6-luna",
+          "sandboxPolicy": {
+            "type": "readOnly"
+          },
+          "summary": "auto",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
         }
-      }
+      },
+      "wildcards": [
+        "/params/cwd"
+      ]
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "id": 3,
+        "id": 4,
         "result": {
           "turn": {
             "completedAt": null,
             "durationMs": null,
             "error": null,
-            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "id": "01a22256-2459-7413-96c3-a6797d360518",
             "items": [],
             "itemsView": "notLoaded",
             "rootTurnId": "<redacted>",
@@ -213,34 +254,34 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870300997,
+        "emittedAtMs": 1795872400478,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "activeFlags": [],
             "type": "active"
           },
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
         }
       },
-      "afterMs": 6
+      "afterMs": 1
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870300997,
+        "emittedAtMs": 1795872400478,
         "method": "turn/started",
         "params": {
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
           "turn": {
             "completedAt": null,
             "durationMs": null,
             "error": null,
-            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "id": "01a22256-2459-7413-96c3-a6797d360518",
             "items": [],
             "itemsView": "notLoaded",
             "rootTurnId": "<redacted>",
-            "startedAt": 1795870300,
+            "startedAt": 1795872400,
             "status": "inProgress"
           }
         }
@@ -250,11 +291,11 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870302281,
+        "emittedAtMs": 1795872401868,
         "method": "item/started",
         "params": {
           "item": {
-            "clientId": "goat-msg-1",
+            "clientId": "goat-input-1",
             "completedAtMs": null,
             "content": [
               {
@@ -263,27 +304,27 @@
                 "type": "text"
               }
             ],
-            "id": "01a22236-2048-7db1-82c3-afb670264d5c",
-            "startedAtMs": 1795870302281,
+            "id": "01a22256-29cb-74e3-b024-65e10bc57b03",
+            "startedAtMs": 1795872401868,
             "type": "userMessage"
           },
-          "startedAtMs": 1795870302281,
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "startedAtMs": 1795872401868,
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
-      "afterMs": 299
+      "afterMs": 257
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870302286,
+        "emittedAtMs": 1795872401869,
         "method": "item/completed",
         "params": {
-          "completedAtMs": 1795870302281,
+          "completedAtMs": 1795872401868,
           "item": {
-            "clientId": "goat-msg-1",
-            "completedAtMs": 1795870302281,
+            "clientId": "goat-input-1",
+            "completedAtMs": 1795872401868,
             "content": [
               {
                 "text": "Reply with exactly: RESUMED",
@@ -291,64 +332,64 @@
                 "type": "text"
               }
             ],
-            "id": "01a22236-2048-7db1-82c3-afb670264d5c",
-            "startedAtMs": 1795870302281,
+            "id": "01a22256-29cb-74e3-b024-65e10bc57b03",
+            "startedAtMs": 1795872401868,
             "type": "userMessage"
           },
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
-      "afterMs": 4
+      "afterMs": 1
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304148,
+        "emittedAtMs": 1795872404199,
         "method": "item/started",
         "params": {
           "item": {
             "completedAtMs": null,
             "delivery": null,
-            "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+            "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
             "memoryCitation": null,
             "phase": "final_answer",
             "questions": null,
-            "startedAtMs": 1795870304148,
+            "startedAtMs": 1795872404199,
             "text": "",
             "type": "agentMessage"
           },
-          "startedAtMs": 1795870304148,
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "startedAtMs": 1795872404199,
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
-      "afterMs": 1509
+      "afterMs": 1953
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304151,
+        "emittedAtMs": 1795872404199,
         "method": "item/agentMessage/delta",
         "params": {
           "delta": "RES",
-          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
-      "afterMs": 3
+      "afterMs": 0
     },
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304151,
+        "emittedAtMs": 1795872404199,
         "method": "item/agentMessage/delta",
         "params": {
           "delta": "UM",
-          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
       "afterMs": 0
@@ -356,13 +397,37 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304151,
+        "emittedAtMs": 1795872404238,
         "method": "item/agentMessage/delta",
         "params": {
           "delta": "ED",
-          "itemId": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
+          "itemId": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
+        }
+      },
+      "afterMs": 38
+    },
+    {
+      "type": "emit_inbound",
+      "frame": {
+        "emittedAtMs": 1795872404563,
+        "method": "item/completed",
+        "params": {
+          "completedAtMs": 1795872404562,
+          "item": {
+            "completedAtMs": 1795872404562,
+            "delivery": null,
+            "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
+            "memoryCitation": null,
+            "phase": "final_answer",
+            "questions": null,
+            "startedAtMs": 1795872404199,
+            "text": "RESUMED",
+            "type": "agentMessage"
+          },
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
+          "turnId": "01a22256-2459-7413-96c3-a6797d360518"
         }
       },
       "afterMs": 0
@@ -370,37 +435,13 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304276,
-        "method": "item/completed",
-        "params": {
-          "completedAtMs": 1795870304270,
-          "item": {
-            "completedAtMs": 1795870304270,
-            "delivery": null,
-            "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
-            "memoryCitation": null,
-            "phase": "final_answer",
-            "questions": null,
-            "startedAtMs": 1795870304148,
-            "text": "RESUMED",
-            "type": "agentMessage"
-          },
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
-          "turnId": "01a22236-1b34-7461-a767-41b851856888"
-        }
-      },
-      "afterMs": 8
-    },
-    {
-      "type": "emit_inbound",
-      "frame": {
-        "emittedAtMs": 1795870304312,
+        "emittedAtMs": 1795872404578,
         "method": "thread/status/changed",
         "params": {
           "status": {
             "type": "idle"
           },
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91"
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56"
         }
       },
       "afterMs": 0
@@ -408,31 +449,31 @@
     {
       "type": "emit_inbound",
       "frame": {
-        "emittedAtMs": 1795870304312,
+        "emittedAtMs": 1795872404578,
         "method": "turn/completed",
         "params": {
-          "threadId": "01a22236-0305-78d1-b410-099334a08f91",
+          "threadId": "01a22256-1406-75c2-a77d-c5112774ac56",
           "turn": {
-            "completedAt": 1795870304,
-            "durationMs": 3307,
+            "completedAt": 1795872404,
+            "durationMs": 4099,
             "error": null,
-            "id": "01a22236-1b34-7461-a767-41b851856888",
+            "id": "01a22256-2459-7413-96c3-a6797d360518",
             "items": [
               {
-                "completedAtMs": 1795870304270,
+                "completedAtMs": 1795872404562,
                 "delivery": null,
-                "id": "msg_028f5f7c0c100c68016b0ace60128487d097f2478877c07dea",
+                "id": "msg_0ffe5943cd5bfe54016b0ad6942f9887d0a552f8b00c5209c7",
                 "memoryCitation": null,
                 "phase": "final_answer",
                 "questions": null,
-                "startedAtMs": 1795870304148,
+                "startedAtMs": 1795872404199,
                 "text": "RESUMED",
                 "type": "agentMessage"
               }
             ],
             "itemsView": "summary",
             "rootTurnId": "<redacted>",
-            "startedAt": 1795870300,
+            "startedAt": 1795872400,
             "status": "completed"
           }
         }

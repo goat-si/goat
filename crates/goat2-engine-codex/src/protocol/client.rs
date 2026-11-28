@@ -35,11 +35,13 @@ pub struct InitializeCapabilities {
 }
 
 impl InitializeParams {
+    /// v1 `buildCodexInitializeParams` (apps/server/src/provider/CodexClientIdentity.ts:4-24): the
+    /// client is named "T3 Code" because Codex picks its model catalog by originator name.
     pub fn goat(version: &str) -> Self {
         Self {
             client_info: ClientInfo {
-                name: "goat2".into(),
-                title: Some("GOAT 2".into()),
+                name: CODEX_CLIENT_NAME.into(),
+                title: Some(CODEX_CLIENT_NAME.into()),
                 version: version.into(),
             },
             capabilities: InitializeCapabilities {
@@ -49,6 +51,10 @@ impl InitializeParams {
         }
     }
 }
+
+/// v1 `CODEX_CLIENT_NAME` (CodexClientIdentity.ts:4), also sent as
+/// `CODEX_INTERNAL_ORIGINATOR_OVERRIDE` when the process starts.
+pub const CODEX_CLIENT_NAME: &str = "T3 Code";
 
 /// `initialize` result (fields GOAT reads).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
