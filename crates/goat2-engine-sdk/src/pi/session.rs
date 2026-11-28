@@ -158,6 +158,8 @@ impl Client {
 enum PendingPrompt {
     Start,
     Steer(oneshot::Sender<Result<(), String>>),
+    CompactStart,
+    CompactSteer(oneshot::Sender<Result<(), String>>),
 }
 struct UiRequest {
     method: String,
@@ -175,6 +177,7 @@ impl Drop for UiRequest {
     }
 }
 struct Shared {
+    session_file: String,
     turn: Option<String>,
     last_turn: Option<String>,
     unowned: bool,
@@ -193,6 +196,58 @@ struct Shared {
     abort_pending: bool,
     barriers: HashMap<String, oneshot::Sender<bool>>,
     translator: Translator,
+}
+fn compact_command(message: &str) -> Option<Option<String>> {
+    let text = message.trim();
+    let rest = text.strip_prefix("/compact")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let instructions = rest.trim();
+    Some((!instructions.is_empty()).then(|| instructions.to_owned()))
+}
+fn compact_record(id: &str, instructions: Option<String>) -> Value {
+    let mut record = json!({"id":id,"type":"compact"});
+    if let Some(instructions) = instructions {
+        record["customInstructions"] = json!(instructions);
+    }
+    record
+}
+
+fn changed_session(state: &Shared, data: &Value) -> bool {
+    data.get("sessionFile")
+        .and_then(Value::as_str)
+        .is_some_and(|file| !file.is_empty() && file != state.session_file)
+}
+
+fn watch_start_ack(shared: Arc<Mutex<Shared>>, tx: mpsc::UnboundedSender<EngineEvent>, id: String) {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    tokio::spawn(async move {
+        let mut deadline = deadline;
+        loop {
+            tokio::time::sleep_until(deadline).await;
+            let mut state = shared.lock().await;
+            if !matches!(
+                state.pending_prompts.get(&id),
+                Some(PendingPrompt::Start | PendingPrompt::CompactStart)
+            ) {
+                return;
+            }
+            if !state.requests.is_empty() {
+                deadline = tokio::time::Instant::now() + TIMEOUT;
+                continue;
+            }
+            state.pending_prompts.clear();
+            state.probe_failed = true;
+            let process = state.process.clone();
+            drop(state);
+            let _ = tx.send(EngineEvent::Exited {
+                reason: "Pi did not acknowledge the prompt; delivery is unknown".into(),
+            });
+            process.lock().await.kill_group();
+            return;
+        }
+    });
 }
 struct PiSession {
     client: Arc<Client>,
@@ -408,6 +463,23 @@ async fn pump(
                 let mut state = shared.lock().await;
                 if record.get("type").and_then(Value::as_str) == Some("response") {
                     let id = record.get("id").and_then(Value::as_str).unwrap_or("");
+                    if (state.barriers.contains_key(id) || state.idle_probe.as_deref() == Some(id))
+                        && record.get("success").and_then(Value::as_bool) == Some(true)
+                        && changed_session(&state, &record["data"])
+                    {
+                        state.probe_failed = true;
+                        state.barriers.clear();
+                        state.pending_prompts.clear();
+                        state.requests.clear();
+                        let process = state.process.clone();
+                        drop(state);
+                        let _ = tx.send(EngineEvent::Exited {
+                            reason: "Pi session file changed; cannot safely resume this session"
+                                .into(),
+                        });
+                        process.lock().await.kill_group();
+                        return;
+                    }
                     if let Some(barrier) = state.barriers.remove(id) {
                         let idle = record.get("success").and_then(Value::as_bool) == Some(true)
                             && record.pointer("/data/isStreaming").and_then(Value::as_bool)
@@ -427,8 +499,15 @@ async fn pump(
                     }
                     if let Some(pending) = state.pending_prompts.remove(id) {
                         let success = record.get("success").and_then(Value::as_bool) == Some(true);
-                        let is_start = matches!(pending, PendingPrompt::Start);
-                        if let PendingPrompt::Steer(sender) = pending {
+                        let is_start =
+                            matches!(pending, PendingPrompt::Start | PendingPrompt::CompactStart);
+                        let is_compact = matches!(
+                            pending,
+                            PendingPrompt::CompactStart | PendingPrompt::CompactSteer(_)
+                        );
+                        if let PendingPrompt::Steer(sender) | PendingPrompt::CompactSteer(sender) =
+                            pending
+                        {
                             let reason = record
                                 .get("error")
                                 .and_then(Value::as_str)
@@ -439,15 +518,18 @@ async fn pump(
                                 Err(reason.to_owned())
                             });
                         }
-                        if !success && is_start {
+                        if !success && is_start && !(is_compact && state.compacting) {
                             if let Some(turn) = state.turn.clone() {
                                 if state.saw_activity {
                                     state.unowned = true;
                                 }
-                                let reason = record
-                                    .get("error")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("Pi rejected the prompt.");
+                                let reason = record.get("error").and_then(Value::as_str).unwrap_or(
+                                    if is_compact {
+                                        "Pi compact failed."
+                                    } else {
+                                        "Pi rejected the prompt."
+                                    },
+                                );
                                 let failure = json!({"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":reason}});
                                 let mut events = state.translator.translate(&failure, &turn);
                                 events.extend(
@@ -466,7 +548,7 @@ async fn pump(
                             && !state.abort_pending
                             && state.turn.is_some()
                             && (state.settled.is_some()
-                                || (is_start
+                                || ((is_start || is_compact)
                                     && !state.saw_activity
                                     && (state.command_candidate
                                         || record
@@ -888,6 +970,7 @@ impl EngineFactory for PiFactory {
         let process = Arc::new(Mutex::new(process));
         let (tx, rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Mutex::new(Shared {
+            session_file: engine_ref.clone(),
             turn: None,
             last_turn: None,
             unowned: false,
@@ -970,14 +1053,24 @@ impl EngineSession for PiSession {
         settings: &TurnSettings,
     ) -> TurnStartResult {
         let _guard = self.command_lock.lock().await;
-        let (mut message, images) = match prompt_payload(
-            &inputs,
-            &self.thread_id,
-            &self.cwd,
-            self.attachments.as_ref(),
-        )
-        .await
-        {
+        let raw_message = inputs
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let compact = compact_command(&raw_message);
+        let payload = if compact.is_some() {
+            Ok((raw_message, Vec::new()))
+        } else {
+            prompt_payload(
+                &inputs,
+                &self.thread_id,
+                &self.cwd,
+                self.attachments.as_ref(),
+            )
+            .await
+        };
+        let (mut message, images) = match payload {
             Ok(v) => v,
             Err(reason) => return TurnStartResult::Declined { reason },
         };
@@ -1034,7 +1127,9 @@ impl EngineSession for PiSession {
         }
         let command_candidate = message.trim_start().starts_with('/');
         let mut preamble = self.preamble.lock().await;
-        if let Some(prefix) = preamble.as_ref() {
+        if compact.is_none()
+            && let Some(prefix) = preamble.as_ref()
+        {
             message = format!("{prefix}\n\n{message}");
         }
         let turn = format!(
@@ -1054,32 +1149,58 @@ impl EngineSession for PiSession {
             state.turn = Some(turn.clone());
             state.last_turn = Some(turn.clone());
             state.pending_prompts.clear();
-            state
-                .pending_prompts
-                .insert(id.clone(), PendingPrompt::Start);
+            state.pending_prompts.insert(
+                id.clone(),
+                if compact.is_some() {
+                    PendingPrompt::CompactStart
+                } else {
+                    PendingPrompt::Start
+                },
+            );
             state.idle_probe = None;
             state.settled = None;
             state.saw_activity = false;
             state.command_candidate = command_candidate;
             state.compacting = false;
             state.abort_pending = false;
-            if let Err(error) = self.client.conn.send(&json!({"id": id, "type":"prompt","message":message,"images":images,"streamingBehavior":"steer"})).await {
-                return TurnStartResult::Unknown { reason: error.to_string() };
+            let request = match compact.clone() {
+                Some(instructions) => compact_record(&id, instructions),
+                None => {
+                    json!({"id": id, "type":"prompt","message":message,"images":images,"streamingBehavior":"steer"})
+                }
+            };
+            if let Err(error) = self.client.conn.send(&request).await {
+                return TurnStartResult::Unknown {
+                    reason: error.to_string(),
+                };
             }
         }
-        *preamble = None;
+        watch_start_ack(self.shared.clone(), self.events.clone(), id);
+        if compact.is_none() {
+            *preamble = None;
+        }
         TurnStartResult::Accepted { turn_id: turn }
     }
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
         let _guard = self.command_lock.lock().await;
-        let (message, images) = match prompt_payload(
-            &inputs,
-            &self.thread_id,
-            &self.cwd,
-            self.attachments.as_ref(),
-        )
-        .await
-        {
+        let raw_message = inputs
+            .iter()
+            .map(|i| i.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let compact = compact_command(&raw_message);
+        let payload = if compact.is_some() {
+            Ok((raw_message, Vec::new()))
+        } else {
+            prompt_payload(
+                &inputs,
+                &self.thread_id,
+                &self.cwd,
+                self.attachments.as_ref(),
+            )
+            .await
+        };
+        let (message, images) = match payload {
             Ok(v) => v,
             Err(reason) => return SteerResult::Declined { reason },
         };
@@ -1092,14 +1213,21 @@ impl EngineSession for PiSession {
         let id = self.client.next_id();
         let (ack_tx, ack_rx) = oneshot::channel();
         state.idle_probe = None;
-        state
-            .pending_prompts
-            .insert(id.clone(), PendingPrompt::Steer(ack_tx));
-        let sent = self
-            .client
-            .conn
-            .send(&json!({"id":id,"type":"prompt","message":message,"images":images,"streamingBehavior":"steer"}))
-            .await;
+        state.pending_prompts.insert(
+            id.clone(),
+            if compact.is_some() {
+                PendingPrompt::CompactSteer(ack_tx)
+            } else {
+                PendingPrompt::Steer(ack_tx)
+            },
+        );
+        let request = match compact {
+            Some(instructions) => compact_record(&id, instructions),
+            None => {
+                json!({"id":id,"type":"prompt","message":message,"images":images,"streamingBehavior":"steer"})
+            }
+        };
+        let sent = self.client.conn.send(&request).await;
         drop(state);
         drop(_guard);
         if let Err(e) = sent {
@@ -1126,6 +1254,33 @@ impl EngineSession for PiSession {
                 return Err(EngineError::Transport("Pi turn is not active".into()));
             }
             state.translator.interrupt();
+            if state.compacting
+                || state.pending_prompts.values().any(|pending| {
+                    matches!(
+                        pending,
+                        PendingPrompt::CompactStart | PendingPrompt::CompactSteer(_)
+                    )
+                })
+            {
+                state.probe_failed = true;
+                state.pending_prompts.clear();
+                state.requests.clear();
+                state.custom.clear();
+                state.turn = None;
+                let events = state
+                    .translator
+                    .translate(&json!({"type":"agent_settled"}), turn_id);
+                let process = state.process.clone();
+                drop(state);
+                for event in events {
+                    let _ = self.events.send(event);
+                }
+                let _ = self.events.send(EngineEvent::Exited {
+                    reason: "Pi stopped during compaction".into(),
+                });
+                process.lock().await.kill_group();
+                return Ok(());
+            }
             state.abort_pending = true;
             state.idle_probe = None;
         }
@@ -1235,6 +1390,7 @@ impl EngineSession for PiSession {
     async fn shutdown(&self) {
         let mut state = self.shared.lock().await;
         state.idle_probe = None;
+        state.pending_prompts.clear();
         state.requests.clear();
         state.custom.clear();
         drop(state);
@@ -1249,7 +1405,18 @@ async fn finish_uncertain_steer(
     id: &str,
 ) {
     let mut state = shared.lock().await;
-    if state.pending_prompts.remove(id).is_none() {
+    let Some(pending) = state.pending_prompts.remove(id) else {
+        return;
+    };
+    if matches!(pending, PendingPrompt::CompactSteer(_)) {
+        state.probe_failed = true;
+        state.pending_prompts.clear();
+        let process = state.process.clone();
+        drop(state);
+        let _ = tx.send(EngineEvent::Exited {
+            reason: "Pi did not acknowledge compact; delivery is unknown".into(),
+        });
+        process.lock().await.kill_group();
         return;
     }
     if state.settled.is_some()
@@ -1265,18 +1432,31 @@ async fn wait_steer(
     client: &Arc<Client>,
     tx: &mpsc::UnboundedSender<EngineEvent>,
     id: &str,
-    ack: oneshot::Receiver<Result<(), String>>,
+    mut ack: oneshot::Receiver<Result<(), String>>,
     timeout: Duration,
 ) -> SteerResult {
-    match tokio::time::timeout(timeout, ack).await {
-        Ok(Ok(Ok(()))) => SteerResult::Accepted,
-        Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
-        _ => {
-            finish_uncertain_steer(shared, client, tx, id).await;
-            SteerResult::Unknown {
-                reason: "Pi did not acknowledge the steer".into(),
+    loop {
+        return match tokio::time::timeout(timeout, &mut ack).await {
+            Ok(Ok(Ok(()))) => SteerResult::Accepted,
+            Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
+            Err(_)
+                if {
+                    let state = shared.lock().await;
+                    matches!(
+                        state.pending_prompts.get(id),
+                        Some(PendingPrompt::CompactSteer(_))
+                    ) && !state.requests.is_empty()
+                } =>
+            {
+                continue;
             }
-        }
+            _ => {
+                finish_uncertain_steer(shared, client, tx, id).await;
+                SteerResult::Unknown {
+                    reason: "Pi did not acknowledge the steer".into(),
+                }
+            }
+        };
     }
 }
 impl PiSession {
@@ -1312,6 +1492,23 @@ impl PiSession {
             .call(json!({"type":"get_state"}))
             .await
             .map_err(err)?;
+        {
+            let mut state = self.shared.lock().await;
+            if changed_session(&state, &live) {
+                state.probe_failed = true;
+                state.pending_prompts.clear();
+                state.requests.clear();
+                let process = state.process.clone();
+                drop(state);
+                let _ = self.events.send(EngineEvent::Exited {
+                    reason: "Pi session file changed; cannot safely resume this session".into(),
+                });
+                process.lock().await.kill_group();
+                return Err(EngineError::Transport(
+                    "Pi session file changed; cannot safely resume this session".into(),
+                ));
+            }
+        }
         let selected = if slug == "default" {
             self.baseline_model.clone()
         } else {
@@ -1665,6 +1862,7 @@ mod dialog_lifecycle_tests {
             "turn",
         );
         let state = Shared {
+            session_file: "/tmp/test".into(),
             turn: Some("turn".into()),
             last_turn: None,
             unowned: false,
@@ -1842,6 +2040,7 @@ mod dialog_lifecycle_tests {
         let (probe_tx, _) = mpsc::unbounded_channel();
         let (ack_tx, ack_rx) = oneshot::channel();
         let shared = Arc::new(Mutex::new(Shared {
+            session_file: "/tmp/test".into(),
             turn: Some("turn".into()),
             last_turn: None,
             unowned: false,
@@ -1895,5 +2094,60 @@ mod dialog_lifecycle_tests {
         task.await.unwrap();
         client.conn.close_input().await;
         child.lock().await.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn missing_start_ack_exits_after_bounded_wait() {
+        let (session, _inbound) = test_session();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        session
+            .shared
+            .lock()
+            .await
+            .pending_prompts
+            .insert("start".into(), PendingPrompt::Start);
+        watch_start_ack(session.shared.clone(), tx, "start".into());
+        tokio::time::advance(TIMEOUT).await;
+        tokio::task::yield_now().await;
+        assert!(
+            matches!(rx.try_recv(), Ok(EngineEvent::Exited { reason }) if reason.contains("delivery is unknown"))
+        );
+        session.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn start_ack_watch_preserves_open_dialog_and_ignores_late_timer_after_ack() {
+        let (session, _inbound) = test_session();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        {
+            let mut state = session.shared.lock().await;
+            state
+                .pending_prompts
+                .insert("start".into(), PendingPrompt::Start);
+            state.requests.insert(
+                "dialog".into(),
+                UiRequest {
+                    method: "input".into(),
+                    approval_key: (String::new(), String::new()),
+                    token: "token".into(),
+                    deadline: None,
+                    expiry: None,
+                    route: None,
+                },
+            );
+        }
+        watch_start_ack(session.shared.clone(), tx, "start".into());
+        tokio::time::advance(TIMEOUT).await;
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        {
+            let mut state = session.shared.lock().await;
+            state.requests.clear();
+            state.pending_prompts.remove("start");
+        }
+        tokio::time::advance(TIMEOUT).await;
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        session.shutdown().await;
     }
 }

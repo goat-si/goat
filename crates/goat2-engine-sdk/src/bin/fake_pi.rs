@@ -34,7 +34,7 @@ fn main() {
         println!("0.0.0-fake");
         return;
     }
-    let session = args
+    let mut session = args
         .windows(2)
         .find(|w| w[0] == "--session")
         .map(|w| w[1].clone())
@@ -42,6 +42,7 @@ fn main() {
     let mut active = false;
     let mut pending = false;
     let mut pending_prompt = None::<Value>;
+    let mut pending_compact = None::<Value>;
     let mut reject_abort = false;
     let mut structured = false;
     let mut batch = false;
@@ -108,6 +109,45 @@ fn main() {
                 response(&request, json!({}));
             }
             "clear_queue" => response(&request, json!({})),
+            "compact" => {
+                let instructions = request
+                    .get("customInstructions")
+                    .and_then(Value::as_str)
+                    .unwrap_or("none");
+                if instructions == "reject" {
+                    emit(
+                        json!({"type":"response","id":request["id"],"command":"compact","success":false,"error":"compact rejected"}),
+                    );
+                    continue;
+                }
+                if active {
+                    emit(json!({"type":"agent_settled"}));
+                    active = false;
+                }
+                emit(json!({"type":"compaction_start","reason":"manual"}));
+                if instructions == "wait" {
+                    emit(
+                        json!({"type":"extension_ui_request","id":"compact-wait","method":"input","title":"Compacting"}),
+                    );
+                    continue;
+                }
+                if instructions == "ack-first" {
+                    response(&request, json!({}));
+                }
+                emit(
+                    json!({"type":"compaction_end","reason":"manual","result":{"summary":instructions,"tokensBefore":100,"estimatedTokensAfter":10}}),
+                );
+                if instructions == "late" {
+                    pending_compact = Some(request.clone());
+                    emit(
+                        json!({"type":"extension_ui_request","id":"compact-ack","method":"input","title":"Compact ACK barrier"}),
+                    );
+                    continue;
+                }
+                if instructions != "ack-first" {
+                    response(&request, json!({}));
+                }
+            }
             "prompt" if active && request["streamingBehavior"] == "steer" => {
                 if request["message"] == "crash-steer" {
                     std::process::exit(23);
@@ -136,6 +176,12 @@ fn main() {
             "steer" => response(&request, json!({})),
             "prompt" => {
                 let text = request["message"].as_str().unwrap_or("");
+                if text == "change-session" {
+                    session = "/tmp/fake-pi-other.jsonl".into();
+                    response(&request, json!({}));
+                    finish("changed", false);
+                    continue;
+                }
                 if text == "crash" {
                     std::process::exit(23);
                 }
@@ -317,6 +363,12 @@ fn main() {
                 }
             }
             "extension_ui_response" => {
+                if request["id"] == "compact-ack" {
+                    if let Some(compact) = pending_compact.take() {
+                        response(&compact, json!({}));
+                    }
+                    continue;
+                }
                 if batch {
                     let id = request["id"].as_str().unwrap_or("");
                     if id.starts_with("select-") {

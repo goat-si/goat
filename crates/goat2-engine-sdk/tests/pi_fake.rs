@@ -61,6 +61,186 @@ fn input(text: &str) -> Vec<EngineInput> {
         attachments: vec![],
     }]
 }
+
+#[tokio::test]
+async fn compact_start_and_steer_use_rpc_and_complete() {
+    let mut h = start("pi-compact").await;
+    for (command, summary) in [
+        ("/compact", "none"),
+        (" /compact  keep decisions  ", "keep decisions"),
+        ("/compact ack-first", "ack-first"),
+    ] {
+        accepted(h.session.start_turn(input(command), &settings()).await);
+        let events = finished(&mut h).await;
+        assert!(events.iter().any(|e| matches!(e, EngineEvent::ItemCompleted { item, .. } if matches!(&item.body, TurnItemBody::Compaction { summary: Some(value), .. } if value == summary))));
+        assert!(matches!(
+            events.last(),
+            Some(EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Done,
+                ..
+            })
+        ));
+    }
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    assert_eq!(
+        h.session.steer(&turn, input("/compact steer notes")).await,
+        SteerResult::Accepted
+    );
+    let events = finished(&mut h).await;
+    assert!(events.iter().any(|e| matches!(e, EngineEvent::ItemCompleted { item, .. } if matches!(&item.body, TurnItemBody::Compaction { summary: Some(value), .. } if value == "steer notes"))));
+    assert!(matches!(
+        events.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn compact_rejection_and_interrupt_are_visible() {
+    let mut h = start("pi-compact-negative").await;
+    accepted(
+        h.session
+            .start_turn(input("/compact reject"), &settings())
+            .await,
+    );
+    assert!(
+        matches!(finished(&mut h).await.last(), Some(EngineEvent::TurnFinished { outcome: TurnOutcome::Failed { reason }, .. }) if reason.contains("compact rejected"))
+    );
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    assert!(
+        matches!(h.session.steer(&turn, input("/compact reject")).await, SteerResult::Declined { reason } if reason.contains("compact rejected"))
+    );
+    h.session.interrupt(&turn).await.unwrap();
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Interrupted,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+
+    let mut h = start("pi-compact-interrupt").await;
+    let turn = accepted(
+        h.session
+            .start_turn(input("/compact wait"), &settings())
+            .await,
+    );
+    h.session.interrupt(&turn).await.unwrap();
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Interrupted,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn interrupt_compact_steer_while_ack_pending() {
+    let mut h = start("pi-compact-steer-interrupt").await;
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    {
+        let session = &h.session;
+        let steer = session.steer(&turn, input("/compact wait"));
+        tokio::pin!(steer);
+        loop {
+            tokio::select! {
+                result = &mut steer => panic!("steer completed early: {result:?}"),
+                event = h.events.recv() => match event.unwrap() {
+                    EngineEvent::RequestOpened { key, .. } => { assert_eq!(key, "compact-wait"); break; },
+                    EngineEvent::TurnFinished { .. } => panic!("settled before interrupt"),
+                    _ => {}
+                }
+            }
+        }
+        session.interrupt(&turn).await.unwrap();
+        assert!(matches!(steer.await, SteerResult::Unknown { .. }));
+    }
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Interrupted,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn compact_waits_for_ack_after_settlement_and_dialog() {
+    let mut h = start("pi-compact-late").await;
+    accepted(
+        h.session
+            .start_turn(input("/compact late"), &settings())
+            .await,
+    );
+    assert_eq!(opened(&mut h).await, "compact-ack");
+    assert!(h.events.try_recv().is_err());
+    reply(&h, "compact-ack", "ok").await.unwrap();
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    {
+        let session = &h.session;
+        let steer = session.steer(&turn, input("/compact late"));
+        tokio::pin!(steer);
+        loop {
+            tokio::select! {
+                result = &mut steer => panic!("steer returned before ACK: {result:?}"),
+                event = h.events.recv() => match event.unwrap() {
+                    EngineEvent::RequestOpened { key, .. } => { assert_eq!(key, "compact-ack"); break; },
+                    EngineEvent::TurnFinished { .. } => panic!("settled before compact ACK"),
+                    _ => {}
+                }
+            }
+        }
+        session
+            .answer_request(
+                "compact-ack",
+                RequestAnswer {
+                    outcome: RequestOutcome::Answered,
+                    text: Some("ok".into()),
+                    answers: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(steer.await, SteerResult::Accepted);
+    }
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn changed_session_file_exits_before_settlement() {
+    let mut h = start("pi-session-drift").await;
+    accepted(
+        h.session
+            .start_turn(input("change-session"), &settings())
+            .await,
+    );
+    assert!(
+        matches!(finished(&mut h).await.last(), Some(EngineEvent::Exited { reason }) if reason.contains("session file"))
+    );
+    h.session.shutdown().await;
+}
 async fn start(id: &str) -> EngineHandle {
     factory(PiProfile::Pi)
         .start(spec(id))
