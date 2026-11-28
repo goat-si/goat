@@ -35,3 +35,13 @@ Newest at the bottom.
 - **Archive location (open).** After 90 days a thread folder (compressed) moves off the laptop:
   Cloudflare R2, AWS S3, or a "hub machine" (one of your own machines with a big disk). Proposal:
   hub machine by default, R2 as an opt-in.
+- **Bot reply modes (proposal, open).** Two outcomes after the first reply: answer-and-done (the
+  first message is the whole answer) and ack-and-report-later (one line naming the first step, work
+  continues, the result arrives as a new message). GOAT today splits on "does the turn call a tool"
+  (`channelBotSessionBrief.ts:52`, receipt = first assistant message, 20 s / 55 s fallbacks in
+  `ChannelSessionFirst.ts`); Grok Bot lets the agent call `SendToUser` when work will take long and
+  promotes running tools to the background when a follow-up arrives (`QUEUED_FOLLOW_UP`,
+  `WakeParent`). Proposal: read-only lookups that finish within 10 s stay answer-and-done; the ack
+  is an explicit `send_to_user(kind: ack | result)` tool; keep GOAT's 20 s / 55 s safety and one
+  receipt per input; follow-ups get an immediate reply while running work moves to the background;
+  finished background work wakes the bot. Full write-up: PRD page `bot-reply`.
