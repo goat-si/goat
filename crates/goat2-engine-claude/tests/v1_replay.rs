@@ -448,6 +448,16 @@ async fn steer_joins_the_running_turn() {
         final_answers(&events),
         vec!["steering fixture observed".to_string()]
     );
+    // 2.1.111 sends no lifecycle or echo; v1 finalizeActiveTurn reports the pending steer
+    // completed with the completed turn (ClaudeAdapterV2.ts:5296-5305).
+    let updates: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::SteerUpdated { status, .. } => Some(status.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(updates, vec![goat2_engine_api::SteerStatus::Completed]);
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }

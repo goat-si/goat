@@ -168,9 +168,6 @@ struct Steer {
     completed_sent: bool,
 }
 
-/// How a steer ended before `steer` gave its answer: its inputs and whether Claude read it.
-type SteerFate = (Vec<InputId>, Result<(), String>);
-
 #[derive(Debug, Clone)]
 struct ToolCall {
     name: String,
@@ -183,6 +180,8 @@ struct Turn {
     /// The root prompt reached Claude's stdin; only then does an exit settle the turn.
     confirmed: bool,
     interrupted: bool,
+    /// A steer was sent into this turn (v1 `steeredTurns`).
+    steered: bool,
     steers: HashMap<String, Steer>,
     tools: HashMap<String, ToolCall>,
     /// The latest assistant text: commentary if more follows, the final answer at the result.
@@ -229,8 +228,6 @@ struct State {
     pending: HashMap<String, Pending>,
     /// Steer acknowledgements waiting for `command_lifecycle`.
     steer_waiters: HashMap<String, oneshot::Sender<Result<(), String>>>,
-    /// Steers that ended (read, dropped or left unread) before `steer` answered.
-    steer_fates: HashMap<String, SteerFate>,
     /// Without `command_lifecycle` steers are accepted on write.
     lifecycle: Lifecycle,
     /// Subagent tool_use id per Claude task id.
@@ -344,7 +341,6 @@ async fn start_session(
             turn: None,
             pending: HashMap::new(),
             steer_waiters: HashMap::new(),
-            steer_fates: HashMap::new(),
             lifecycle: Lifecycle::Unknown,
             tasks: HashMap::new(),
             async_subagents: HashMap::new(),
@@ -737,7 +733,7 @@ impl Inner {
         let stopping = state.stopping || state.shutting_down;
         if let Some(mut turn) = state.turn.take() {
             let steers = std::mem::take(&mut turn.steers);
-            self.end_steers(&turn.id, steers, &mut state.steer_fates, &reason);
+            self.end_steers(&turn.id, steers, &mut state.steer_waiters, false, &reason);
             if turn.confirmed {
                 let outcome = if turn.interrupted || stopping {
                     TurnOutcome::Interrupted
@@ -902,9 +898,7 @@ impl Inner {
                 state.lifecycle = Lifecycle::Reported;
             } else {
                 state.lifecycle = Lifecycle::Absent;
-                for (_, waiter) in state.steer_waiters.drain() {
-                    let _ = waiter.send(Ok(()));
-                }
+                self.accept_waiting_steers(state);
             }
         }
         if let Some(session_id) = message.get("session_id").and_then(Value::as_str)
@@ -952,7 +946,10 @@ impl Inner {
         }
     }
 
+    /// Claude's verdict on a steer reached the driver. A steer whose `steer` call still waits is
+    /// accepted here, in frame order, so its later outcome always goes out before its turn ends.
     fn mark_steer(&self, state: &mut State, uuid: &str, phase: SteerPhase) {
+        let waiting = state.steer_waiters.contains_key(uuid);
         let Some(turn) = state.turn.as_mut() else {
             return;
         };
@@ -962,6 +959,9 @@ impl Inner {
         };
         if steer.phase == SteerPhase::Consumed {
             return;
+        }
+        if waiting {
+            steer.accepted = true;
         }
         if phase == SteerPhase::Consumed {
             self.consume_steer(&turn_id, steer);
@@ -973,7 +973,7 @@ impl Inner {
         }
     }
 
-    /// Claude read the steer; an accepted one reports `Completed` once.
+    /// Claude read the steer; an accepted one reports `Completed` once. Read is final.
     fn consume_steer(&self, turn_id: &str, steer: &mut Steer) {
         steer.phase = SteerPhase::Consumed;
         if steer.accepted && !steer.completed_sent {
@@ -986,47 +986,41 @@ impl Inner {
         }
     }
 
-    /// `steer` is about to answer Accepted. From here on the steer's outcome goes out as
-    /// `SteerUpdated`; a steer that already ended answers from its fate instead.
-    fn accept_steer(&self, turn_id: &str, uuid: &str) -> SteerResult {
-        let Ok(mut state) = self.state.lock() else {
-            return SteerResult::Unknown {
-                reason: "Claude session state is unavailable".into(),
-            };
-        };
-        if let Some(turn) = state.turn.as_mut()
-            && turn.id == turn_id
-            && let Some(steer) = turn.steers.get_mut(uuid)
-        {
-            steer.accepted = true;
-            if steer.phase == SteerPhase::Consumed {
-                self.consume_steer(turn_id, steer);
+    /// This CLI has no `command_lifecycle`: every waiting steer is accepted on write.
+    fn accept_waiting_steers(&self, state: &mut State) {
+        let waiting: Vec<(String, oneshot::Sender<Result<(), String>>)> =
+            state.steer_waiters.drain().collect();
+        if let Some(turn) = state.turn.as_mut() {
+            let turn_id = turn.id.clone();
+            for (uuid, _) in &waiting {
+                if let Some(steer) = turn.steers.get_mut(uuid) {
+                    steer.accepted = true;
+                    if steer.phase == SteerPhase::Consumed {
+                        self.consume_steer(&turn_id, steer);
+                    }
+                }
             }
-            return SteerResult::Accepted;
         }
-        match state.steer_fates.remove(uuid) {
-            Some((input_ids, Ok(()))) => {
-                self.emit(EngineEvent::SteerUpdated {
-                    turn_id: turn_id.to_string(),
-                    input_ids,
-                    status: SteerStatus::Completed,
-                });
-                SteerResult::Accepted
-            }
-            Some((_, Err(reason))) => SteerResult::Declined { reason },
-            None => SteerResult::Unknown {
-                reason: "Claude's handling of the message is unknown".into(),
-            },
+        for (_, waiter) in waiting {
+            let _ = waiter.send(Ok(()));
         }
     }
 
-    /// Claude dropped the steer before reading it. An accepted one reports `Cancelled` (the host
-    /// requeues its inputs); otherwise `steer` declines it. True when the steer was known.
+    /// Claude dropped a steer it had not read. An accepted one reports `Cancelled` (the host
+    /// requeues its inputs); an unaccepted one is declined by its waiting `steer` call. A steer
+    /// Claude already read stays read. True when an unread steer was dropped.
     fn drop_steer(&self, state: &mut State, uuid: &str, reason: &str) -> bool {
         let Some(turn) = state.turn.as_mut() else {
             return false;
         };
         let turn_id = turn.id.clone();
+        if turn
+            .steers
+            .get(uuid)
+            .is_none_or(|steer| steer.phase == SteerPhase::Consumed)
+        {
+            return false;
+        }
         let Some(steer) = turn.steers.remove(uuid) else {
             return false;
         };
@@ -1038,48 +1032,42 @@ impl Inner {
                     reason: reason.to_string(),
                 },
             });
-        } else {
-            state
-                .steer_fates
-                .insert(uuid.to_string(), (steer.input_ids, Err(reason.to_string())));
         }
         true
     }
 
-    /// The turn ended: unread accepted steers report `Cancelled` (v1 finalizeActiveTurn drops
-    /// pending steers); steers `steer` has not answered yet get their fate recorded.
+    /// The turn ended (v1 finalizeActiveTurn, ClaudeAdapterV2.ts:5296-5305): a still pending
+    /// accepted steer reports `Completed` when the turn completed, `Cancelled` otherwise; a steer
+    /// whose `steer` call still waits is declined through it.
     fn end_steers(
         &self,
         turn_id: &str,
         steers: HashMap<String, Steer>,
-        fates: &mut HashMap<String, SteerFate>,
+        waiters: &mut HashMap<String, oneshot::Sender<Result<(), String>>>,
+        done: bool,
         reason: &str,
     ) {
         let mut steers: Vec<(String, Steer)> = steers.into_iter().collect();
         steers.sort_by(|a, b| a.0.cmp(&b.0));
+        let why = format!("The turn ended before Claude read the message: {reason}");
         for (uuid, steer) in steers {
-            let read = steer.phase == SteerPhase::Consumed;
             if steer.accepted {
-                if !read {
+                if steer.phase != SteerPhase::Consumed {
+                    let status = if done {
+                        SteerStatus::Completed
+                    } else {
+                        SteerStatus::Cancelled {
+                            reason: why.clone(),
+                        }
+                    };
                     self.emit(EngineEvent::SteerUpdated {
                         turn_id: turn_id.to_string(),
                         input_ids: steer.input_ids,
-                        status: SteerStatus::Cancelled {
-                            reason: format!(
-                                "The turn ended before Claude read the message: {reason}"
-                            ),
-                        },
+                        status,
                     });
                 }
-            } else {
-                let fate = if read {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "The turn ended before Claude read the message: {reason}"
-                    ))
-                };
-                fates.insert(uuid, (steer.input_ids, fate));
+            } else if let Some(waiter) = waiters.remove(&uuid) {
+                let _ = waiter.send(Err(why.clone()));
             }
         }
     }
@@ -1100,7 +1088,7 @@ impl Inner {
             "cancelled" | "discarded" | "refused" => {
                 // v1 dropUnreadSteer: the steer never reached Claude.
                 let dropped = self.drop_steer(state, uuid, &format!("Claude {phase} the message"));
-                if let Some(waiter) = state.steer_waiters.remove(uuid) {
+                if dropped && let Some(waiter) = state.steer_waiters.remove(uuid) {
                     let _ = waiter.send(Err(format!("Claude {phase} the message")));
                 }
                 if dropped {
@@ -1146,10 +1134,7 @@ impl Inner {
             && let Some(turn) = state.turn.as_mut()
             && turn.absorbed_result
         {
-            let turn_id = turn.id.clone();
-            for steer in turn.steers.values_mut() {
-                self.consume_steer(&turn_id, steer);
-            }
+            // Which steer runs is told by its own `started` or echo (v1 markSteersAccepted).
             turn.absorbed_result = false;
             turn.held_result = None;
         }
@@ -1554,23 +1539,27 @@ impl Inner {
             return;
         };
         let turn_id = turn.id.clone();
-        for uuid in protocol::echoed_prompt_uuids(message) {
-            if let Some(steer) = turn.steers.get_mut(&uuid) {
+        let echoed = protocol::echoed_prompt_uuids(message);
+        for uuid in &echoed {
+            if let Some(steer) = turn.steers.get_mut(uuid) {
                 self.consume_steer(&turn_id, steer);
             }
         }
         let completed = !turn.interrupted
             && message.get("subtype").and_then(Value::as_str) == Some("success")
             && message.get("is_error").and_then(Value::as_bool) != Some(true);
-        // v1 isClaudeActiveSteeringAbortResult: a steer that cut the stream ends Claude's segment
-        // with aborted_streaming/aborted_tools; the turn goes on with the steer.
+        // v1 isClaudeActiveSteeringAbortResult (ClaudeAdapterV2.ts:7830): in a steered turn, a
+        // segment cut by the steer (aborted_streaming/aborted_tools) does not end the turn.
         let steer_abort = !turn.interrupted
+            && turn.steered
             && matches!(
                 message.get("terminal_reason").and_then(Value::as_str),
                 Some("aborted_streaming" | "aborted_tools")
             );
-        // v1 holdSuccessfulResult: a steer still queued runs as the continuation of this turn.
-        if (completed || steer_abort) && Self::steers_outstanding(turn) {
+        // v1 holdSuccessfulResult: a success that echoes prompt uuids while a steer is still
+        // pending is held; the steer runs as the continuation of this turn.
+        let hold = completed && !echoed.is_empty() && Self::steers_outstanding(turn);
+        if steer_abort || hold {
             turn.held_result = Some(message.clone());
             turn.absorbed_result = true;
             self.flush_text(state, AssistantMessagePhase::Commentary);
@@ -1643,7 +1632,8 @@ impl Inner {
             TurnOutcome::Interrupted => "the turn was interrupted".to_string(),
             TurnOutcome::Failed { reason } => reason.clone(),
         };
-        self.end_steers(&turn_id, steers, &mut state.steer_fates, &ended);
+        let done = matches!(outcome, TurnOutcome::Done);
+        self.end_steers(&turn_id, steers, &mut state.steer_waiters, done, &ended);
         state.turn = None;
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
         self.settled.notify_waiters();
@@ -2228,11 +2218,11 @@ impl EngineSession for ClaudeSession {
                     reason: "A Claude turn is already running".into(),
                 };
             }
-            state.steer_fates.clear();
             state.turn = Some(Turn {
                 id: turn_id.clone(),
                 confirmed: false,
                 interrupted: false,
+                steered: false,
                 steers: HashMap::new(),
                 tools: HashMap::new(),
                 held_text: None,
@@ -2291,7 +2281,7 @@ impl EngineSession for ClaudeSession {
         };
         let input_ids: Vec<InputId> = inputs.iter().map(|i| i.input_id.clone()).collect();
         let uuid = util::uuid();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         let wait = {
             let Ok(mut state) = inner.state.lock() else {
                 return SteerResult::Declined {
@@ -2314,17 +2304,19 @@ impl EngineSession for ClaudeSession {
                     reason: "The Claude turn is stopping".into(),
                 };
             }
+            // Until this CLI is known to lack `command_lifecycle`, wait for Claude's verdict;
+            // without it the steer is accepted on write.
+            let wait = lifecycle != Lifecycle::Absent;
+            turn.steered = true;
             turn.steers.insert(
                 uuid.clone(),
                 Steer {
                     phase: SteerPhase::Sent,
                     input_ids,
-                    accepted: false,
+                    accepted: !wait,
                     completed_sent: false,
                 },
             );
-            // Until this CLI is known to lack `command_lifecycle`, wait for Claude's verdict.
-            let wait = lifecycle != Lifecycle::Absent;
             if wait {
                 state.steer_waiters.insert(uuid.clone(), tx);
             }
@@ -2343,33 +2335,46 @@ impl EngineSession for ClaudeSession {
         if let Some(result) = undelivered {
             if let Ok(mut state) = inner.state.lock() {
                 state.steer_waiters.remove(&uuid);
-                state.steer_fates.remove(&uuid);
-                if let Some(turn) = state.turn.as_mut() {
-                    turn.steers.remove(&uuid);
+                let known = state
+                    .turn
+                    .as_mut()
+                    .and_then(|turn| turn.steers.remove(&uuid))
+                    .is_some();
+                // Accepted on write and already settled by the turn's end: its outcome went out
+                // as SteerUpdated.
+                if !known && !wait {
+                    return SteerResult::Accepted;
                 }
             }
             return result;
         }
         if !wait {
-            return inner.accept_steer(turn_id, &uuid);
+            return SteerResult::Accepted;
         }
-        match tokio::time::timeout(inner.options.steer_ack_timeout, rx).await {
-            Ok(Ok(Ok(()))) => inner.accept_steer(turn_id, &uuid),
-            Ok(Ok(Err(reason))) => {
-                if let Ok(mut state) = inner.state.lock() {
-                    state.steer_fates.remove(&uuid);
-                }
-                SteerResult::Declined { reason }
-            }
+        match tokio::time::timeout(inner.options.steer_ack_timeout, &mut rx).await {
+            Ok(Ok(Ok(()))) => SteerResult::Accepted,
+            Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
             Ok(Err(_)) => SteerResult::Unknown {
                 reason: "Claude closed before acknowledging the message".into(),
             },
             Err(_) => {
-                if let Ok(mut state) = inner.state.lock() {
-                    state.steer_waiters.remove(&uuid);
+                let pending = inner
+                    .state
+                    .lock()
+                    .map(|mut state| state.steer_waiters.remove(&uuid).is_some())
+                    .unwrap_or(true);
+                if pending {
+                    return SteerResult::Unknown {
+                        reason: "Claude did not acknowledge the message".into(),
+                    };
                 }
-                SteerResult::Unknown {
-                    reason: "Claude did not acknowledge the message".into(),
+                // The verdict arrived as the deadline passed: it stands.
+                match rx.try_recv() {
+                    Ok(Ok(())) => SteerResult::Accepted,
+                    Ok(Err(reason)) => SteerResult::Declined { reason },
+                    Err(_) => SteerResult::Unknown {
+                        reason: "Claude did not acknowledge the message".into(),
+                    },
                 }
             }
         }

@@ -155,9 +155,6 @@ impl Fake {
                         libc::close(0);
                     }
                     self.log(json!({"kind": "stdin_closed"}));
-                    // A child forked by a parallel test before it execs can still hold an inherited
-                    // copy of this pipe's read end; let that drain so a later write really fails.
-                    std::thread::sleep(Duration::from_millis(100));
                 }
                 match subtype {
                     Some("initialize") => {

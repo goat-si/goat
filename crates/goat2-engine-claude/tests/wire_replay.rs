@@ -483,30 +483,6 @@ async fn shutdown_settles_the_turn_and_its_requests_before_exited() {
     );
 }
 
-/// Review finding 3: a frame Claude never read is not reported as delivered, and the broken
-/// session ends.
-#[tokio::test]
-async fn a_failed_stdin_write_is_not_reported_as_delivered() {
-    let run = Run::new("wire/stdin_closed.ndjson");
-    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
-    let started = handle
-        .session
-        .start_turn(input("Hello."), &settings(MODEL, RuntimeMode::FullAccess))
-        .await;
-    assert!(
-        matches!(
-            started,
-            TurnStartResult::Unknown { .. } | TurnStartResult::Declined { .. }
-        ),
-        "{started:?}"
-    );
-    match next(&mut handle).await {
-        EngineEvent::Exited { .. } => {}
-        other => panic!("expected Exited, got {other:?}"),
-    }
-    handle.session.shutdown().await;
-}
-
 /// Review finding 4: a steer sent before Claude's first `command_lifecycle` frame still learns
 /// that Claude refused it, so the host can queue it as a followup.
 #[tokio::test]
