@@ -111,6 +111,28 @@ fn error(
         },
     );
 }
+/// The bad_frame message for a frame that failed to parse or decode. serde's own text can quote
+/// the offending input (`invalid type: string "..."`), and a frame can carry secrets (credentials in
+/// provider_auth_respond, message text), so the reply names only the position or the frame type.
+fn bad_frame_message(value: Option<&Value>, parse: Option<&serde_json::Error>) -> String {
+    if let Some(e) = parse {
+        return format!(
+            "the frame is not valid JSON (line {}, column {})",
+            e.line(),
+            e.column()
+        );
+    }
+    let tag = value
+        .and_then(|v| v.get("type"))
+        .and_then(Value::as_str)
+        .filter(|t| {
+            !t.is_empty() && t.len() <= 64 && t.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        });
+    match tag {
+        Some(tag) => format!("not a valid {tag} frame"),
+        None => "not a valid client frame".into(),
+    }
+}
 async fn connection(socket: WebSocket, app: App) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
@@ -127,9 +149,9 @@ async fn connection(socket: WebSocket, app: App) {
                 let Some(Ok(msg)) = incoming else { break }; last_seen = Instant::now();
                 match msg {
                     Message::Text(text) => {
-                        let value: Value = match serde_json::from_str(&text) { Ok(v) => v, Err(e) => { error(&tx,None,None,"bad_frame",e); continue; } };
+                        let value: Value = match serde_json::from_str(&text) { Ok(v) => v, Err(e) => { error(&tx,None,None,"bad_frame",bad_frame_message(None,Some(&e))); continue; } };
                         let req_id = value.get("reqId").and_then(Value::as_str).map(str::to_owned);
-                        let frame: ClientFrame = match serde_json::from_value(value) { Ok(f) => f, Err(e) => { error(&tx,None,None,"bad_frame",e); continue; } };
+                        let frame: ClientFrame = match serde_json::from_value(value.clone()) { Ok(f) => f, Err(_) => { error(&tx,None,None,"bad_frame",bad_frame_message(Some(&value),None)); continue; } };
                         if is_command(&frame) {
                             let Some(req_id) = req_id else { error(&tx,None,None,"bad_frame","missing reqId"); continue; };
                             let host=app.host.clone(); let tx=tx.clone();
@@ -730,6 +752,28 @@ mod tests {
         assert_eq!(refused["error"]["reason"], "not_allowed");
         write(&mut ws, json!({"type":"garbage"})).await;
         assert_eq!(read(&mut ws).await["code"], "bad_frame");
+        // A malformed frame's error never quotes its input: serde would echo a credentials value.
+        let secret = "SECRET_SENTINEL_ws";
+        for frame in [
+            json!({"type":"provider_auth_respond","reqId":"s","clientRequestId":"s","instanceId":"codex",
+                "flowId":"f","interactionId":"i","response":{"type":"credentials","values":secret}}),
+            json!({"type":"provider_auth_respond","reqId":"s","clientRequestId":"s","instanceId":"codex",
+                "flowId":"f","interactionId":"i","response":{"type":"terminal","data":secret,"size":secret}}),
+            json!({"type":"send_input","reqId":"s","clientRequestId":"s","threadId":"t","text":secret,"mode":secret}),
+        ] {
+            write(&mut ws, frame).await;
+            let reply = read(&mut ws).await;
+            assert_eq!(reply["code"], "bad_frame");
+            assert!(!reply.to_string().contains(secret), "{reply}");
+        }
+        ws.send(ClientMessage::Text(
+            format!("{{\"values\":\"{secret}").into(),
+        ))
+        .await
+        .unwrap();
+        let reply = read(&mut ws).await;
+        assert_eq!(reply["code"], "bad_frame");
+        assert!(!reply.to_string().contains(secret), "{reply}");
         write(
             &mut ws,
             json!({"type":"read_page","reqId":"3","threadId":"t","before":10,"limit":1}),
