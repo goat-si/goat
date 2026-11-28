@@ -62,7 +62,8 @@ export type ProbeResult = ProviderProbeResult;
 export interface EngineInput {
   readonly inputId: string;
   readonly text: string;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
+  /** Each attachment carries the absolute `path` of its saved file, or null when the host could not find it. */
+  readonly attachments: ReadonlyArray<ChatAttachment & { readonly path?: string | null }>;
 }
 
 export interface TurnSettings {

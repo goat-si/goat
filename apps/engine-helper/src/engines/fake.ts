@@ -49,7 +49,8 @@ class FakeSession implements EngineSession {
     this.#turns += 1;
     const turn: ActiveTurn = { turnId: `turn-${this.#turns}`, steered: [], interrupted: false, wake: undefined };
     this.#active = turn;
-    const text = inputs.map((input) => input.text).join("\n");
+    const files = inputs.flatMap((input) => input.attachments.map((attachment) => attachment.path ?? "missing"));
+    const text = inputs.map((input) => input.text).join("\n") + (files.length === 0 ? "" : ` [files: ${files.join(", ")}]`);
     setImmediate(() => {
       void this.#run(turn, text).catch((cause) => this.#host.fail(String(cause)));
     });

@@ -360,3 +360,35 @@ async fn probe_answers_from_a_short_lived_helper() {
     assert_eq!(probe.models.len(), 1);
     assert!(factory.capabilities().turns.supports_active_steering);
 }
+
+#[tokio::test]
+async fn attachments_reach_the_helper_with_resolved_paths() {
+    use goat2_contracts::{ChatAttachment, ChatAttachmentType};
+    use std::sync::Arc;
+    let factory = HelperFactory::fake(EngineDriver::Cursor, launch()).with_attachment_resolver(
+        Arc::new(|thread: &ThreadId, attachment: &ChatAttachment| {
+            (attachment.id == "a1")
+                .then(|| PathBuf::from(format!("/data/{}/{}", thread, attachment.name)))
+        }),
+    );
+    let mut handle = factory.start(spec("thread-files")).await.expect("start");
+    let attachment = |id: &str| ChatAttachment {
+        kind: ChatAttachmentType::File,
+        id: id.into(),
+        name: format!("{id}.txt"),
+        mime_type: "text/plain".into(),
+        size_bytes: 1,
+        blob: None,
+    };
+    let inputs = vec![EngineInput {
+        input_id: InputId::from("in-files"),
+        text: "see".into(),
+        attachments: vec![attachment("a1"), attachment("a2")],
+    }];
+    accepted(handle.session.start_turn(inputs, &settings()).await);
+    assert_eq!(
+        final_text(&until_finished(&mut handle).await),
+        "echo: see [files: /data/thread-files/a1.txt, missing]"
+    );
+    handle.session.shutdown().await;
+}
