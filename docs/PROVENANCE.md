@@ -218,3 +218,12 @@ Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.t
 | `apps/engine-helper/test/server.test.ts` | none | new: inject a failing loader for the pre-existing unavailable test after Muse registration. |
 
 Not lifted: usage and limits, account pools, text generation, cloud and checkpoints; attachment blob resolution and v1's provider-host runtime instructions are not exposed by this helper seam. V1 background workflow wake offers and runless child approvals are not mapped by the current helper session protocol; these fail the helper visibly. Windows launcher resolution and workspace path canonicalization are not lifted.
+## P2-S opencode2
+
+| GOAT 2 path | Source at 916b5ccc1b2 | How |
+|---|---|---|
+| crates/goat2-engine-sdk/src/capabilities/opencode2.json | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | verbatim values, TS literal converted to JSON |
+| apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-opencode/src/server/versionProbe.ts:24-180; packages/provider-core/src/server/snapshotProbe.ts:222-228; packages/shared/src/semver.ts:10-65 | adapted version and server probes to plain async Node; standalone selector not yet connected to an engine |
+| apps/engine-helper/test/opencode2-selector.test.ts | packages/provider-core/src/server/snapshotProbe.test.ts:311-337 | adapted version parser examples; server and failure tests new |
+
+Not lifted yet: OpenCode 2 adapter and its services, SDK integration, streaming and item projection, steering, requests, resume, MCP, auth and model probe, Rust integration, and end-to-end tests. This section records incomplete work, not a working engine.
