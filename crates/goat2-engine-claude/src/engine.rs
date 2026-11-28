@@ -185,8 +185,6 @@ struct Steer {
     input_ids: Vec<InputId>,
     /// `steer` answered Accepted; later outcomes go out as `SteerUpdated`.
     accepted: bool,
-    /// The writer acknowledged the steer on Claude's stdin.
-    written: bool,
     completed_sent: bool,
 }
 
@@ -257,7 +255,7 @@ struct State {
     pending: HashMap<String, Pending>,
     /// Steer acknowledgements waiting for `command_lifecycle`.
     steer_waiters: HashMap<String, oneshot::Sender<Result<(), String>>>,
-    /// Without `command_lifecycle` steers are accepted on write.
+    /// Whether this CLI reports `command_lifecycle`; without it every steer is declined.
     lifecycle: Lifecycle,
     /// Subagent tool_use id per Claude task id.
     tasks: HashMap<String, String>,
@@ -915,7 +913,7 @@ impl Inner {
         let stopping = state.stopping || state.shutting_down;
         if let Some(mut turn) = state.turn.take() {
             let steers = std::mem::take(&mut turn.steers);
-            self.end_steers(&turn.id, steers, &mut state.steer_waiters, false, &reason);
+            self.end_steers(&turn.id, steers, &mut state.steer_waiters, &reason);
             if turn.confirmed {
                 let outcome = if turn.interrupted || stopping {
                     TurnOutcome::Interrupted
@@ -959,6 +957,7 @@ impl Inner {
         }
         drop(state);
         self.settled.notify_waiters();
+        self.lifecycle_known.notify_waiters();
         Some(reason)
     }
 
@@ -1138,13 +1137,24 @@ impl Inner {
         // A lifecycle-capable CLI answers the root prompt with `command_lifecycle` before anything
         // else (2.1.332 capture: queued, started, then system:init). Any other first frame after a
         // prompt means this CLI never reports it; steers then are declined (see `steer`).
+        // Only frames of the turn itself decide it: a late background-task notification or control
+        // traffic from before the prompt was read says nothing about lifecycle support.
         if state.lifecycle == Lifecycle::Unknown && state.turn.is_some() {
-            state.lifecycle = if kind == "command_lifecycle" {
-                Lifecycle::Reported
-            } else {
-                Lifecycle::Absent
+            let subtype = message.get("subtype").and_then(Value::as_str);
+            let decided = match kind {
+                "command_lifecycle" => Some(Lifecycle::Reported),
+                "system" if subtype == Some("init") => Some(Lifecycle::Absent),
+                "assistant" | "stream_event" | "result"
+                    if protocol::parent_tool_use_id(message).is_none() =>
+                {
+                    Some(Lifecycle::Absent)
+                }
+                _ => None,
             };
-            self.lifecycle_known.notify_waiters();
+            if let Some(decided) = decided {
+                state.lifecycle = decided;
+                self.lifecycle_known.notify_waiters();
+            }
         }
         if let Some(session_id) = message.get("session_id").and_then(Value::as_str)
             && !session_id.is_empty()
@@ -1261,16 +1271,14 @@ impl Inner {
         true
     }
 
-    /// The turn ended (v1 finalizeActiveTurn, ClaudeAdapterV2.ts:5296-5305): a still pending
-    /// accepted steer reports `Completed` when `done` (a completed turn on a CLI without
-    /// `command_lifecycle`), `Cancelled` otherwise; a steer whose `steer` call still waits for a
-    /// verdict is released without one (Unknown).
+    /// The turn ended (v1 finalizeActiveTurn, ClaudeAdapterV2.ts:5296-5305): an accepted steer
+    /// Claude has not read reports `Cancelled` (the host requeues it); a steer whose `steer` call
+    /// still waits for a verdict is released without one (Unknown).
     fn end_steers(
         &self,
         turn_id: &str,
         steers: HashMap<String, Steer>,
         waiters: &mut HashMap<String, oneshot::Sender<Result<(), String>>>,
-        done: bool,
         reason: &str,
     ) {
         let mut steers: Vec<(String, Steer)> = steers.into_iter().collect();
@@ -1279,12 +1287,8 @@ impl Inner {
         for (uuid, steer) in steers {
             if steer.accepted {
                 if steer.phase != SteerPhase::Consumed {
-                    let status = if done {
-                        SteerStatus::Completed
-                    } else {
-                        SteerStatus::Cancelled {
-                            reason: why.clone(),
-                        }
+                    let status = SteerStatus::Cancelled {
+                        reason: why.clone(),
                     };
                     self.emit(EngineEvent::SteerUpdated {
                         turn_id: turn_id.to_string(),
@@ -2058,11 +2062,13 @@ impl Inner {
         };
         // A steer with no evidence of being read is Cancelled (the contract's "left unread"); v1
         // finalize would call it completed with a completed turn, which would lose it.
-        self.end_steers(&turn_id, steers, &mut state.steer_waiters, false, &ended);
+        self.end_steers(&turn_id, steers, &mut state.steer_waiters, &ended);
         state.turn = None;
         state.last_finished = Some(turn_id.clone());
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
         self.settled.notify_waiters();
+        // A steer still waiting to learn whether this CLI reports lifecycle frames stops waiting.
+        self.lifecycle_known.notify_waiters();
     }
 
     fn on_control_request(&self, request_id: &str, request: &Value) {
@@ -2774,7 +2780,6 @@ impl EngineSession for ClaudeSession {
                     phase: SteerPhase::Sent,
                     input_ids,
                     accepted: false,
-                    written: false,
                     completed_sent: false,
                 },
             );
@@ -2810,10 +2815,9 @@ impl EngineSession for ClaudeSession {
             let mut answer = None;
             if let Some(turn) = state.turn.as_mut()
                 && turn.id == turn_id
-                && let Some(steer) = turn.steers.get_mut(&uuid)
+                && turn.steers.contains_key(&uuid)
             {
                 present = true;
-                steer.written = true;
             }
             if !present {
                 // The turn settled while the message was being written. A verdict that arrived

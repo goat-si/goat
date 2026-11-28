@@ -52,6 +52,13 @@ fn answers(events: &[EngineEvent], phase: AssistantMessagePhase) -> Vec<String> 
         .collect()
 }
 
+fn assert_no_steer_written(run: &Run) {
+    assert!(
+        !run.stdin_frames().iter().any(|f| f["priority"] == "next"),
+        "a steer frame reached the CLI"
+    );
+}
+
 fn finished(events: &[EngineEvent]) -> TurnOutcome {
     match events.last() {
         Some(EngineEvent::TurnFinished { outcome, .. }) => outcome.clone(),
@@ -934,10 +941,11 @@ async fn a_stale_eof_does_not_settle_the_reopened_session() {
     handle.session.shutdown().await;
 }
 
-/// Review round 6 finding 2: on a CLI without `command_lifecycle`, a steer whose write is still
-/// blocked when the turn ends, and then fails, is neither reported nor answered Accepted.
+/// Review round 6 finding 2, now under the owner's no-lifecycle rule: on a CLI known to send no
+/// `command_lifecycle`, even a steer larger than a pipe buffer is Declined before any write, so
+/// it is neither reported nor sent.
 #[tokio::test]
-async fn a_steer_whose_write_never_lands_is_not_accepted() {
+async fn a_large_steer_on_a_cli_without_lifecycle_is_declined_unwritten() {
     let run = Run::new("wire/steer_write_blocked_turn_ends.ndjson");
     let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
@@ -965,8 +973,8 @@ async fn a_steer_whose_write_never_lands_is_not_accepted() {
     };
     let (steered, seen) = tokio::join!(steer, collect);
     assert!(
-        !matches!(steered, SteerResult::Accepted),
-        "a steer that never reached Claude was accepted"
+        matches!(steered, SteerResult::Declined { .. }),
+        "{steered:?}"
     );
     assert!(
         steer_updates(&seen).is_empty(),
@@ -974,6 +982,7 @@ async fn a_steer_whose_write_never_lands_is_not_accepted() {
         steer_updates(&seen)
     );
     handle.session.shutdown().await;
+    assert_no_steer_written(&run);
 }
 
 /// Review round 6 finding 3: a lifecycle CLI queued the steer and finished the turn without
@@ -1000,11 +1009,11 @@ async fn a_queued_steer_left_unstarted_by_a_successful_turn_is_cancelled() {
     run.assert_replayed(1);
 }
 
-/// Review round 7 finding 1: the steer's write is still blocked when the CLI's first frame shows
-/// it has no `command_lifecycle`; the steer is accepted only once its write lands, so a write that
-/// never lands is neither reported nor accepted.
+/// Review round 7 finding 1, now under the owner's no-lifecycle rule: a steer sent before the
+/// CLI's first frame waits for it; the first frame shows no `command_lifecycle`, so the steer is
+/// Declined and never written.
 #[tokio::test]
-async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
+async fn a_steer_before_the_first_frame_of_a_cli_without_lifecycle_is_declined_unwritten() {
     let run = Run::new("wire/steer_blocked_before_first_frame.ndjson");
     let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
@@ -1028,13 +1037,17 @@ async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
         }
     };
     let (steered, seen) = tokio::join!(steer, collect);
-    assert!(!matches!(steered, SteerResult::Accepted), "{steered:?}");
+    assert!(
+        matches!(steered, SteerResult::Declined { .. }),
+        "{steered:?}"
+    );
     assert!(
         steer_updates(&seen).is_empty(),
         "an unwritten steer was reported: {:?}",
         steer_updates(&seen)
     );
     handle.session.shutdown().await;
+    assert_no_steer_written(&run);
 }
 
 /// Review round 7 finding 2: a frame the old process sent is received, then held (frame hook)
