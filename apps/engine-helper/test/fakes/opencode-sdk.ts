@@ -85,6 +85,7 @@ export function createOpencodeClient() {
     push("message.part.updated", { sessionID, part: { id: partID, sessionID, messageID: assistant, type: "text", text: customText ?? "Hello" } });
     if (customText === undefined) push("message.part.delta", { sessionID, messageID: assistant, partID, field: "text", delta: " world" });
     push("message.part.updated", { sessionID, part: { id: `tool-${messageID}`, sessionID, messageID: assistant, type: "tool", callID: `call-${messageID}`, tool: "bash", state: { status: "completed", input: { command: "pwd" }, output: "", title: "Working directory", time: { start: 1, end: 2 } } } });
+    push("message.part.updated", { sessionID, part: { id: `step-${messageID}`, sessionID, messageID: assistant, type: "step-finish", reason: "stop", cost: 0, tokens: { input: 7, output: 8, reasoning: 2, cache: { read: 3, write: 4 } } } });
     push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: { completed: 2 } } });
     active = false; push("session.idle", { sessionID });
   };

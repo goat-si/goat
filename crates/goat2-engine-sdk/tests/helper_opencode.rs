@@ -59,6 +59,7 @@ async fn opencode_turn_projects_valid_items() {
     ));
     let mut text = false;
     let mut tool = false;
+    let mut usage_received = false;
     loop {
         let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
             .await
@@ -75,7 +76,16 @@ async fn opencode_turn_projects_valid_items() {
             },
             EngineEvent::TurnFinished { outcome, .. } => {
                 assert!(matches!(outcome, TurnOutcome::Done));
+                assert!(usage_received, "usage precedes the turn terminal");
                 break;
+            }
+            EngineEvent::TokenUsage { usage, .. } => {
+                assert_eq!(usage.used_tokens, 22);
+                assert_eq!(usage.input_tokens, Some(14));
+                assert_eq!(usage.cached_input_tokens, Some(3));
+                assert_eq!(usage.output_tokens, Some(8));
+                assert_eq!(usage.reasoning_output_tokens, Some(2));
+                usage_received = true;
             }
             EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
             _ => {}

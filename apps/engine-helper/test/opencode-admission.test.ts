@@ -138,6 +138,28 @@ test("a steer observed before its reply remains unknown after an early turn fail
   } finally { await session.shutdown(); }
 });
 
+test("turn usage uses the last owned step and ignores malformed or unrelated usage", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const prompt = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
+    const step = (id: string, messageID: string, input: number) => ({ id, sessionID: session.engineRef, messageID, type: "step-finish", reason: "stop", cost: 0, tokens: { input, output: 8, reasoning: 2, cache: { read: 3, write: 4 } } });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step("owned-step", "assistant-owned", 7) });
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant-owned", sessionID: session.engineRef, role: "assistant", parentID: prompt.messageID, time: {} } });
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant-other", sessionID: session.engineRef, role: "assistant", parentID: "foreign", time: {} } });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step("other-step", "assistant-other", 100) });
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step("bad-step", "assistant-owned", -1) });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+    const usage = events.filter((event) => event.type === "token_usage");
+    assert.deepEqual(usage, [{ type: "token_usage", turnId: turn.turnId, usage: { usedTokens: 22, inputTokens: 14, cachedInputTokens: 3, outputTokens: 8, reasoningOutputTokens: 2 } }]);
+    assert.ok(events.indexOf(usage[0]!) < events.findIndex((event) => event.type === "turn_finished"));
+  } finally { await session.shutdown(); }
+});
+
 test("a late steer success during descendant cleanup remains unknown after failure", async () => {
   fake.reset(); const events: EngineEvent[] = [];
   const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
