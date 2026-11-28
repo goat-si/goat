@@ -155,10 +155,7 @@ fn swarm_add_launches(input: &Value) -> Option<Vec<ChildLaunch>> {
     let base = name.as_deref().map(str::trim).unwrap_or_default();
     let base = base.strip_prefix('@').unwrap_or(base);
     let brief = brief.as_deref().map(str::trim).unwrap_or_default();
-    let count = (tasks.len() as i64)
-        .max(n)
-        .max(1)
-        .min(MAX_SWARM_ADD_LAUNCHES) as usize;
+    let count = (tasks.len() as i64).max(n).clamp(1, MAX_SWARM_ADD_LAUNCHES) as usize;
     let suffix = match role.as_deref() {
         Some(r) if !r.trim().is_empty() && r != "worker" => format!(" ({})", r.trim()),
         _ => String::new(),
