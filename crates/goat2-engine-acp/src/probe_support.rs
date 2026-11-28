@@ -174,32 +174,12 @@ pub async fn spawn_and_collect(
         .args(args)
         .env_clear()
         .envs(env)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true);
+        .stdin(std::process::Stdio::null());
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     let run = async {
-        let mut child = command.spawn().map_err(CliError::Spawn)?;
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let (out, err, status) = tokio::join!(collect(stdout), collect(stderr), child.wait());
-        let (stdout, stdout_truncated) = out.map_err(CliError::Io)?;
-        let (stderr, stderr_truncated) = err.map_err(CliError::Io)?;
-        let status = status.map_err(CliError::Io)?;
-        if stdout_truncated {
-            return Err(CliError::OutputLimit("stdout"));
-        }
-        if stderr_truncated {
-            return Err(CliError::OutputLimit("stderr"));
-        }
-        let result = CommandResult {
-            stdout,
-            stderr,
-            code: status.code().unwrap_or(1),
-        };
+        let result = collect_command(command).await?;
         if env.get("MISE_OFFLINE").map(String::as_str) == Some("1")
             && is_missing_probe_tool_result(&result)
         {
@@ -211,6 +191,94 @@ pub async fn spawn_and_collect(
         Err(_) => Ok(None),
         Ok(result) => result.map(Some),
     }
+}
+
+/// Kills the probe's process group when dropped before the child was reaped (a timeout drops the
+/// collecting future; `kill_on_drop` alone would leave the child's own children running).
+struct GroupGuard {
+    pgid: Option<u32>,
+}
+
+impl GroupGuard {
+    fn kill(&self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            // SAFETY: plain syscall on the group of a child this guard started and has not reaped.
+            unsafe {
+                libc::kill(-(pgid as libc::pid_t), libc::SIGKILL);
+            }
+        }
+    }
+}
+
+impl Drop for GroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// Spawn `command` with piped stdout and stderr in its own process group and collect both, at
+/// most [MAX_PROBE_OUTPUT_BYTES] each (v1 `spawnAndCollect`, snapshotProbe.ts:182-205, with
+/// `collectUint8StreamText` caps and `ProviderProbeOutputLimitError`). The moment either stream
+/// passes its cap the group is killed and the child reaped, and the call fails with
+/// [CliError::OutputLimit]; nothing past the cap is kept (final review 6 finding B1).
+pub async fn collect_command(
+    mut command: tokio::process::Command,
+) -> Result<CommandResult, CliError> {
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command.spawn().map_err(CliError::Spawn)?;
+    let mut guard = GroupGuard { pgid: child.id() };
+    let stdout = collect(child.stdout.take());
+    let stderr = collect(child.stderr.take());
+    tokio::pin!(stdout, stderr);
+    let (mut out, mut err, mut status) = (None, None, None);
+    let outcome = loop {
+        let oversized = match (&out, &err) {
+            (Some((_, true)), _) => Some("stdout"),
+            (_, Some((_, true))) => Some("stderr"),
+            _ => None,
+        };
+        if let Some(stream) = oversized {
+            break Err(CliError::OutputLimit(stream));
+        }
+        if let (Some(_), Some(_), Some(_)) = (&out, &err, &status) {
+            break Ok(());
+        }
+        let step = tokio::select! {
+            read = &mut stdout, if out.is_none() => read.map(|r| out = Some(r)),
+            read = &mut stderr, if err.is_none() => read.map(|r| err = Some(r)),
+            exit = child.wait(), if status.is_none() => exit.map(|s| status = Some(s)),
+        };
+        if let Err(error) = step {
+            break Err(CliError::Io(error));
+        }
+    };
+    if let Err(error) = outcome {
+        // The group may outlive its leader (a child writing on), so it is killed either way.
+        guard.kill();
+        if status.is_none() {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+        }
+        guard.pgid = None;
+        return Err(error);
+    }
+    guard.pgid = None;
+    let ((stdout, _), (stderr, _), status) = (
+        out.unwrap_or_default(),
+        err.unwrap_or_default(),
+        status.expect("reaped"),
+    );
+    Ok(CommandResult {
+        stdout,
+        stderr,
+        code: status.code().unwrap_or(1),
+    })
 }
 
 async fn collect<R: tokio::io::AsyncRead + Unpin>(reader: Option<R>) -> io::Result<(String, bool)> {

@@ -120,16 +120,15 @@ fn probe_timeout(launch_env: &[(String, String)]) -> Duration {
 
 /// v1 `discoverGrokSkills` (skills.ts:90-146): run `<grok> inspect --json` in the session's
 /// working directory with the session environment plus v1's probe variables. None on spawn
-/// failure, timeout, non-zero exit or undecodable output.
+/// failure, timeout, non-zero exit, output past v1's 8 MiB probe cap (skills.ts:97-109 collects
+/// through `spawnAndCollect`, snapshotProbe.ts:159,182-205; the process is killed and reaped at
+/// the cap, final review 6 finding B1) or undecodable output.
 pub async fn discover_skills(program: &Path, context: &PromptContext) -> Option<Vec<GrokSkill>> {
     let identity = Launch::new(program).without_host_identity();
     let mut command = tokio::process::Command::new(program);
     command
         .args(["inspect", "--json"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
+        .stdin(std::process::Stdio::null());
     if !context.cwd.is_empty() {
         command.current_dir(&context.cwd);
     }
@@ -160,14 +159,17 @@ pub async fn discover_skills(program: &Path, context: &PromptContext) -> Option<
     ] {
         command.env(name, value);
     }
-    let output = tokio::time::timeout(probe_timeout(&context.launch_env), command.output())
-        .await
-        .ok()?
-        .ok()?;
-    if !output.status.success() {
+    let output = tokio::time::timeout(
+        probe_timeout(&context.launch_env),
+        crate::probe::support::collect_command(command),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if output.code != 0 {
         return None;
     }
-    decode_inspect_skills(&String::from_utf8_lossy(&output.stdout))
+    decode_inspect_skills(&output.stdout)
 }
 
 /// v1 grok `rewriteUserText` (adapter.ts:367-383).
@@ -230,5 +232,81 @@ mod tests {
         );
         assert!(!skills[0].enabled && skills[1].enabled);
         assert_eq!(decode_inspect_skills("not json"), None);
+    }
+
+    #[cfg(unix)]
+    fn fake_grok(dir: &Path, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("grok");
+        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    fn context(dir: &Path, program: &Path, env: &[(&str, &str)]) -> PromptContext {
+        PromptContext {
+            cwd: dir.to_string_lossy().into_owned(),
+            program: program.to_path_buf(),
+            launch_env: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        }
+    }
+
+    /// Final review 6 finding B1 (v1 skills.ts:97-109 collects through `spawnAndCollect`, which
+    /// fails past 8 MiB of stdout, snapshotProbe.ts:159,182-205): valid skills JSON followed by
+    /// more than the cap of padding is refused, never collected whole.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_inspect_output_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let pad = crate::probe::support::MAX_PROBE_OUTPUT_BYTES + 1024;
+        let program = fake_grok(
+            dir.path(),
+            &format!(
+                "printf '%s' '{{\"skills\":[{{\"name\":\"deploy\",\"source\":{{\"path\":\"/s\"}}}}]}}'\nhead -c {pad} /dev/zero | tr '\\0' ' '"
+            ),
+        );
+        let context = context(dir.path(), &program, &[]);
+        assert_eq!(discover_skills(&program, &context).await, None);
+    }
+
+    /// B1: an inspect that never stops writing (and ignores SIGPIPE) is killed and reaped as soon
+    /// as the cap is passed, well inside the (here extended) probe timeout.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn endless_inspect_output_is_killed_and_reaped_at_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let program = fake_grok(
+            dir.path(),
+            &format!(
+                "echo $$ > '{}'\ntrap '' PIPE\nchunk=$(head -c 65536 /dev/zero | tr '\\0' ' ')\nwhile :; do printf '%s' \"$chunk\"; done",
+                pid_file.display()
+            ),
+        );
+        let context = context(
+            dir.path(),
+            &program,
+            &[("GOAT_GROK_PROBE_TIMEOUT_MS", "600000")],
+        );
+        let result =
+            tokio::time::timeout(Duration::from_secs(60), discover_skills(&program, &context))
+                .await
+                .expect("the oversized inspect ends at the cap, not at the probe timeout");
+        assert_eq!(result, None);
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: signal 0 only checks whether the (reaped) child still exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(
+            !alive,
+            "the inspect process {pid} was left running or unreaped"
+        );
     }
 }
