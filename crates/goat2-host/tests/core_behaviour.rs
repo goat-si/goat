@@ -305,7 +305,30 @@ async fn refused_turn_start_fails_closed_and_holds_the_queue() {
 
 #[tokio::test]
 async fn interrupt_goes_first_and_collect_merges() {
-    let t = setup(manual()).await;
+    // A collect window long enough that both collect inputs land in it on a loaded machine (the
+    // 150 ms test window raced: the second send could arrive after the first started alone).
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let options = HostOptions {
+        collect_window: Duration::from_secs(1),
+        ..opts(&path, 1)
+    };
+    let host = Host::open(
+        options,
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
     let id = start_user_thread(&t, "int", Some("long job")).await;
     eventually("running", || running(&t, &id)).await;
     let queued = send(&t, &id, "int-f", "later", InputMode::Followup)
