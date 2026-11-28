@@ -30,6 +30,9 @@ fn opts(dir: &std::path::Path, generation: u64) -> HostOptions {
         memory_limit_bytes: 1_000,
         memory_sample: Duration::from_secs(3600),
         max_wait: Duration::from_secs(5),
+        // These tests pin the Part 1 queue rules on bot threads (v1 queues behind a running
+        // turn); steering a person's message into a bot turn is covered in bot_runtime.rs.
+        bot_steering: false,
         ..HostOptions::new(
             dir.to_path_buf(),
             generation,

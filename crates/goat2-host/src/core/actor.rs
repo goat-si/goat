@@ -387,9 +387,7 @@ impl Actor {
             .store
             .card(&self.id)
             .ok_or_else(|| Refusal::new(Reason::ThreadNotFound, "thread not found"))?;
-        let mode = input
-            .mode
-            .or_else(|| crate::bot::input_mode(&self.host, &card, &input.from))
+        let mode = crate::bot::input_mode(&self.host, &card, &input.from, input.mode)
             .unwrap_or_else(|| input_mode_for(card.follow_up_mode));
         // A person's input or a parent's `thread.send` releases a Stop hold (v1: the next send
         // releases it); child results and answers do not.

@@ -88,6 +88,7 @@ struct Shared {
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
     pgids: HashMap<ThreadId, i32>,
+    turn_texts: HashMap<ThreadId, Vec<String>>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -151,6 +152,17 @@ impl FakeEngine {
             .expect("fake")
             .rss
             .insert(thread_id.clone(), bytes);
+    }
+
+    /// The text of every turn the engine accepted for a thread (inputs joined by newlines).
+    pub fn turn_texts(&self, thread_id: &ThreadId) -> Vec<String> {
+        self.shared
+            .lock()
+            .expect("fake")
+            .turn_texts
+            .get(thread_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The turn currently running in a thread's fake process.
@@ -346,6 +358,16 @@ impl EngineSession for FakeSession {
                 shared
                     .active_turn
                     .insert(self.thread_id.clone(), turn_id.clone());
+                let text = inputs
+                    .iter()
+                    .map(|i| i.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                shared
+                    .turn_texts
+                    .entry(self.thread_id.clone())
+                    .or_default()
+                    .push(text);
             }
             (result, shared.script.clone())
         };

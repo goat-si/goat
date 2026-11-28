@@ -29,19 +29,28 @@ pub(crate) fn engine_steers(host: &Host) -> bool {
     host.options().bot_steering
 }
 
-/// Hook (accept): the mode of a person's message to a bot that names none. GOAT 2 decision
-/// (owner 2026-11-28): v1 queues a message behind the bot's running turn; GOAT 2 steers it into
-/// the turn when the engine can, so the bot sees it at once, and queues it as a followup only
-/// for engines without steering.
-pub(crate) fn input_mode(host: &Host, card: &ThreadCard, from: &InputSource) -> Option<InputMode> {
+/// Hook (accept): the mode of a person's message to a bot. GOAT 2 decision (owner 2026-11-28):
+/// v1 queues a message behind the bot's running turn; GOAT 2 steers it into the turn when the
+/// engine can, so the bot sees it at once, and queues it as a followup only for engines without
+/// steering. The bot chat sends followup (the bot thread's mode) or steer; an explicit interrupt
+/// or collect is kept.
+pub(crate) fn input_mode(
+    host: &Host,
+    card: &ThreadCard,
+    from: &InputSource,
+    requested: Option<InputMode>,
+) -> Option<InputMode> {
     if card.kind != ThreadKind::Bot || !matches!(from, InputSource::User) {
-        return None;
+        return requested;
     }
-    Some(if engine_steers(host) {
-        InputMode::Steer
-    } else {
-        InputMode::Followup
-    })
+    match requested {
+        None | Some(InputMode::Followup | InputMode::Steer) => Some(if engine_steers(host) {
+            InputMode::Steer
+        } else {
+            InputMode::Followup
+        }),
+        other => other,
+    }
 }
 
 /// Hook (accept, after the input is on disk): a person's message to a bot starts its guard.
