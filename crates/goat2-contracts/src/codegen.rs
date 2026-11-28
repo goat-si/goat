@@ -412,7 +412,9 @@ pub fn render_fixture_module(fixtures: &[Fixture]) -> String {
             "export const {}__{} = {} satisfies {};\n\n",
             fixture.root,
             fixture.name,
-            serde_json::to_string_pretty(&fixture.value).expect("fixture JSON"),
+            // Sorted: serde_json key order depends on workspace features (agent-client-protocol
+            // enables preserve_order), and the committed module must not.
+            serde_json::to_string_pretty(&sorted(fixture.value.clone())).expect("fixture JSON"),
             fixture_type(&fixture.root)
         ));
     }

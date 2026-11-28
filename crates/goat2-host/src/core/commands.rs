@@ -438,6 +438,9 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
     }
 }
 
+// CommandError passes clippy's 128-byte limit once serde_json/preserve_order is unified into the
+// workspace (agent-client-protocol enables it); the reply type is the contract's, kept as is.
+#[allow(clippy::result_large_err)]
 fn change(host: &Host, thread_id: &ThreadId, changed: ThreadChanged) -> CommandReply {
     if host.inner.store.card(thread_id).is_none() {
         return Err(command_error(Reason::ThreadNotFound, "thread not found"));
