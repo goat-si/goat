@@ -1426,7 +1426,9 @@ impl Actor {
             Internal::TurnsListed(result) => {
                 let list = result
                     .ok()
-                    .and_then(|value| serde_json::from_value::<TurnsListResponse>(value).ok());
+                    .and_then(|value| serde_json::from_value::<TurnsListResponse>(value).ok())
+                    // The schema requires every turn's status; one without it cannot be judged.
+                    .filter(|list| list.data.iter().all(|turn| turn.status.is_some()));
                 match list {
                     Some(list) => {
                         // Only a readable list settles a busy resume.

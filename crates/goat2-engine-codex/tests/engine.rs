@@ -946,12 +946,20 @@ async fn a_failed_turn_list_after_a_busy_resume_keeps_every_retry_guarded() {
     entries.push(turns_list(51, &thread));
     entries.push(emit(json!({"id": 51, "result": {"data": "not a list"}})));
     entries.push(turns_list(52, &thread));
-    entries.push(foreign_running(52));
+    entries.push(emit(json!({"id": 52, "result": {}})));
+    entries.push(turns_list(53, &thread));
+    entries.push(emit(
+        json!({"id": 53, "result": {"data": [{"id": "foreign-turn", "items": []}]}}),
+    ));
+    entries.push(turns_list(54, &thread));
+    entries.push(foreign_running(54));
     let t = synthetic("busy-resume-list-failures", entries);
     let h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |_| {}).await;
     refused_start(&h, "goat-input-1").await; // list error
-    refused_start(&h, "goat-input-2").await; // unreadable list
-    refused_start(&h, "goat-input-3").await; // the foreign turn, listed
+    refused_start(&h, "goat-input-2").await; // data of the wrong type
+    refused_start(&h, "goat-input-3").await; // data missing
+    refused_start(&h, "goat-input-4").await; // a turn without its status
+    refused_start(&h, "goat-input-5").await; // the foreign turn, listed
     // No turn/start ever went out: the fake had nothing more to expect.
     finish(h).await;
 }
@@ -972,6 +980,78 @@ async fn idle_stop_spares_a_resumed_turn_goat_does_not_own() {
     assert!(quiet.is_err(), "no event (and no idle exit): {quiet:?}");
     // Still alive and still guarded: the listed foreign turn refuses a start without a resend.
     refused_start(&h, "goat-input-1").await;
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn a_late_session_answer_across_a_mode_round_trip_records_nothing() {
+    // v1 binds an answer to the approval set of its request (CodexAdapterV2.ts:1144-1170): a
+    // request opened in A, answered after A -> B -> A, must not revive a session allowance.
+    let (t, mut entries, thread, turn) = approval_prefix();
+    let template = t
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            Entry::ExpectOutbound { frame, .. } if frame["method"] == "turn/start" => {
+                Some(frame.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    // The turn ends with the request still open.
+    entries.push(thread_idle(&thread));
+    entries.push(turn_completed(&thread, &turn, "completed"));
+    entries.extend(later_turn(&template, 60, &thread, "turn-2"));
+    entries.push(thread_idle(&thread));
+    entries.push(turn_completed(&thread, "turn-2", "completed"));
+    entries.extend(later_turn(&template, 61, &thread, "turn-3"));
+    entries.push(expect(
+        json!({"id": 0, "result": {"decision": "acceptForSession"}}),
+    ));
+    entries.push(emit(json!({"id": 9, "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": thread, "turnId": "turn-3", "itemId": "exec-3", "startedAtMs": 1, "command": "ls"}})));
+    entries.push(expect(json!({"id": 9, "result": {"decision": "decline"}})));
+    entries.push(turn_completed(&thread, "turn-3", "completed"));
+    let t = synthetic("late-answer-mode-round-trip", entries);
+
+    let (mut h, _) = start_approval(&t, RuntimeMode::ApprovalRequired).await;
+    let opened = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened { key: old, .. }) = opened.last().cloned() else {
+        unreachable!()
+    };
+    until(&mut h, is_finished).await;
+    for (id, mode) in [
+        ("goat-input-2", RuntimeMode::AutoAcceptEdits),
+        ("goat-input-3", RuntimeMode::ApprovalRequired),
+    ] {
+        accepted(
+            h.session
+                .start_turn(input(id, "again"), &settings(mode))
+                .await,
+        );
+        if mode == RuntimeMode::AutoAcceptEdits {
+            until(&mut h, is_finished).await;
+        }
+    }
+    let answer = |outcome| RequestAnswer {
+        outcome,
+        text: None,
+        answers: None,
+    };
+    h.session
+        .answer_request(&old, answer(RequestOutcome::AcceptForSession))
+        .await
+        .unwrap();
+    // The next command in A is asked, not auto-accepted by the late answer.
+    let opened = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened { key, .. }) = opened.last().cloned() else {
+        unreachable!()
+    };
+    h.session
+        .answer_request(&key, answer(RequestOutcome::Decline))
+        .await
+        .unwrap();
+    until(&mut h, is_finished).await;
     finish(h).await;
 }
 

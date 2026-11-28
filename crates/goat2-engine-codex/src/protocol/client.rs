@@ -174,7 +174,8 @@ impl ThreadTurnsListParams {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct TurnsListResponse {
-    #[serde(default)]
+    /// Required by the schema; a reply without it is unreadable, and an unreadable list never
+    /// settles a busy thread (the start guard fails closed).
     pub data: Vec<TurnInfo>,
 }
 
