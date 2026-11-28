@@ -193,3 +193,8 @@ it("indexes insight bodies without hidden fences and keeps user and plan text li
   expect(searchablePlanSegments(text).join("\n")).toContain("★ Insight");
   expect(assistantSegments(`\`\`\`text\n${text}\n\`\`\``)?.join("\n")).toContain("★ Insight");
 });
+
+it("projects carriage-return soft line breaks to a space outside code blocks", () => {
+  expect(assistantSegments("First\rsecond")).toEqual(["First second"]);
+  expect(assistantSegments("```text\nFirst\rsecond\n```")).toEqual(["First\rsecond\n"]);
+});
