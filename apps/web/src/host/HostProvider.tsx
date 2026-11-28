@@ -41,7 +41,9 @@ export function createHostFromLocation(loc: Location = window.location): HostCon
   const world = scene === "1OXX-1" ? withQueue(demoWorld()) : demoWorld();
   // Scenes freeze the boards' clock so times read as on the boards; the prototype demo keeps real time.
   const frozen = fakeScene !== null;
-  const fake = new FakeHost(world, { connect: scene === "12P-1" || scene === "1N65-1" ? "never" : "open", now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });
+  const latency = Number(params.get("latency") ?? 0) || 0; // verification only: slow host replies
+  const fake = new FakeHost(world, { connect: scene === "12P-1" || scene === "1N65-1" ? "never" : "open", latency, now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });
+  if (frozen && typeof window !== "undefined") (window as unknown as { __goat2Fake?: FakeHost }).__goat2Fake = fake; // tests count frames
   // 12P-1 is a cold start: the host is not up yet, the UI draws the last session's cache.
   const cache = scene === "12P-1" || scene === "1N65-1" ? {
     load: () => ({ cards: Object.fromEntries(Object.values(world.threads).map((t) => [t.card.id, t.card])), bots: Object.fromEntries(world.bots.map((b) => [b.botId, b])), lines: scene === "12P-1" ? { "t-reviewer": world.threads["t-reviewer"]!.lines } : {} }),

@@ -25,11 +25,6 @@ textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
 [data-new-bot] [data-backdrop] { width: 100% !important; height: 100% !important; }
 /* Board outline layers drawn over content (thread frame card edge) never take clicks. */
 [data-overlay] { pointer-events: none; }
-/* Workspace frame rule (owner 2026-11-28, Paper on all desktop boards): rounded 14px on both left corners,
-   border only top + left (0.5px #E2E2E2), flush to the window's bottom and right. The thread-mode exports
-   (1N65-1, 1NEM-1, 1OXX-1) predate it; this bridges them until they are re-exported. */
-[data-thread-frame] [data-overlay] { border-radius: 14px 0 0 14px !important; border-color: #E2E2E2 !important; border-width: 0.5px 0 0 0.5px !important; }
-[data-thread-frame] [data-workspace-bg] { border-radius: 14px 0 0 14px !important; }
 [data-hidden="true"] { visibility: hidden; }
 /* Thread frame columns follow the window height (the board draws them at 900px). */
 [data-thread-frame] [data-sidebar-col] { height: 100% !important; }
