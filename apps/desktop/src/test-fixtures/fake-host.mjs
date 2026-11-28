@@ -6,6 +6,8 @@
 //   FAKE_HOST_ANNOUNCE_DELAY_MS  print the start line this late (slow host start)
 //   FAKE_HOST_HEALTH_STATUS      status /health answers with (default 200)
 //   FAKE_HOST_HEALTH_DELAY_MS    /health answers 503 until this long after start
+//   FAKE_HOST_HEALTH_UNTIL_MS    /health answers 200 only until this long after start, then 503
+//   mode health-redirect         /health answers 302 to /ok, which answers 200
 //   mode no-announce             never print the start line
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -28,9 +30,13 @@ if (modes.has("grandchild")) {
 const startedAt = Date.now();
 const healthStatus = Number(process.env.FAKE_HOST_HEALTH_STATUS ?? 200);
 const healthDelay = Number(process.env.FAKE_HOST_HEALTH_DELAY_MS ?? 0);
+const healthUntil = Number(process.env.FAKE_HOST_HEALTH_UNTIL_MS ?? Infinity);
 const server = createServer((req, res) => {
+  if (req.url === "/ok") return void res.writeHead(200).end();
   if (req.url !== "/health") return void res.writeHead(404).end();
-  res.writeHead(Date.now() - startedAt < healthDelay ? 503 : healthStatus).end();
+  if (modes.has("health-redirect")) return void res.writeHead(302, { location: "/ok" }).end();
+  const age = Date.now() - startedAt;
+  res.writeHead(age < healthDelay || age >= healthUntil ? 503 : healthStatus).end();
 });
 server.listen(port, "127.0.0.1", () => {
   console.log("booting");

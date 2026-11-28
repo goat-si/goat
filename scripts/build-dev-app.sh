@@ -36,7 +36,8 @@ if [[ "$BRANCH" != "goat2" && $INSTALL == 1 ]]; then
   exit 1
 fi
 DIRTY=false
-git diff --quiet HEAD -- || DIRTY=true
+# Untracked files count too: cargo uses an untracked Cargo.lock, vite and tsc read untracked sources.
+[[ -n "$(git status --porcelain)" ]] && DIRTY=true
 DIRTY_MARK=""
 [[ $DIRTY == true ]] && DIRTY_MARK="+dirty"
 BUILD_NUMBER="$(git rev-list --count HEAD)"

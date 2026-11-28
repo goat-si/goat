@@ -55,7 +55,7 @@ async function harness(
     command: process.execPath,
     args: [FAKE_HOST],
     env: { ...process.env, ...fakeEnv, GOAT2_HOST_PORT: String(port), FAKE_HOST_PIDS: pidsFile, FAKE_HOST_MODE: mode },
-    healthUrl: `http://127.0.0.1:${port}/health`,
+    healthUrl: (announce) => `http://127.0.0.1:${announce.port ?? port}/health`,
     healthIntervalMs: 20,
     stopGraceMs: 300,
     restartDelayMs: () => 50,
@@ -169,7 +169,7 @@ test("a missing binary is a crash, not a thrown error", async () => {
   const supervisor = new HostSupervisor({
     command: "/nonexistent/goat2-host",
     env: {},
-    healthUrl: "http://127.0.0.1:9/health",
+    healthUrl: () => "http://127.0.0.1:9/health",
     restartDelayMs: () => 10,
     maxRestarts: 1,
   });
@@ -243,5 +243,24 @@ test("a host that announced but never passed /health and exits 0 is not restarte
   await h.reached("exited");
   await settle(300);
   assert.equal(h.pids("host").length, 1);
+  await h.supervisor.stop();
+});
+
+test("a /health redirect to a 200 page is not ready", async () => {
+  const h = await harness("health-redirect");
+  h.supervisor.start();
+  await until(() => h.supervisor.state.announce !== null);
+  await settle(400);
+  assert.equal(h.supervisor.state.phase, "starting");
+  await h.supervisor.stop();
+});
+
+test("a /health 200 seen before the start line is not carried over", async () => {
+  // 200 for the first 150 ms, 503 after; the start line comes at 400 ms.
+  const h = await harness("", {}, { FAKE_HOST_HEALTH_UNTIL_MS: "150", FAKE_HOST_ANNOUNCE_DELAY_MS: "400" });
+  h.supervisor.start();
+  await until(() => h.supervisor.state.announce !== null);
+  await settle(400);
+  assert.equal(h.supervisor.state.phase, "starting");
   await h.supervisor.stop();
 });

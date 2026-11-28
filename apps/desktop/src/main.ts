@@ -39,7 +39,7 @@ function readBuildInfo(): BuildInfo {
   return {
     commit: git("rev-parse", "--short=11", "HEAD") || "unknown",
     branch: git("rev-parse", "--abbrev-ref", "HEAD") || "unknown",
-    dirty: git("status", "--porcelain", "--untracked-files=no") !== "",
+    dirty: git("status", "--porcelain") !== "",
     builtAt: null,
   };
 }
@@ -75,7 +75,7 @@ const supervisor = new HostSupervisor({
     GOAT2_HOST_TOKEN: HOST_TOKEN,
   },
   cwd: DATA_DIR,
-  healthUrl: `http://127.0.0.1:${HOST_PORT}/health`,
+  healthUrl: (announce) => `http://127.0.0.1:${announce.port ?? HOST_PORT}/health`,
   output: hostLog,
   log,
   onState: (state) => {

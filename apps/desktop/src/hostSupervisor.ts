@@ -59,8 +59,11 @@ export interface HostSupervisorOptions {
   readonly args?: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
   readonly cwd?: string;
-  /** GET target that answers 200 once the host is ready. */
-  readonly healthUrl: string;
+  /**
+   * /health of the host that printed this start line. Polled only after the start line, so a 200
+   * always comes from the announced host (no latched answer from whatever held the port earlier).
+   */
+  readonly healthUrl: (announce: HostAnnounce) => string;
   /** Receives the host's stdout and stderr. */
   readonly output?: Writable;
   readonly log?: (line: string) => void;
@@ -221,7 +224,7 @@ export class HostSupervisor {
           pending = "";
           this.#log(`host announced ${announce.wsUrl}`);
           this.#set({ announce });
-          this.#maybeReady(generation);
+          void this.#waitReady(generation, announce);
           return;
         }
         newline = pending.indexOf("\n");
@@ -245,16 +248,16 @@ export class HostSupervisor {
     if (child.pid !== undefined) {
       this.#log(`host started pid=${child.pid}`);
       this.#set({ pid: child.pid });
-      void this.#waitReady(generation);
     }
   }
 
-  /** Polls /health until it answers exactly 200 for this host process. */
-  async #waitReady(generation: number): Promise<void> {
+  /** Polls the announced host's /health until it answers exactly 200 (redirects are not followed). */
+  async #waitReady(generation: number, announce: HostAnnounce): Promise<void> {
     const step = this.#opts.healthIntervalMs ?? 200;
+    const url = this.#opts.healthUrl(announce);
     while (generation === this.#generation && this.#child !== null && this.#state.phase === "starting") {
       try {
-        const response = await fetch(this.#opts.healthUrl, { signal: AbortSignal.timeout(2_000) });
+        const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(2_000) });
         await response.body?.cancel();
         if (response.status === 200 && generation === this.#generation) {
           this.#healthy = true;
