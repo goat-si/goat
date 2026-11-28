@@ -40,4 +40,3 @@ Every GOAT 2 file of the Grok slice, with the v1 source it was lifted from. v1 p
 - `textGeneration.ts`, memory isolation (`checkGrokMemoryIsolation`), the in-app API key sign-in
   (`makeGrokAuth`), `driver.ts` maintenance and `hostEnvironmentHash.ts`: host and settings
   concerns, not the session driver. `status.ts` probes belong to the probe slice.
-

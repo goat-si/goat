@@ -18,4 +18,3 @@ GOAT v1 at goat-si/goat origin/dev `916b5ccc1b2`. Findings are the final review'
 | 17 | src/mcp_over_acp.rs (dispose) | packages/provider-acp/src/server/mcpOverAcpBridge.ts:278-283 | ported-to-Rust (plus one 5 s deadline for the whole dispose) |
 | 24 | already fixed: src/agents/grok_notifications.rs keeps agent_result of turn_completed | packages/provider-grok/src/server/xaiAcpExtension.ts:57-75,1281-1298 | test only (src/agents/grok.rs turn_completed_requires_root_identity) |
 | tests | src/bin/acp_mock_agent.rs (GOAT_ACP_CRASH_STDERR_PARTIAL, GOAT_ACP_STDERR_HOLDER, GOAT_ACP_FLOOD_STDOUT, GOAT_ACP_URL_ELICITATION_ONCE_PATH) | apps/server/scripts/acp-mock-agent.ts (scenario style) | written new (GOAT 2 knobs) |
-
