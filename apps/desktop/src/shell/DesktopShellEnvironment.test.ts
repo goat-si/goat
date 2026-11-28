@@ -112,6 +112,55 @@ describe("DesktopShellEnvironment", () => {
     await new DesktopShellEnvironment(inherited, options(answering({ PATH: "/usr/bin" }))).refresh(target);
     assert.equal(target.PNPM_HOME, undefined);
   });
+
+  it("caches only v1's allowlist: session values (SSH_AUTH_SOCK, locale) are never restored", async () => {
+    const inherited = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    const opts = options(answering({ PATH: "/shell/bin", SSH_AUTH_SOCK: "/old-session.sock", LANG: "ko_KR.UTF-8", JAVA_HOME: "/shell/java" }));
+    await new DesktopShellEnvironment(inherited, opts).refresh({});
+    const cached = JSON.parse(readFileSync(opts.cacheFile, "utf8")) as { environment: Record<string, string> };
+    assert.deepEqual(Object.keys(cached.environment).sort(), ["JAVA_HOME", "PATH"]);
+
+    // Next launch: the session's own values win; only PATH (and __MISE_DIFF) are laid over them.
+    const nextInherited = { PATH: "/usr/bin:/session/bin", SHELL: "/bin/zsh", JAVA_HOME: "/session/java", SSH_AUTH_SOCK: "/new-session.sock" };
+    const target: NodeJS.ProcessEnv = { ...nextInherited };
+    assert.equal(new DesktopShellEnvironment(nextInherited, { ...opts, run: answering({}) }).installCached(target), true);
+    assert.equal(target.SSH_AUTH_SOCK, "/new-session.sock");
+    assert.equal(target.JAVA_HOME, "/session/java");
+    assert.equal(target.PATH, "/shell/bin:/usr/bin:/session/bin" + WELL_KNOWN, "cached PATH first, then the inherited one");
+  });
+
+  it("a refresh whose login shell does not answer keeps the cached answer", async () => {
+    const inherited = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    const opts = options(answering({ PATH: "/shell/bin:/usr/bin" }));
+    await new DesktopShellEnvironment(inherited, opts).refresh({});
+    const target: NodeJS.ProcessEnv = { ...inherited };
+    const later = new DesktopShellEnvironment(inherited, { ...opts, run: async () => "" });
+    assert.equal(later.installCached(target), true);
+    assert.equal(await later.refresh(target), false);
+    assert.equal(target.PATH, "/shell/bin:/usr/bin" + WELL_KNOWN);
+  });
+
+  it("a malformed or oversized cache is a miss, never an exception", () => {
+    const inherited = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    const dir = mkdtempSync(join(tmpdir(), "goat2-badcache-"));
+    const cacheFile = join(dir, "cache.json");
+    const key = JSON.stringify(["darwin", HOME, "/bin/zsh", ""]);
+    for (const text of [
+      "null",
+      "[]",
+      "{",
+      JSON.stringify({ version: 1, key, environment: null }),
+      JSON.stringify({ version: 1, key, environment: [] }),
+      JSON.stringify({ version: 1, key, environment: { PATH: 7 } }),
+      JSON.stringify({ version: 2, key, environment: { PATH: "/x" } }),
+      JSON.stringify({ version: 1, key, environment: { PATH: "/x".padEnd(1024 * 1024 + 10, "x") } }),
+    ]) {
+      writeFileSync(cacheFile, text);
+      const target: NodeJS.ProcessEnv = { ...inherited };
+      assert.equal(new DesktopShellEnvironment(inherited, { ...options(answering({})), cacheFile }).installCached(target), false, text.slice(0, 40));
+      assert.equal(target.PATH, "/usr/bin" + WELL_KNOWN);
+    }
+  });
 });
 
 describe("login shell probe, for real", () => {

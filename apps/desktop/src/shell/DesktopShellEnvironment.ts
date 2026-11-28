@@ -8,7 +8,7 @@
 // host has no channel for later updates, so a refresh applies to the next host start); v1-only names
 // (GOAT_RELEASE_BASE_URL, GOAT/T3 telemetry switches) and the Linux DBus/Windows probes are left out.
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { appendWellKnownCliDirs, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "./cliPath.ts";
 import { buildEnvironmentCaptureCommand, extractEnvironmentValues } from "./shellEnvironmentCapture.ts";
@@ -198,10 +198,37 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
   return answeredBy === candidates[0] && Boolean(shellEnvironment.PATH);
 }
 
-interface ShellEnvironmentCache {
-  readonly version: 1;
-  readonly key: string;
-  readonly environment: Record<string, string>;
+/** v1 CACHED_ENV_NAMES: only these survive to the next launch; session values (SSH_AUTH_SOCK, locale,
+ * display/XDG sockets) are never cached, they belong to the session that is running. */
+const CACHED_ENV_NAMES = [
+  "PATH",
+  "__MISE_DIFF",
+  "HOMEBREW_PREFIX",
+  "HOMEBREW_CELLAR",
+  "HOMEBREW_REPOSITORY",
+  "JAVA_HOME",
+  "PNPM_HOME",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "NODE_EXTRA_CA_CERTS",
+] as const;
+const MAX_CACHE_BYTES = 1024 * 1024;
+
+/** v1 ShellEnvironmentCache decode: version 1, string key, an object of string values; anything else is a miss. */
+function decodeCache(text: string): { key: string; environment: Record<string, string> } | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null) return undefined;
+  const { version, key, environment } = value as Record<string, unknown>;
+  if (version !== 1 || typeof key !== "string") return undefined;
+  if (typeof environment !== "object" || environment === null || Array.isArray(environment)) return undefined;
+  const entries = Object.entries(environment as Record<string, unknown>);
+  if (!entries.every(([, entry]) => typeof entry === "string")) return undefined;
+  return { key, environment: Object.fromEntries(entries) as Record<string, string> };
 }
 
 /**
@@ -214,6 +241,8 @@ export class DesktopShellEnvironment {
   readonly #options: ShellEnvironmentOptions;
   readonly #inherited: Env;
   readonly #key: string;
+  /** v1 `latest`: a snapshot (cached or answered) is in target; a failed refresh must not replace it. */
+  #hasSnapshot = false;
 
   constructor(inherited: Env, options: ShellEnvironmentOptions) {
     this.#options = options;
@@ -221,25 +250,31 @@ export class DesktopShellEnvironment {
     this.#key = JSON.stringify([options.platform, options.homeDirectory, inherited.SHELL ?? "", inherited.ZDOTDIR ?? ""]);
   }
 
-  /** Applies the cached answer to target; false when there is none for this platform/home/shell. */
+  /** Applies the cached answer to target; false when there is none (or it is invalid) for this platform/home/shell. */
   installCached(target: Env): boolean {
-    let cache: ShellEnvironmentCache;
+    // v1 installIntoProcess: the host's first checks get the well-known folders even before any answer.
+    this.#publish(target, { ...this.#inherited });
+    let text: string;
     try {
-      cache = JSON.parse(readFileSync(this.#options.cacheFile, "utf8")) as ShellEnvironmentCache;
+      if (statSync(this.#options.cacheFile).size > MAX_CACHE_BYTES) return false;
+      text = readFileSync(this.#options.cacheFile, "utf8");
     } catch {
-      this.#applyPatch(target, {});
       return false;
     }
-    if (cache.version !== 1 || cache.key !== this.#key || typeof cache.environment !== "object") {
-      this.#applyPatch(target, {});
-      return false;
+    const cache = decodeCache(text);
+    if (cache === undefined || cache.key !== this.#key) return false;
+    const cached: Record<string, string> = {};
+    for (const name of CACHED_ENV_NAMES) {
+      const value = cache.environment[name];
+      // mise's metadata must describe the cached PATH entries restored alongside it.
+      if (name !== "PATH" && name !== "__MISE_DIFF" && this.#inherited[name] !== undefined) continue;
+      if (typeof value === "string") cached[name] = value;
     }
-    const environment = Object.fromEntries(
-      Object.entries(cache.environment).filter(
-        ([name, value]) => PATCH_ENV_NAMES.includes(name) && typeof value === "string",
-      ),
-    );
-    this.#applyPatch(target, environment);
+    const baseline: Env = { ...this.#inherited };
+    if (cached.PATH) cached.PATH = mergePathValues(cached.PATH, this.#inherited.PATH, this.#options.platform) ?? cached.PATH;
+    Object.assign(baseline, cached);
+    this.#publish(target, baseline);
+    this.#hasSnapshot = true;
     return true;
   }
 
@@ -248,13 +283,20 @@ export class DesktopShellEnvironment {
     // From the inherited baseline, so values the shell no longer sets do not survive.
     const fresh: Env = { ...this.#inherited };
     const prepared = await installPosixEnvironment(fresh, this.#options);
-    const environment: Record<string, string> = {};
-    for (const name of PATCH_ENV_NAMES) {
-      const value = fresh[name];
-      if (value !== undefined) environment[name] = value;
+    // v1: publish when the shell answered, or when nothing better is there yet; a failed probe never
+    // replaces a cached answer (a later host restart would lose the person's CLI folders).
+    if (prepared || !this.#hasSnapshot) {
+      this.#publish(target, fresh);
+      this.#hasSnapshot = true;
+    } else {
+      this.#options.log?.("shell environment: login shell did not answer; keeping the cached answer");
     }
-    this.#applyPatch(target, environment);
     if (prepared) {
+      const environment: Record<string, string> = {};
+      for (const name of CACHED_ENV_NAMES) {
+        const value = fresh[name];
+        if (value !== undefined) environment[name] = value;
+      }
       try {
         mkdirSync(dirname(this.#options.cacheFile), { recursive: true });
         const temporary = `${this.#options.cacheFile}.tmp`;
@@ -267,10 +309,10 @@ export class DesktopShellEnvironment {
     return prepared;
   }
 
-  /** Shell-owned names come from patch (or the inherited value); PATH also gets the well-known CLI folders. */
-  #applyPatch(target: Env, patch: Record<string, string>): void {
+  /** Writes the shell-owned names of source into target (absent ones removed); PATH gets the well-known CLI folders. */
+  #publish(target: Env, source: Env): void {
     for (const name of PATCH_ENV_NAMES) {
-      const value = patch[name] ?? this.#inherited[name];
+      const value = source[name];
       if (value === undefined) delete target[name];
       else target[name] = value;
     }

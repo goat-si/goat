@@ -502,10 +502,26 @@ if (!app.requestSingleInstanceLock()) {
       version: versionLabel,
     });
     registerDesktopProtocol(scheme, webRoot);
+    // The last login-shell answer starts the host at once; the probe refreshes it for later starts.
+    // Without one (first launch, new shell), every host start waits for the probe, the menu's Start
+    // Host included: started from Finder the host would otherwise not find codex & co, and a running
+    // host cannot take the answer later (review shellenv-4).
+    const cached = shellEnvironment.installCached(hostEnv);
+    const refreshed = shellEnvironment
+      .refresh(hostEnv)
+      .then((answered) => {
+        log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer"}`);
+      })
+      .catch((error: unknown) => {
+        log(`shell environment: ${String(error)}`);
+      });
+    log(`shell environment: ${cached ? "cached answer applied" : "no cached answer, waiting for the login shell"}`);
+    const hostEnvironmentReady: Promise<void> = cached ? Promise.resolve() : refreshed;
+    const startHost = () => void hostEnvironmentReady.then(() => supervisor.start());
     configureApplicationMenu({
       displayName: DISPLAY_NAME,
       platform: process.platform,
-      startHost: () => supervisor.start(),
+      startHost,
       zoomMain,
       runMainContentsCommand,
     });
@@ -513,17 +529,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const value of process.argv) if (isAppUrl(value)) pendingAppUrl = value;
     handleOpenUrl = openAppLink;
     createWindow();
-    // The last login-shell answer starts the host at once; the probe refreshes it for later starts.
-    // Without one (first launch, new shell), the host waits for the probe: started from Finder it
-    // would otherwise not find codex & co.
-    const cached = shellEnvironment.installCached(hostEnv);
-    const refreshed = shellEnvironment
-      .refresh(hostEnv)
-      .then((answered) => log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer; launchctl/inherited PATH"}`))
-      .catch((error: unknown) => log(`shell environment: ${String(error)}`));
-    log(`shell environment: ${cached ? "cached answer applied" : "no cached answer, waiting for the login shell"}`);
-    if (cached) supervisor.start();
-    else void refreshed.then(() => supervisor.start());
+    startHost();
   });
 
   app.on("activate", () => {
