@@ -2255,6 +2255,82 @@ fn auth_start(key: &str) -> ClientFrame {
     }
 }
 
+#[tokio::test]
+async fn a_thread_starts_on_its_provider_instance_driver() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let codex = FakeEngine::new(manual());
+    let claude = FakeEngine::new(manual());
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let host = Host::open_with_factories(
+        opts(&path, 1),
+        Arc::new(store),
+        std::collections::BTreeMap::from([
+            (
+                "codex".to_owned(),
+                Arc::new(codex.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+            (
+                "claudeAgent".to_owned(),
+                Arc::new(claude.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+        ]),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake: claude.clone(),
+        _dir: Some(dir),
+    };
+    let id = start_thread_on(&t, "on-claude", "claudeAgent").await;
+    eventually("claude started", || running(&t, &id)).await;
+    assert!(
+        codex.calls().is_empty(),
+        "codex never started: {:?}",
+        codex.calls().len()
+    );
+    // A provider that is turned off cannot start a thread: the run fails with that reason.
+    t.host
+        .command(set_instance("prov-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = start_thread_on(&t, "on-codex-off", "codex").await;
+    eventually("refused run", || {
+        events(&t, &off).iter().any(|e| matches!(e, LogEvent::RunFinished(f)
+            if f.reason.as_deref().is_some_and(|r| r.contains("provider codex is turned off in settings"))))
+    })
+    .await;
+    assert!(codex.calls().is_empty());
+}
+
+async fn start_thread_on(t: &T, key: &str, instance: &str) -> ThreadId {
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: format!("r-{key}"),
+            client_request_id: key.into(),
+            kind: ThreadKind::User,
+            title: Some(key.into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: instance.into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap()
+        .thread_id
+        .unwrap()
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
