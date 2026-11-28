@@ -123,6 +123,9 @@ struct Shared {
     /// Sign-in answers seen: (flow id, interaction id, credential field names). Values are
     /// never kept, like a real driver.
     auth_responses: Vec<(String, String, Vec<String>)>,
+    /// When set, auth_respond answers with this flow id and phase instead of the requested
+    /// flow and Verifying.
+    auth_respond_answer: Option<(Option<String>, goat2_contracts::ProviderAuthPhase)>,
     install: Option<goat2_contracts::ProviderInstallState>,
     install_updates: Option<mpsc::UnboundedSender<goat2_contracts::ProviderInstallState>>,
 }
@@ -269,6 +272,17 @@ impl FakeEngine {
     /// Sign-in answers seen: (flow id, interaction id, credential field names).
     pub fn auth_responses(&self) -> Vec<(String, String, Vec<String>)> {
         self.shared.lock().expect("fake").auth_responses.clone()
+    }
+
+    /// Make auth_respond answer with `flow_id` and `phase` (a driver that names another flow,
+    /// or checks a key on submit).
+    pub fn set_auth_respond_answer(
+        &self,
+        flow_id: Option<&str>,
+        phase: goat2_contracts::ProviderAuthPhase,
+    ) {
+        self.shared.lock().expect("fake").auth_respond_answer =
+            Some((flow_id.map(str::to_owned), phase));
     }
 
     /// The update channel of the last install start.
@@ -522,10 +536,14 @@ impl EngineFactory for FakeEngine {
             interaction_id.to_owned(),
             values.into_keys().collect(),
         ));
+        let (flow_id, phase) = shared.auth_respond_answer.clone().unwrap_or((
+            Some(flow_id.to_owned()),
+            goat2_contracts::ProviderAuthPhase::Verifying,
+        ));
         Ok(goat2_contracts::ProviderAuthState {
             instance_id: target.instance_id.clone(),
-            phase: goat2_contracts::ProviderAuthPhase::Verifying,
-            flow_id: Some(flow_id.to_owned()),
+            phase,
+            flow_id,
             authorization_url: None,
             ..start
         })

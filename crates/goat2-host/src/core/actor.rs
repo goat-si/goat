@@ -1250,6 +1250,8 @@ impl Actor {
                 // engine's key is spent). Its resend request is dropped at once.
                 if let Some(run_id) = dropped_continuation {
                     self.drop_resend(&run_id, "an engine continuation is never resent");
+                    // The resend no longer blocks the queue: inputs behind it go on.
+                    self.maybe_start();
                 }
             }
         }

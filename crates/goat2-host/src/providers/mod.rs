@@ -319,6 +319,9 @@ impl Providers {
             bounded(factory.auth_start(&target, method_id, tx)).await?,
         );
         self.record_auth(host, instance_id, state.clone())?;
+        if state.phase == ProviderAuthPhase::Succeeded {
+            self.reprobe_after_sign_in(host, instance_id);
+        }
         let watching = host.clone();
         let id = instance_id.to_owned();
         let flow = state.flow_id.clone();
@@ -360,8 +363,10 @@ impl Providers {
         response: goat2_contracts::ProviderAuthResponse,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        // Only the instance's running flow takes an answer: a secret never reaches the driver
-        // for a flow that ended, was replaced, or did not survive a restart.
+        // Only the instance's running flow takes an answer, so a secret is not sent for a flow
+        // that ended, was replaced, or did not survive a restart. The check and the driver call
+        // are not one step (a flow can end in between), so a driver still refuses flows it does
+        // not hold.
         let current = self
             .state
             .lock()
@@ -384,11 +389,34 @@ impl Providers {
             instance_id,
             bounded(factory.auth_respond(&target, flow_id, interaction_id, response)).await?,
         );
+        // An answer for another flow is refused, never stored: storing it would orphan the
+        // running flow (its watcher keeps only updates for its own flow id).
+        if state.flow_id.as_deref() != Some(flow_id) {
+            return Err(ProviderRefusal::Internal(
+                "the driver answered for another sign-in flow".into(),
+            ));
+        }
         // Stored only while that flow still runs: a terminal update recorded meanwhile wins.
-        self.record_auth_if(host, instance_id, state.clone(), |current| {
+        let stored = self.record_auth_if(host, instance_id, state.clone(), |current| {
             current.is_some_and(|c| c.flow_id.as_deref() == Some(flow_id) && auth_running(&c.phase))
         })?;
+        // Signed in at once (e.g. a key checked on submit): the provider row is checked again,
+        // as watch_auth does for a success that arrives later.
+        if stored && state.phase == ProviderAuthPhase::Succeeded {
+            self.reprobe_after_sign_in(host, instance_id);
+        }
         Ok(state)
+    }
+
+    /// Re-probe one instance in a task after a sign-in succeeded (a command must not wait on
+    /// a probe).
+    fn reprobe_after_sign_in(&self, host: &Host, instance_id: &str) {
+        let probing = host.clone();
+        let id = instance_id.to_owned();
+        let task = tokio::spawn(async move {
+            let _ = probing.inner.providers.refresh(&probing, Some(&id)).await;
+        });
+        host.track(&task);
     }
 
     pub async fn auth_logout(
