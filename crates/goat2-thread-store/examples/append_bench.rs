@@ -89,7 +89,9 @@ fn main() {
     }
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(Store::open(dir.path(), StoreOptions::default()).unwrap().0);
-    let ids: Vec<ThreadId> = (0..threads).map(|i| ThreadId::new(format!("t{i}"))).collect();
+    let ids: Vec<ThreadId> = (0..threads)
+        .map(|i| ThreadId::new(format!("t{i}")))
+        .collect();
     for t in &ids {
         store.create_thread(Some(t.clone()), created()).unwrap();
         start_run(&store, t);
