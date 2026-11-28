@@ -714,3 +714,35 @@ async fn a_steer_completed_without_starting_is_not_consumed() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Review round 4 finding 1: a result held for a queued steer, released when Claude discards the
+/// steer, still waits for the pending interrupt answer; a refusal leaves a completed turn.
+#[tokio::test]
+async fn a_steer_held_result_waits_for_the_interrupt_answer() {
+    let run = Run::new("wire/steer_held_result_interrupt_refused.ndjson");
+    let mut factory = run.factory();
+    factory.options.interrupt_settle_timeout = std::time::Duration::from_secs(5);
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::FullAccess, None),
+    )
+    .await
+    .unwrap();
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input("Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    // The root result is held for the queued steer: its text goes out as commentary.
+    until(&mut handle, |e| {
+        matches!(e, EngineEvent::ItemCompleted { .. })
+    })
+    .await;
+    let refused = handle.session.interrupt(&turn_id).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
