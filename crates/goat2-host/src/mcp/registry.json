@@ -1,0 +1,451 @@
+[
+  {
+    "path": "surface.describe",
+    "name": "goat_describe",
+    "summary": "surface describe",
+    "description": "Call surface.describe.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {}
+      }
+    ],
+    "guide": "Discover paths by resource, exact path, list of paths, or search query."
+  },
+  {
+    "path": "surface.call",
+    "name": "goat_call",
+    "summary": "surface call",
+    "description": "Call surface.call.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "path": "thread.list"
+        }
+      }
+    ],
+    "guide": "Invoke a path using its documented arguments; caller identity is supplied by the host."
+  },
+  {
+    "path": "thread.start",
+    "name": "goat_thread_start",
+    "summary": "thread start",
+    "description": "Call thread.start.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "async",
+            "wait"
+          ]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "maximum": 60000
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "task": "Do the work"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.list",
+    "guide": "Start a worker thread. Reuse clientRequestId to reconcile retries with thread.list."
+  },
+  {
+    "path": "thread.send",
+    "name": "goat_thread_send",
+    "summary": "thread send",
+    "description": "Call thread.send.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "steer",
+            "followup",
+            "collect",
+            "interrupt"
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "threadId": "t1",
+          "text": "Hello"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.read",
+    "guide": "Send input to a thread. Reuse clientRequestId and reconcile with thread.read."
+  },
+  {
+    "path": "thread.read",
+    "name": "goat_thread_read",
+    "summary": "thread read",
+    "description": "Call thread.read.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "before": {
+          "type": "integer"
+        },
+        "limit": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "threadId": "t1"
+        }
+      }
+    ],
+    "guide": "Read a page of a thread before an optional sequence number."
+  },
+  {
+    "path": "thread.list",
+    "name": "goat_thread_list",
+    "summary": "thread list",
+    "description": "Call thread.list.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeFinished": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {}
+      }
+    ],
+    "guide": "List threads, optionally including finished threads."
+  },
+  {
+    "path": "thread.wait",
+    "name": "goat_thread_wait",
+    "summary": "thread wait",
+    "description": "Wait for a thread for at most 60 seconds.",
+    "effect": "read",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "maximum": 60000
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "threadId": "t1",
+          "timeoutMs": 1000
+        }
+      }
+    ],
+    "guide": "Wait for a thread for at most 60000 milliseconds."
+  },
+  {
+    "path": "thread.stop",
+    "name": "goat_thread_stop",
+    "summary": "thread stop",
+    "description": "Call thread.stop.",
+    "effect": "destructive",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "threadId": "t1"
+        }
+      }
+    ],
+    "idempotencyReason": "The host enforces the operation semantics.",
+    "guide": "Stop a thread; this is a destructive operation."
+  },
+  {
+    "path": "thread.report_result",
+    "name": "goat_thread_report_result",
+    "summary": "thread report_result",
+    "description": "Report a result from a worker thread.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "succeeded",
+            "failed",
+            "blocked",
+            "cancelled"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "outcome": "succeeded",
+          "summary": "Done"
+        }
+      }
+    ],
+    "idempotencyReason": "The host enforces the operation semantics.",
+    "guide": "Only a worker may report its outcome to the parent."
+  },
+  {
+    "path": "user.send",
+    "name": "goat_send_to_user",
+    "summary": "user send",
+    "description": "Send a user notification once per run per kind.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "ack",
+            "result"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "kind": "ack",
+          "text": "Working"
+        }
+      }
+    ],
+    "idempotencyReason": "The host enforces the operation semantics.",
+    "guide": "Send a notification; the host enforces once per run per kind."
+  },
+  {
+    "path": "request.ask",
+    "name": "goat_ask",
+    "summary": "request ask",
+    "description": "Ask a person a question, approval, or decision with options.",
+    "effect": "write",
+    "requires": "thread",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "question",
+            "approval",
+            "decision"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "consequence": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ]
+          }
+        },
+        "clientRequestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "examples": [
+      {
+        "title": "Example",
+        "args": {
+          "kind": "question",
+          "summary": "Which option?"
+        }
+      }
+    ],
+    "idempotency": "key",
+    "reconcile": "thread.read",
+    "guide": "A decision requires nonempty options. The host returns a needs_human handoff."
+  }
+]
