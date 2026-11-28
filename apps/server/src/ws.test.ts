@@ -83,6 +83,10 @@ import {
   layerConfigSources,
   layerUnusedConfigRpcServices,
 } from "./wsRpcServices.testkit.ts";
+const noSnapshotLoads = ShellSnapshotLoads.ShellSnapshotLoads.of({
+  active: () => Effect.die("unexpected snapshot"),
+  projectDeltas: (events, project) => project(events),
+});
 const CONFIG_TEST_SESSION = {
   sessionId: AuthSessionId.make("config-test"),
   subject: "config-test",
@@ -359,9 +363,7 @@ const resumeSkipsUnknownTypes = (scope: "thread" | "shell") =>
           }).pipe(Effect.flatMap(consume));
     });
     const items = yield* subscription.pipe(
-      Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
-        active: () => Effect.die("unexpected snapshot"),
-      }),
+      Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, noSnapshotLoads),
       Effect.provideService(ThreadManagement.ThreadManagementService, {
         ensureLegacyTranscript: () => Effect.void,
         getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
@@ -540,9 +542,7 @@ it.effect("shell groups read distinct threads once and keep each event's own seq
             Stream.runCollect,
           ),
         ),
-        Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
-          active: () => Effect.die("unexpected snapshot"),
-        }),
+        Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, noSnapshotLoads),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           listActiveSubagentThreadIds: () => Effect.succeed([]),
           getShellSnapshot: (options?: { readonly threadIds?: ReadonlyArray<string> }) =>

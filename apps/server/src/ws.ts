@@ -795,7 +795,12 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     const toShellStream = <E, R>(stream: Stream.Stream<ShellApplicationEvent, E, R>) =>
       stream.pipe(
         Stream.groupedWithin(512, Duration.millis(50)),
-        Stream.mapEffect((events) => projectShellItems(Array.from(events))),
+        Stream.mapEffect((events) =>
+          shellLoads.projectDeltas(
+            coalesceShellApplicationEvents(Array.from(events)),
+            projectShellItems,
+          ),
+        ),
         Stream.flatMap(Stream.fromIterable),
         skipUnchangedThreadShells,
       );
