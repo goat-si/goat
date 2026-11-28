@@ -28,6 +28,8 @@ use crate::engine::{EngineError, EngineFactory, ProviderTarget};
 pub type ProviderList = Option<Vec<ServerProviderEntry>>;
 
 const FILE: &str = "provider-instances.json";
+/// Folder under the data dir that holds each non-default instance's private home.
+const HOMES: &str = "provider-homes";
 /// Upper bound on one driver's probe; a slower probe is reported as timed out.
 const PROBE_DEADLINE: Duration = Duration::from_secs(30);
 /// The message of a row whose probe is still running.
@@ -74,6 +76,8 @@ struct State {
 
 pub struct Providers {
     path: PathBuf,
+    /// `<dataDir>/provider-homes`: one private folder per non-default instance.
+    homes: PathBuf,
     factories: BTreeMap<String, Arc<dyn EngineFactory>>,
     state: Mutex<State>,
     list: watch::Sender<ProviderList>,
@@ -118,6 +122,7 @@ impl Providers {
         }
         Self {
             path,
+            homes: data_dir.join(HOMES),
             factories,
             state: Mutex::new(State {
                 instances,
@@ -149,23 +154,29 @@ impl Providers {
     }
 
     /// The factory a thread's engine starts with (the factory registry: provider instance ->
-    /// its driver), or why it cannot start (v1 refuses a provider that is off or unknown).
-    pub fn factory_for_start(&self, instance_id: &str) -> Result<Arc<dyn EngineFactory>, String> {
+    /// its driver) and the instance it runs as, or why it cannot start (v1 refuses a provider
+    /// that is off or unknown).
+    pub fn factory_for_start(
+        &self,
+        instance_id: &str,
+    ) -> Result<(Arc<dyn EngineFactory>, ProviderTarget), String> {
         let state = self.state.lock().expect("providers");
         let Some(instance) = state
             .instances
             .iter()
-            .find(|i| i.instance_id == instance_id)
+            .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
         else {
             return Err(format!("provider {instance_id} is not set up in this host"));
         };
         if !instance.enabled {
             return Err(format!("provider {instance_id} is turned off in settings"));
         }
-        self.factories
+        let factory = self
+            .factories
             .get(&instance.driver)
             .cloned()
-            .ok_or_else(|| format!("this host has no {} driver", instance.driver))
+            .ok_or_else(|| format!("this host has no {} driver", instance.driver))?;
+        Ok((factory, self.target_of(instance)))
     }
 
     /// Refuse an instance id no listed instance has (before any probe starts).
@@ -174,7 +185,7 @@ impl Providers {
         if state
             .instances
             .iter()
-            .any(|i| i.instance_id == instance_id && self.factories.contains_key(&i.driver))
+            .any(|i| i.instance_id == instance_id && self.listed(i))
         {
             Ok(())
         } else {
@@ -190,10 +201,7 @@ impl Providers {
         let targets: Vec<(ProviderInstance, u64)> = {
             let mut guard = self.state.lock().expect("providers");
             let state = &mut *guard;
-            let listed = state
-                .instances
-                .iter()
-                .filter(|i| self.factories.contains_key(&i.driver));
+            let listed = state.instances.iter().filter(|i| self.listed(i));
             let picked: Vec<ProviderInstance> = match only {
                 Some(id) => {
                     let found: Vec<_> = listed.filter(|i| i.instance_id == id).cloned().collect();
@@ -219,15 +227,16 @@ impl Providers {
         let probes =
             futures_util::future::join_all(targets.iter().map(|(i, generation)| async move {
                 let factory = self.factories[&i.driver].as_ref();
+                let target = self.target_of(i);
                 let probe = if i.enabled {
-                    probe(factory).await
+                    probe(factory, &target).await
                 } else {
                     status_only(ServerProviderState::Disabled, "Turned off in settings.")
                 };
                 // Sign-in methods for an instance with no flow yet (v1 lists them idle).
                 // Bounded like the probe: a hanging driver never stalls the whole list.
                 let methods = if i.enabled && factory.setup().can_authenticate {
-                    tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target_of(i)))
+                    tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target))
                         .await
                         .ok()
                         .and_then(Result::ok)
@@ -293,7 +302,7 @@ impl Providers {
         let (tx, rx) = mpsc::unbounded_channel();
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_start(&target_of(&instance), method_id, tx)).await?,
+            bounded(factory.auth_start(&self.target_of(&instance), method_id, tx)).await?,
         );
         self.record_auth(host, instance_id, state.clone())?;
         let watching = host.clone();
@@ -313,7 +322,7 @@ impl Providers {
         let (instance, factory) = self.lookup(instance_id)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_cancel(&target_of(&instance), flow_id)).await?,
+            bounded(factory.auth_cancel(&self.target_of(&instance), flow_id)).await?,
         );
         // Cancelling an older flow never hides the one that runs now.
         self.record_auth_if(host, instance_id, state.clone(), |current| {
@@ -330,7 +339,7 @@ impl Providers {
         let (instance, factory) = self.lookup(instance_id)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_logout(&target_of(&instance))).await?,
+            bounded(factory.auth_logout(&self.target_of(&instance))).await?,
         );
         self.record_auth(host, instance_id, state.clone())?;
         // Re-probed in a task: this answers a command and must not wait on a probe.
@@ -397,7 +406,7 @@ impl Providers {
         state
             .instances
             .iter()
-            .find(|i| i.instance_id == instance_id)
+            .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
             .and_then(|i| Some((i.clone(), self.factories.get(&i.driver)?.clone())))
             .ok_or_else(|| {
                 ProviderRefusal::NotFound(format!("No provider instance {instance_id}."))
@@ -479,10 +488,10 @@ impl Providers {
 
     /// Add or change an instance (v1 settings `providerInstances` upsert), save, publish.
     pub fn set_instance(&self, host: &Host, next: ProviderInstance) -> Result<(), ProviderRefusal> {
-        let id = next.instance_id.trim();
-        if id.is_empty() || id != next.instance_id {
+        // The id names the instance's home folder: v1's slug rule, checked before any path.
+        if !valid_instance_id(&next.instance_id) {
             return Err(ProviderRefusal::Invalid(
-                "instanceId must be a non-empty name without surrounding spaces".into(),
+                "instanceId must start with a letter and use only letters, digits, '_' or '-' (at most 64)".into(),
             ));
         }
         if !self.factories.contains_key(&next.driver) {
@@ -561,6 +570,9 @@ impl Providers {
     ) -> Vec<ServerProviderEntry> {
         let mut out = Vec::new();
         for instance in &state.instances {
+            if !valid_instance_id(&instance.instance_id) {
+                continue; // Kept in the file, never listed or given a home.
+            }
             let Some(factory) = self.factories.get(&instance.driver) else {
                 continue; // A driver this build does not have: kept in the file, not listed.
             };
@@ -603,8 +615,8 @@ impl Providers {
     }
 }
 
-async fn probe(factory: &dyn EngineFactory) -> ProviderProbeResult {
-    match tokio::time::timeout(PROBE_DEADLINE, factory.probe()).await {
+async fn probe(factory: &dyn EngineFactory, target: &ProviderTarget) -> ProviderProbeResult {
+    match tokio::time::timeout(PROBE_DEADLINE, factory.probe_instance(target)).await {
         Ok(Ok(mut probe)) => {
             // A sign-in action with an unusable URL would stop the whole list: dropped.
             if probe
@@ -733,11 +745,59 @@ fn install_running(phase: &ProviderInstallPhase) -> bool {
     )
 }
 
-fn target_of(instance: &ProviderInstance) -> ProviderTarget {
-    ProviderTarget {
-        instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
-        // Instances carry no launch settings yet: the driver's default binary and environment.
-        launch: None,
+impl Providers {
+    /// Listed: a valid id and a driver this build has.
+    fn listed(&self, instance: &ProviderInstance) -> bool {
+        valid_instance_id(&instance.instance_id) && self.factories.contains_key(&instance.driver)
+    }
+
+    /// The instance as a driver runs it. A non-default instance gets its private home,
+    /// created (mode 0700) before it is handed over; the default instance (id = driver kind)
+    /// uses the driver's shared home. A home is never deleted here: credentials stay until the
+    /// person signs out.
+    fn target_of(&self, instance: &ProviderInstance) -> ProviderTarget {
+        let home = (instance.instance_id != instance.driver
+            && valid_instance_id(&instance.instance_id))
+        .then(|| {
+            let home = self.homes.join(&instance.instance_id);
+            if let Err(err) = create_private_dir(&home) {
+                // No path in the log: home paths stay out of tracing.
+                tracing::warn!(instance = %instance.instance_id, error = ?err.kind(), "provider home not created");
+            }
+            home
+        });
+        ProviderTarget {
+            instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
+            // Instances carry no launch settings yet: the driver's default binary and environment.
+            launch: None,
+            home,
+            // Provider settings carry no shared home yet: the driver's default.
+            shared_home: None,
+        }
+    }
+}
+
+/// v1 `ProviderInstanceId` (providerInstance.ts slug): a letter, then letters, digits, `_` or
+/// `-`, at most 64 characters. No dot, slash or NUL can reach the home path.
+pub fn valid_instance_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    id.len() <= 64
+        && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(path)
     }
 }
 

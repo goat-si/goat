@@ -1772,7 +1772,7 @@ async fn token_usage_follows_the_current_request() {
     let home = run.dir.join("claude-home");
     std::fs::create_dir_all(&home).unwrap();
     let mut spec = run.spec(MODEL, RuntimeMode::ApprovalRequired, None);
-    let env = &mut spec.launch.as_mut().unwrap().env;
+    let env = &mut spec.instance.as_mut().unwrap().launch.as_mut().unwrap().env;
     env.insert("CLAUDE_CONFIG_DIR".into(), home.display().to_string());
     env.insert("CLAUDE_CODE_AUTO_COMPACT_WINDOW".into(), "400000".into());
     env.insert("DISABLE_COMPACT".into(), "0".into());
