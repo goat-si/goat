@@ -11,6 +11,7 @@
 pub mod capabilities;
 pub mod helper;
 mod jsonl;
+pub mod pi;
 pub mod process;
 
 pub use helper::{HelperEngine, HelperFactory, HelperLaunch};

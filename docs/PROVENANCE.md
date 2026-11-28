@@ -383,3 +383,12 @@ Not lifted: usage and limits, account pools, text generation, cloud and checkpoi
 Contract gaps: context and turn token usage (CursorAgentSdk.ts:124,822-839; adapter.ts:794-798,920-936), account usage and limits have no engine event or helper protocol representation; the lane owner directed that telemetry omission be recorded without failing ordinary turns. The contract has no tool-start, tool-output or reasoning-delta event, file-search item, or write newStr field. It cannot represent v1's nested subagent event stream in full. Probe uses the helper process environment: HelperFactory::probe does not pass a particular SessionSpec launch.env, so it cannot guarantee instance-specific auth state. Cursor's v1 capabilities expose neither interactive approvals nor structured questions; v1 adapter.ts:1792-1801 rejects runtime request responses. GOAT per-instance credential storage, account pools, text generation, cloud and checkpoints are outside this helper slice.
 
 Limit: an API key resolved internally by the SDK's own sign-in is not available to the helper's known-key text redactor. This follows v1's treatment of assistant text: CursorAgentSdk.ts:543-558 forwards updates and adapter.ts:248-265,816-829 appends and emits text without reading or redacting a key resolved inside the SDK. Cursor SDK stderr is suppressed here; this does not establish redaction of an unknown key in assistant output.
+## P2-S pi
+
+Owner decision: Pi and OmO use the Rust JSONL RPC transport directly; OmO is a
+profile of the same runtime, not a Node helper driver. The driver is not yet
+implemented by this entry.
+
+| GOAT 2 path | GOAT v1 source at `916b5ccc1b2` | Treatment |
+|---|---|---|
+| `crates/goat2-engine-sdk/src/pi/mod.rs` | `packages/provider-pi/src/server/mcpInjection.ts:49-205` | Launch argument validation ported to Rust; GOAT 2 receives tokenized arguments. |
