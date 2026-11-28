@@ -238,18 +238,21 @@ impl McpOverAcp {
         }
     }
 
-    /// v1 `dispose`: end every session (session shutdown).
+    /// v1 `dispose` (mcpOverAcpBridge.ts:278-283): end every session at once (`concurrency:
+    /// "unbounded"`) and forget them all afterwards (`ensuring connections.clear()`). The whole
+    /// shutdown has one [DISCONNECT_TIMEOUT] deadline, so the agent process is stopped after at
+    /// most that long however many connections hang (final review finding 17).
     pub async fn dispose(&self) {
-        let ids: Vec<String> = self
+        let params: Vec<Value> = self
             .connections
             .lock()
             .expect("connections")
             .keys()
-            .cloned()
+            .map(|id| json!({ "connectionId": id }))
             .collect();
-        for id in ids {
-            let _ = self.disconnect(&json!({ "connectionId": id })).await;
-        }
+        let all = futures::future::join_all(params.iter().map(|p| self.disconnect(p)));
+        let _ = tokio::time::timeout(DISCONNECT_TIMEOUT, all).await;
+        self.connections.lock().expect("connections").clear();
     }
 }
 
