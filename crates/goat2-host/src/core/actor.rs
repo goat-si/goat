@@ -897,7 +897,23 @@ impl Actor {
             } => {
                 // Live text only for the running turn; a late item arrives whole.
                 if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
-                    self.host.stream_text(&self.id, &item_id, &text);
+                    self.host.stream_text(
+                        &self.id,
+                        &item_id,
+                        goat2_contracts::ContentStreamKind::AssistantText,
+                        &text,
+                    );
+                }
+            }
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host
+                        .stream_text(&self.id, &item_id, stream_kind, &text);
                 }
             }
             EngineEvent::ItemCompleted {
