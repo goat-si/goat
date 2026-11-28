@@ -146,6 +146,7 @@ export function CuaGrantSteps({
   opened,
   busy,
   onOpen,
+  onOpenInputMonitoring,
   onReveal,
 }: {
   grants: CuaGrantHolder;
@@ -153,10 +154,36 @@ export function CuaGrantSteps({
   opened: CuaPermission | null;
   busy: boolean;
   onOpen: (permission: CuaPermission) => void;
+  onOpenInputMonitoring?: (() => Promise<void> | void) | undefined;
   onReveal?: (() => void) | undefined;
 }) {
   const steps = cuaGrantSteps(grants, opened);
   const helper = grants.principal === "helper";
+  const [openingInputMonitoring, setOpeningInputMonitoring] = useState(false);
+  const [inputMonitoringError, setInputMonitoringError] = useState<string | null>(null);
+  const inputMonitoringOpener =
+    onOpenInputMonitoring ??
+    (typeof window.desktopBridge?.openCuaPermissionGuide === "function"
+      ? async () => {
+          const openedPane =
+            await window.desktopBridge?.openCuaPermissionGuide?.("input-monitoring");
+          if (!openedPane) throw new Error("Unable to open System Settings.");
+        }
+      : undefined);
+  const openInputMonitoring = () => {
+    if (!inputMonitoringOpener || openingInputMonitoring) return;
+    setOpeningInputMonitoring(true);
+    setInputMonitoringError(null);
+    void Promise.resolve()
+      .then(() => inputMonitoringOpener())
+      .then(
+        () => setOpeningInputMonitoring(false),
+        () => {
+          setOpeningInputMonitoring(false);
+          setInputMonitoringError("Could not open System Settings. Try again.");
+        },
+      );
+  };
   return (
     <div className="space-y-3">
       {helper ? (
@@ -206,11 +233,52 @@ export function CuaGrantSteps({
       </ol>
       {helper ? (
         <div className="rounded-lg border px-3 py-2">
-          <p className="font-medium">Input Monitoring (optional)</p>
-          <p className="text-xs text-muted-foreground">Lets you press Esc to stop the agent.</p>
-          <p className="text-xs text-muted-foreground">
-            In System Settings → Privacy &amp; Security → Input Monitoring, allow {grants.name}.
-          </p>
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                Input Monitoring (optional)
+                {grants.inputMonitoring !== undefined ? (
+                  <span className="sr-only">
+                    {grants.inputMonitoring ? " (allowed)" : " (not set)"}
+                  </span>
+                ) : null}
+              </p>
+              <p className="text-xs text-muted-foreground">Lets you press Esc to stop the agent.</p>
+              {grants.inputMonitoring === undefined && inputMonitoringOpener === undefined ? (
+                <p className="text-xs text-muted-foreground">
+                  In System Settings → Privacy &amp; Security → Input Monitoring, allow{" "}
+                  {grants.name}.
+                </p>
+              ) : null}
+            </div>
+            {grants.inputMonitoring === true ? (
+              <span className="flex items-center gap-1 text-xs text-success">
+                <CircleCheckIcon className="size-4" aria-hidden="true" />
+                Allowed
+              </span>
+            ) : (
+              <div className="flex items-center gap-2">
+                {grants.inputMonitoring === false ? (
+                  <span className="text-xs text-muted-foreground">Not set</span>
+                ) : null}
+                {inputMonitoringOpener !== undefined ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={busy || openingInputMonitoring}
+                    onClick={openInputMonitoring}
+                  >
+                    Open Settings
+                  </Button>
+                ) : null}
+              </div>
+            )}
+          </div>
+          {inputMonitoringError ? (
+            <p role="alert" className="mt-1 text-xs text-destructive">
+              {inputMonitoringError}
+            </p>
+          ) : null}
         </div>
       ) : null}
       <CuaGrantTroubleshooting grants={grants} onReveal={onReveal} />

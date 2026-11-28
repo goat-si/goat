@@ -59,6 +59,7 @@ namespace Goat.ComputerUse
         int driverPid;
         int generation;
         SafeFileHandle liveness;
+        DisplayWakeAssertion wakeAssertion;
         readonly List<IDisposable> pins = new List<IDisposable>();
         string driverDirectory;
         /// <summary>
@@ -198,6 +199,8 @@ namespace Goat.ComputerUse
                     watcher.IsBackground = true;
                     watcher.Start();
                     WaitUntilServing(socketPath);
+                    if (wakeAssertion != null) wakeAssertion.Release();
+                    wakeAssertion = new DisplayWakeAssertion();
                 }
                 catch
                 {
@@ -686,12 +689,57 @@ namespace Goat.ComputerUse
         void CleanUpLocked()
         {
             generation++;
+            if (wakeAssertion != null) { wakeAssertion.Release(); wakeAssertion = null; }
             if (liveness != null) { liveness.Dispose(); liveness = null; }
             // Closing the last job handle kills anything the driver left behind.
             if (job != IntPtr.Zero) { NativeMethods.CloseHandle(job); job = IntPtr.Zero; }
             if (process != IntPtr.Zero) { NativeMethods.CloseHandle(process); process = IntPtr.Zero; }
             driverPid = 0;
             if (listing == 0) ReleasePins();
+        }
+
+        sealed class DisplayWakeAssertion
+        {
+            readonly object stateGate = new object();
+            readonly Thread thread;
+            bool stopped;
+
+            public DisplayWakeAssertion()
+            {
+                thread = new Thread(Run);
+                thread.IsBackground = true;
+                thread.Start();
+            }
+
+            void Run()
+            {
+                NativeMethods.SetThreadExecutionState(
+                    NativeMethods.ES_CONTINUOUS |
+                    NativeMethods.ES_SYSTEM_REQUIRED |
+                    NativeMethods.ES_DISPLAY_REQUIRED);
+                try
+                {
+                    lock (stateGate)
+                    {
+                        while (!stopped) Monitor.Wait(stateGate);
+                    }
+                }
+                finally
+                {
+                    NativeMethods.SetThreadExecutionState(NativeMethods.ES_CONTINUOUS);
+                }
+            }
+
+            public void Release()
+            {
+                lock (stateGate)
+                {
+                    if (stopped) return;
+                    stopped = true;
+                    Monitor.PulseAll(stateGate);
+                }
+                if (Thread.CurrentThread != thread) thread.Join(500);
+            }
         }
     }
 }

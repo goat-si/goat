@@ -37,11 +37,24 @@ enum WindowAXAttribute {
   case failure
 }
 
+enum WindowAXAddResult {
+  case added
+  case unsupported
+  case failed(Int32)
+}
+
 protocol WindowAXSubscription: AnyObject {
   func add(_ element: WindowAXElement, notification: String) -> Bool
+  func addOptional(_ element: WindowAXElement, notification: String) -> WindowAXAddResult
   func attach()
   func invalidate()
   func detach()
+}
+
+extension WindowAXSubscription {
+  func addOptional(_ element: WindowAXElement, notification: String) -> WindowAXAddResult {
+    add(element, notification: notification) ? .added : .unsupported
+  }
 }
 
 enum WindowAXCount {
@@ -81,6 +94,8 @@ final class WindowAXWatch: SettleWatch {
   static let required = ["AXUIElementDestroyed", "AXValueChanged", "AXTitleChanged", "AXMoved",
     "AXResized", "AXSelectedChildrenChanged", "AXSelectedTextChanged", "AXFocusedUIElementChanged",
     "AXFocusedWindowChanged", "AXWindowCreated", "AXLayoutChanged"]
+  static let optional = ["AXMenuOpened", "AXMenuClosed", "AXRowCountChanged",
+    "AXSelectedCellsChanged", "AXSheetCreated"]
 
   private let pid: Int32
   private let windowID: UInt32
@@ -268,16 +283,27 @@ final class WindowAXWatch: SettleWatch {
       guard isAdmitted else { return }
       guard observer.add(app, notification: name) else { return refuse("notification_unsupported:\(name)") }
     }
+    var subscribedNotifications = Self.required
+    for name in Self.optional {
+      guard isAdmitted else { return }
+      switch observer.addOptional(app, notification: name) {
+      case .added:
+        subscribedNotifications.append(name)
+      case .unsupported:
+        break
+      case .failed:
+        return refuse("notification_unsupported:\(name)")
+      }
+    }
     guard isAdmitted else { return }
     observer.attach()
     guard isAdmitted else { return }
-    // Register before readiness, and revalidate changes made while registration was in flight.
     guard api.ownerPID(windowID) == pid else { return refuse("window_owner_changed") }
     guard isAdmitted else { return }
     guard api.windowID(target) == windowID else { return refuse("window_identity_changed") }
     if let refusal = privacyRefusal(app) { if isActive { refuse(refusal) }; return }
     subscribed = true
-    deliver(.ready(Self.required))
+    deliver(.ready(subscribedNotifications))
   }
 
   /// Nil when the app's focus and the target window are known safe; otherwise the refusal reason,
@@ -317,7 +343,7 @@ final class WindowAXWatch: SettleWatch {
     "AXRadioButton", "AXMenuButton", "AXPopUpButton", "AXSlider", "AXValueIndicator", "AXIncrementor",
     "AXProgressIndicator", "AXBusyIndicator", "AXLevelIndicator", "AXDisclosureTriangle", "AXColorWell",
     "AXSplitter", "AXHandle", "AXRelevanceIndicator", "AXLink", "AXHeading", "AXDateField",
-    "AXTimeField", "AXMatte", "AXRuler", "AXUnknown"]
+    "AXTimeField", "AXMatte", "AXRuler", "AXDocument", "AXUnknown"]
 
   private static func axName(_ name: String) -> String { reportableNames.contains(name) ? name : "other" }
 
@@ -569,7 +595,9 @@ final class WindowAXWatch: SettleWatch {
       else { refuse("destroyed_element_ancestry_unknown") }
       return
     }
-    guard Self.required.contains(notification) else { return refuse("notification_unknown") }
+    guard Self.required.contains(notification) || Self.optional.contains(notification) else {
+      return refuse("notification_unknown")
+    }
     // Fence settlement before the blocking privacy and ancestry queries below; every
     // non-terminal path resolves this receipt as changed or ignored.
     deliver(.received, admit: false)

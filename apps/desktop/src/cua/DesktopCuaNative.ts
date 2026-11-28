@@ -101,11 +101,18 @@ type DriverImage = ToolResult["images"][number];
 export type Grants = {
   accessibility: boolean;
   screenRecording: boolean;
+  readonly inputMonitoring?: boolean;
   readonly detail?: string;
   readonly blocker?: ComputerUseReadiness["blockers"][number];
   /** What the probed helper said in its hello it can do (#1532); absent for GOAT's own grants. */
   readonly features?: HelperFeatures;
 };
+
+export interface PowerSaveBlockerLike {
+  readonly start: (type: "prevent-display-sleep" | "prevent-app-suspension") => number;
+  readonly stop: (id: number) => void;
+  readonly isStarted?: (id: number) => boolean;
+}
 
 export interface DesktopCuaDriverDependencies {
   readonly loadEmbedded: () => Promise<{
@@ -189,6 +196,7 @@ export interface DesktopCuaDriverDependencies {
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
   readonly executablePath: string;
+  readonly powerSaveBlocker?: PowerSaveBlockerLike;
 }
 
 /** A capture of a locked or unauthorized screen is all black; real content varies. */

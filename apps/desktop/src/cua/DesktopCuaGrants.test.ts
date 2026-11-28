@@ -5,7 +5,13 @@ import * as Logger from "effect/Logger";
 import * as Tracer from "effect/Tracer";
 
 import { ComputerUseHelperError } from "./ComputerUseHelper.ts";
-import { fixture, HELPER_BUNDLE, HELPER_ID } from "./DesktopCuaDriver.testkit.ts";
+import {
+  fixture,
+  HELPER_BUNDLE,
+  HELPER_ID,
+  HELPER_PID,
+  helperTools,
+} from "./DesktopCuaDriver.testkit.ts";
 
 /** The grant read lines a test's driver logged, in order, and the fields of the spans around them. */
 function grantReadLog() {
@@ -205,5 +211,41 @@ describe("DesktopCuaDriver grants for setup", () => {
         }),
       ).pipe(Effect.provide(log.layer));
     },
+  );
+
+  it.effect(
+    "propagates optional inputMonitoring from helper grants without blocking core readiness",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tools = helperTools({ bundle: HELPER_ID, parent: HELPER_PID });
+          const notSet = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true, inputMonitoring: false },
+            tools,
+          });
+          assert.deepEqual(yield* notSet.grants, {
+            principal: "helper",
+            name: "GOAT Computer Use",
+            bundlePath: HELPER_BUNDLE,
+            bundleId: HELPER_ID,
+            accessibility: true,
+            screenRecording: true,
+            inputMonitoring: false,
+          });
+          assert.isTrue((yield* notSet.verify).verified);
+
+          yield* notSet.answerAsHelper({ granted: true, inputMonitoring: true });
+          assert.deepEqual(yield* notSet.grants, {
+            principal: "helper",
+            name: "GOAT Computer Use",
+            bundlePath: HELPER_BUNDLE,
+            bundleId: HELPER_ID,
+            accessibility: true,
+            screenRecording: true,
+            inputMonitoring: true,
+          });
+        }),
+      ),
   );
 });

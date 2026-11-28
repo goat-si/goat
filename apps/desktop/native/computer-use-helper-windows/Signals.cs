@@ -34,6 +34,11 @@ namespace Goat.ComputerUse
         const uint LLKHF_INJECTED = 0x10;
         const uint LLMHF_INJECTED = 0x01;
         const uint WM_QUIT = 0x0012;
+        const uint WM_KEYDOWN = 0x0100;
+        const uint WM_KEYUP = 0x0101;
+        const uint WM_SYSKEYDOWN = 0x0104;
+        const uint WM_SYSKEYUP = 0x0105;
+        const uint VK_ESCAPE = 0x1B;
         /// <summary>One humanInput event per source per interval is enough to stop an agent.</summary>
         static readonly long HumanInputInterval = Stopwatch.Frequency / 2;
 
@@ -112,6 +117,7 @@ namespace Goat.ComputerUse
         string inputWatch;
         long lastKeyboard, lastPointer;
         int sawKeyboard, sawPointer;
+        bool escapeDown;
         int focusPending;
 
         public Signals(Action<Dictionary<string, object>> emit)
@@ -193,6 +199,7 @@ namespace Goat.ComputerUse
                 ClearAnywhere();
                 watchId = null;
                 inputWatch = null;
+                escapeDown = false;
                 targets = new List<Target>();
                 active.Clear();
                 outbox.Add(reply, null);
@@ -230,17 +237,27 @@ namespace Goat.ComputerUse
             bool known = WindowsFacts.Focus(out pid, out password);
             if (targets.Count == 0)
             {
-                ReconcileAnywhere(all, known ? (password ? Holder(pid) : (Target?)null) : Holder(pid));
+                ReconcileAnywhere(all, IsConfirmedAnywherePrivateFocus(known, password) ? (Target?)Holder(pid) : (Target?)null);
                 return;
             }
             foreach (Target target in targets)
             {
-                bool now = WindowAlive(target) && (!known || (password && pid == target.Pid));
+                bool now = WindowAlive(target) && IsConfirmedPrivateFocus(known, password, pid, target.Pid);
                 bool was;
                 if (!all && active.TryGetValue(target.Key, out was) && was == now) continue;
                 active[target.Key] = now;
                 outbox.Add(Frame(watchId, PrivateMode(target, now)), PrivateKey(watchId, target));
             }
+        }
+
+        internal static bool IsConfirmedAnywherePrivateFocus(bool known, bool password)
+        {
+            return known && password;
+        }
+
+        internal static bool IsConfirmedPrivateFocus(bool known, bool password, int focusedPid, int targetPid)
+        {
+            return known && password && focusedPid == targetPid;
         }
 
         /// <summary>
@@ -425,16 +442,52 @@ namespace Goat.ComputerUse
             {
                 if (keyboard != IntPtr.Zero) UnhookWindowsHookEx(keyboard);
                 if (mouse != IntPtr.Zero) UnhookWindowsHookEx(mouse);
+                lock (attribution) escapeDown = false;
                 worker.Installed = false;
                 worker.Ready.Set();
             }
         }
 
+        internal static bool ShouldEmitEscapeStop(uint message, uint vkCode, ref bool isEscapeDown)
+        {
+            if (vkCode != VK_ESCAPE) return false;
+            if (message == WM_KEYUP || message == WM_SYSKEYUP)
+            {
+                isEscapeDown = false;
+                return false;
+            }
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+            {
+                if (isEscapeDown) return false;
+                isEscapeDown = true;
+                return true;
+            }
+            return false;
+        }
+
         IntPtr OnKeyboard(int code, IntPtr wParam, IntPtr lParam)
         {
-            if (code >= 0 && (((KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT))).flags & LLKHF_INJECTED) == 0)
-                Human("keyboard", ref lastKeyboard, ref sawKeyboard);
+            if (code >= 0)
+            {
+                var info = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+                if ((info.flags & LLKHF_INJECTED) == 0)
+                    HandlePhysicalKeyboard(unchecked((uint)wParam.ToInt64()), info.vkCode);
+            }
             return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        }
+
+        void HandlePhysicalKeyboard(uint message, uint vkCode)
+        {
+            long now = Stopwatch.GetTimestamp();
+            lock (attribution)
+            {
+                if (vkCode == VK_ESCAPE && (message == WM_KEYUP || message == WM_SYSKEYUP))
+                    escapeDown = false;
+                if (inputWatch == null) return;
+                if (ShouldEmitEscapeStop(message, vkCode, ref escapeDown))
+                    outbox.Add(Frame(inputWatch, PersonStop("person_esc")), inputWatch + "|personStop|person_esc");
+                EmitHumanLocked("keyboard", now, ref lastKeyboard, ref sawKeyboard);
+            }
         }
 
         IntPtr OnMouse(int code, IntPtr wParam, IntPtr lParam)
@@ -453,16 +506,20 @@ namespace Goat.ComputerUse
             long now = Stopwatch.GetTimestamp();
             lock (attribution)
             {
-                // Only input during a watch spends that watch's throttle.
                 if (inputWatch == null) return;
-                if (seen == 1 && now - last < HumanInputInterval) return;
-                seen = 1;
-                last = now;
-                var signal = new Dictionary<string, object>();
-                signal["type"] = "humanInput";
-                signal["source"] = source;
-                outbox.Add(Frame(inputWatch, signal), inputWatch + "|human|" + source);
+                EmitHumanLocked(source, now, ref last, ref seen);
             }
+        }
+
+        void EmitHumanLocked(string source, long now, ref long last, ref int seen)
+        {
+            if (seen == 1 && now - last < HumanInputInterval) return;
+            seen = 1;
+            last = now;
+            var signal = new Dictionary<string, object>();
+            signal["type"] = "humanInput";
+            signal["source"] = source;
+            outbox.Add(Frame(inputWatch, signal), inputWatch + "|human|" + source);
         }
 
         static string PrivateKey(string forWatch, Target target)
@@ -489,6 +546,14 @@ namespace Goat.ComputerUse
             signal["type"] = "privateMode";
             signal["active"] = on;
             signal["target"] = where;
+            return signal;
+        }
+
+        static Dictionary<string, object> PersonStop(string reason)
+        {
+            var signal = new Dictionary<string, object>();
+            signal["type"] = "personStop";
+            signal["reason"] = reason;
             return signal;
         }
 

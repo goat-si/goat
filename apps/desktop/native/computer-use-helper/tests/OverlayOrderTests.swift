@@ -2,6 +2,7 @@
 // apps/desktop/src/cua/ComputerUseHelperOverlay.test.ts on macOS.
 
 import CoreGraphics
+import Darwin
 import Foundation
 
 @main
@@ -70,6 +71,92 @@ struct OverlayOrderTests {
     check(
       "an overlay missing from the list (ordered out) is reordered",
       !stacked([window(1, pid: 10)]))
+
+    check("overlay line buffer default cap is 1 MiB", OverlayLineBuffer.maxBytes == 1_048_576)
+
+    do {
+      var buffer = OverlayLineBuffer(limit: 8)
+      let first = Array("abc\nde".utf8)
+      let second = Array("f\n12345678\n".utf8)
+      let lines1 = buffer.append(first[...])
+      let lines2 = buffer.append(second[...])
+      check(
+        "overlay line buffer splits multi-line and cross-chunk frames up to the limit",
+        lines1 == [Data("abc".utf8)]
+          && lines2 == [Data("def".utf8), Data("12345678".utf8)]
+          && buffer.bytes.isEmpty)
+    }
+
+    do {
+      var buffer = OverlayLineBuffer(limit: 8)
+      let part1 = Array("12345678".utf8)
+      let part2 = Array("9".utf8)
+      let lines1 = buffer.append(part1[...])
+      let lines2 = buffer.append(part2[...])
+      check(
+        "overlay line buffer clears and rejects an unterminated line exceeding the cap",
+        lines1 == [] && lines2 == nil && buffer.bytes.isEmpty)
+    }
+
+    do {
+      var buffer = OverlayLineBuffer(limit: 8)
+      let oversized = Array("123456789\n".utf8)
+      let lines = buffer.append(oversized[...])
+      check(
+        "overlay line buffer clears and rejects a terminated line exceeding the cap",
+        lines == nil && buffer.bytes.isEmpty)
+    }
+
+    do {
+      let payload = Data("{\"ack\":42}\n".utf8)
+      var captured: [UInt8] = []
+      var step = 0
+      var currentError: Int32 = 0
+      let outcome = writeAllBytes(
+        payload,
+        writeChunk: { ptr, len in
+          step += 1
+          if step == 2 {
+            currentError = EINTR
+            return -1
+          }
+          let take = min(len, 3)
+          let slice = UnsafeRawBufferPointer(start: ptr, count: take)
+          captured.append(contentsOf: slice)
+          return take
+        },
+        lastError: { currentError })
+      check(
+        "writeAllBytes retries EINTR and finishes partial writes in order",
+        outcome.ok && outcome.errorCode == 0 && captured == Array(payload))
+    }
+
+    do {
+      let payload = Data("{\"ack\":1}\n".utf8)
+      let outcome = writeAllBytes(
+        payload,
+        writeChunk: { _, _ in -1 },
+        lastError: { EPIPE })
+      check(
+        "writeAllBytes returns EPIPE without looping forever",
+        !outcome.ok && outcome.errorCode == EPIPE)
+    }
+
+    do {
+      let payload = Data("x".utf8)
+      let zeroOutcome = writeAllBytes(
+        payload,
+        writeChunk: { _, _ in 0 },
+        lastError: { 0 })
+      let emptyOutcome = writeAllBytes(
+        Data(),
+        writeChunk: { _, _ in -1 },
+        lastError: { EPIPE })
+      check(
+        "writeAllBytes fails on zero-byte write and succeeds on empty payload",
+        !zeroOutcome.ok && zeroOutcome.errorCode == EPIPE && emptyOutcome.ok
+          && emptyOutcome.errorCode == 0)
+    }
 
     exit(failures == 0 ? 0 : 1)
   }

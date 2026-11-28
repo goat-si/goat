@@ -29,7 +29,11 @@ namespace Goat.ComputerUse
         /// <summary>Names this helper process; replies and events are trusted only with it.</summary>
         public static readonly string Generation = Guid.NewGuid().ToString("N");
         static HelperOutput output;
-        static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
+
+        static JavaScriptSerializer CreateJson()
+        {
+            return new JavaScriptSerializer { MaxJsonLength = MaxLineBytes };
+        }
 
         /// <summary>Queues a line for the host (HelperOutput); never waits on stdout.</summary>
         static void Emit(Dictionary<string, object> message)
@@ -46,7 +50,7 @@ namespace Goat.ComputerUse
 
         static byte[] Encode(Dictionary<string, object> message)
         {
-            return new UTF8Encoding(false).GetBytes(Json.Serialize(message) + "\n");
+            return new UTF8Encoding(false).GetBytes(CreateJson().Serialize(message) + "\n");
         }
 
         static Dictionary<string, object> Message(string type)
@@ -148,6 +152,13 @@ namespace Goat.ComputerUse
                 }
             }
             catch (IOException) { }
+            catch (DecoderFallbackException)
+            {
+                var error = Message("error");
+                error["code"] = "bad_request";
+                error["message"] = "Request line is not valid UTF-8.";
+                Emit(error);
+            }
             finally
             {
                 // The host is gone. Nothing more is written (a helper that exits clears every
@@ -163,7 +174,7 @@ namespace Goat.ComputerUse
         static void Handle(DriverService service, Signals signals, FrameSource frames, string line)
         {
             Dictionary<string, object> request = null;
-            try { request = Json.DeserializeObject(line) as Dictionary<string, object>; }
+            try { request = CreateJson().DeserializeObject(line) as Dictionary<string, object>; }
             catch (ArgumentException) { }
             object id, method;
             if (request == null || !request.TryGetValue("id", out id) || !(id is string) ||

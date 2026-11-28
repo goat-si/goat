@@ -99,6 +99,9 @@ final class AgentOverlay {
     },
     onBorder: { [weak self] visible in
       self?.view.showsBorder = visible
+    },
+    onHideCursor: { [weak self] in
+      self?.hideCursorOnIdle()
     })
   private var settledPoint: CGPoint?
   private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -218,6 +221,10 @@ final class AgentOverlay {
     currentPhase = "resting"
     follow.hide()
     target = nil
+    hideCursorOnIdle()
+  }
+
+  private func hideCursorOnIdle() {
     cursorLayer.removeAllAnimations()
     thinkLayer.removeAllAnimations()
     cursorLayer.isHidden = true
@@ -374,28 +381,22 @@ final class OverlayChannel: SessionOverlay {
     overlay.escapeAvailable = input.escapeAvailable
     let overlay = self.overlay
     Thread.detachNewThread { [self] in
-      var buffer = [UInt8]()
+      var buffer = OverlayLineBuffer()
       var chunk = [UInt8](repeating: 0, count: 4096)
       while true {
         let count = read(channel, &chunk, chunk.count)
         if count < 0 && errno == EINTR { continue }
         if count <= 0 { break }
-        buffer.append(contentsOf: chunk[0..<count])
-        while let end = buffer.firstIndex(of: 0x0A) {
-          let line = Data(buffer[0..<end])
-          buffer.removeSubrange(0...end)
+        guard let lines = buffer.append(chunk[0..<count]) else { break }
+        for line in lines {
           guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
             let seq = message["seq"] as? Int, let command = message["command"] as? [String: Any]
           else { continue }
-          // Cancellation reaches native observations before a busy AppKit queue can delay it.
           interruptNativeMcp(command, session: native())
           if isEnded { continue }
           DispatchQueue.main.async {
-            // end() queues its hide after setting ended, so no show can follow that hide.
             guard !self.isEnded else { return }
             overlay.apply(command)
-            // Hand the change to the window server now, and answer on the next turn of the
-            // main loop, after it has been committed.
             CATransaction.flush()
             DispatchQueue.main.async { self.write { "{\"ack\":\(seq)}\n" } }
           }
@@ -414,10 +415,8 @@ final class OverlayChannel: SessionOverlay {
 
   private func write(_ line: @escaping () -> String) {
     writes.async { [self] in
-      // closed changes only on this queue, so it cannot change during the write below.
       guard !closed, !isEnded else { return }
-      let bytes = Array(line().utf8)
-      _ = bytes.withUnsafeBytes { Darwin.write(channel, $0.baseAddress, $0.count) }
+      _ = writeAllToFileDescriptor(channel, data: Data(line().utf8))
     }
   }
 

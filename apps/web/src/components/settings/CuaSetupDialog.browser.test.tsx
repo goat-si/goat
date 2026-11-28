@@ -1,7 +1,7 @@
 import type { CuaHostStatus, DesktopCuaGrants, DesktopCuaVerification } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 
-import { act, fakeTimers, render } from "../../../test/render";
+import { act, fakeTimers, render, stubGlobal } from "../../../test/render";
 import { CuaSetupDialog } from "./CuaSetupDialog";
 import type { CuaPermission } from "./CuaSetupDialog.logic";
 
@@ -15,8 +15,18 @@ const HELPER = {
 } as const;
 
 /** System Settings as seen through the helper: opening a pane grants it unless told otherwise. */
-function fixture(options: { grantOnOpen?: boolean; unusable?: string } = {}) {
-  const grants = { accessibility: false, screenRecording: false };
+function fixture(
+  options: { grantOnOpen?: boolean; unusable?: string; inputMonitoring?: boolean } = {},
+) {
+  const grants: {
+    accessibility: boolean;
+    screenRecording: boolean;
+    inputMonitoring?: boolean;
+  } = {
+    accessibility: false,
+    screenRecording: false,
+    ...(options.inputMonitoring === undefined ? {} : { inputMonitoring: options.inputMonitoring }),
+  };
   // What the helper's next reads end as when it does not answer at all.
   const helper = { unanswered: undefined as DesktopCuaGrants | undefined };
   return {
@@ -92,8 +102,32 @@ it("offers Input Monitoring as optional without blocking computer use", async ()
   await using _screen = await dialog(f);
   expect(text()).toContain("Input Monitoring (optional)");
   expect(text()).toContain("Lets you press Esc to stop the agent.");
+  expect(text()).not.toContain("Not set");
   await allowAll();
   expect(button("Turn on")?.disabled).toBe(false);
+});
+
+it("shows live Input Monitoring status and opens its settings pane without blocking setup", async () => {
+  const openCuaPermissionGuide = vi.fn(async () => true);
+  using _bridge = stubGlobal("desktopBridge", {
+    ...window.desktopBridge,
+    openCuaPermissionGuide,
+  });
+  const f = fixture({ inputMonitoring: false });
+  await using _screen = await dialog(f);
+  await allowAll();
+  expect(text()).toContain("Input Monitoring (optional)");
+  expect(text()).toContain("Not set");
+  expect(button("Turn on")?.disabled).toBe(false);
+
+  await click("Open Settings");
+  expect(openCuaPermissionGuide).toHaveBeenCalledWith("input-monitoring");
+
+  f.grants.inputMonitoring = true;
+  await refocus();
+  expect(text()).toContain("Input Monitoring (optional) (allowed)");
+  expect(text()).not.toContain("Not set");
+  expect(button("Open Settings")).toBeUndefined();
 });
 
 it("turns on only after both grants, then reports the step that failed and retries the check", async () => {

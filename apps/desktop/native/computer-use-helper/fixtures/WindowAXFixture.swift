@@ -35,6 +35,8 @@ private final class FakeAXSubscription: WindowAXSubscription {
   var registered: [String] = []
   var roots: [String] = []
   var failNotification: String?
+  var unsupportedOptional: Set<String> = []
+  var failedOptional: String?
   var attached = false
   var invalidated = false
   var detached = false
@@ -46,6 +48,16 @@ private final class FakeAXSubscription: WindowAXSubscription {
     registered.append(notification)
     duringAdd?()
     return notification != failNotification
+  }
+  func addOptional(_ element: WindowAXElement, notification: String) -> WindowAXAddResult {
+    roots.append(element.reference as! String)
+    registered.append(notification)
+    duringAdd?()
+    if notification == failedOptional { return .failed(-25211) }
+    if unsupportedOptional.contains(notification) || notification == failNotification {
+      return .unsupported
+    }
+    return .added
   }
   func attach() {
     duringAttach?()
@@ -203,6 +215,7 @@ private final class WatchFixture {
   let api = FakeAX()
   let executor = ManualAXExecutor()
   var events: [String] = []
+  var readyCoverage: [String] = []
   var received = 0
   var ignored = 0
   var diagnostics = ""
@@ -216,6 +229,7 @@ private final class WatchFixture {
       case .ready(let coverage):
         check(api.subscription.attached, "ready only after attach")
         check(coverage.contains("AXUIElementDestroyed"), "coverage includes destruction")
+        readyCoverage = coverage
         events.append("ready")
       case .changed: events.append("changed")
       case .received: received += 1
@@ -284,6 +298,15 @@ private func runObserverFixture(_ scenario: String) {
     cycle.api.childParent = cycle.api.child
     cycle.send(cycle.api.child)
     cycle.unsupported("ancestry cycle fails closed")
+    let optionalWatch = WatchFixture()
+    optionalWatch.start()
+    for name in WindowAXWatch.optional {
+      let before = optionalWatch.events.count
+      optionalWatch.send(optionalWatch.api.child, name)
+      check(
+        optionalWatch.events.count == before + 1 && optionalWatch.events.last == "changed",
+        "optional notification \(name) delivers changed")
+    }
   case "attribution":
     let f = WatchFixture()
     f.start()
@@ -336,6 +359,18 @@ private func runObserverFixture(_ scenario: String) {
       check(f.api.subscription.detached, "partial registration cleaned up")
       check(f.api.subscription.roots.allSatisfy { $0 == "app" }, "register app root")
     }
+    let partialOptional = WatchFixture()
+    partialOptional.api.subscription.unsupportedOptional = Set(WindowAXWatch.optional)
+    partialOptional.start()
+    check(partialOptional.events == ["ready"], "unsupported optional notifications still reach ready")
+    check(
+      partialOptional.readyCoverage == WindowAXWatch.required,
+      "unsupported optional notifications are omitted from ready coverage")
+    let failedOptional = WatchFixture()
+    failedOptional.api.subscription.failedOptional = "AXMenuOpened"
+    failedOptional.start()
+    failedOptional.unsupported("non-ignorable optional notification failure refuses")
+    check(!failedOptional.events.contains("ready"), "failed optional notification does not reach ready")
     for defect in ["owner", "mapping", "duplicate", "pid"] {
       let f = WatchFixture()
       if defect == "owner" { f.api.owner = 9 }
@@ -371,6 +406,13 @@ private func runObserverFixture(_ scenario: String) {
     named.start()
     check(named.events == ["unsupported:private_or_unknown_focus:focus_subrole_unreadable:other"],
       "a non-standard role name never reaches the reason: \(named.events)")
+    let documentRole = WatchFixture()
+    documentRole.api.roles["focus"] = "AXDocument"
+    documentRole.api.subroles["focus"] = .failure
+    documentRole.start()
+    check(
+      documentRole.events == ["unsupported:private_or_unknown_focus:focus_subrole_unreadable:AXDocument"],
+      "AXDocument is reportable in refusal reasons: \(documentRole.events)")
     let f = WatchFixture()
     f.start()
     f.api.privateFocus = true

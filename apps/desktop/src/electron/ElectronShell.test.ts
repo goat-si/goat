@@ -168,4 +168,18 @@ describe("ElectronShell", () => {
       assert.equal(openExternalMock.mock.calls.length, 0);
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
+
+  it.effect("opens Input Monitoring in macOS System Settings", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openSystemSettings("input-monitoring");
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [
+        ["x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"],
+      ]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
 });

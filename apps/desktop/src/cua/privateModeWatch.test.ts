@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { DesktopCuaPrivateModeReport } from "@goat/contracts";
+import type { DesktopCuaPersonStopReport, DesktopCuaPrivateModeReport } from "@goat/contracts";
 
 import type { HelperEvent } from "./ComputerUseHelper.ts";
 import { makePrivateModeFollower } from "./privateModeWatch.ts";
@@ -29,6 +29,7 @@ function fakeSession(
     },
     raise: (active: boolean, windowId: number) =>
       listener?.({ type: "privateMode", active, target: { pid: 7, windowId } }),
+    raisePersonStop: () => listener?.({ type: "personStop", reason: "person_esc" }),
   };
 }
 
@@ -100,7 +101,7 @@ describe("private mode follower", () => {
   });
 
   it("reports a secret field's focus and clears it when its helper goes away", async () => {
-    const reports: Array<DesktopCuaPrivateModeReport> = [];
+    const reports: Array<DesktopCuaPrivateModeReport | DesktopCuaPersonStopReport> = [];
     const { follower } = follow({ publish: (report) => reports.push(report) });
     const session = fakeSession([], "a");
     await follower.attach(session);
@@ -111,7 +112,11 @@ describe("private mode follower", () => {
     follower.detach();
     // A late event from the gone helper is not heard.
     session.raise(true, 4);
-    expect(reports.map(({ active, target }) => ({ active, windowId: target.windowId }))).toEqual([
+    expect(
+      reports
+        .filter((report): report is DesktopCuaPrivateModeReport => report.type === "cuaPrivateMode")
+        .map(({ active, target }) => ({ active, windowId: target.windowId })),
+    ).toEqual([
       { active: true, windowId: 3 },
       { active: false, windowId: 3 },
     ]);
@@ -119,7 +124,7 @@ describe("private mode follower", () => {
 
   it("clears a secret field it reported when the watch stops, so the server never keeps a stale pause", async () => {
     const calls: Array<string> = [];
-    const published: Array<DesktopCuaPrivateModeReport> = [];
+    const published: Array<DesktopCuaPrivateModeReport | DesktopCuaPersonStopReport> = [];
     const { follower } = follow({ publish: (report) => published.push(report) });
     const session = fakeSession(calls, "a");
     await follower.attach(session);
@@ -128,13 +133,39 @@ describe("private mode follower", () => {
     // The agent stops controlling the host while the field still has focus: the helper stops
     // watching and will never say it lost focus, so the follower clears it itself.
     await follower.setWatching(false);
-    expect(published.map(({ active, target }) => ({ active, windowId: target.windowId }))).toEqual([
+    expect(
+      published
+        .filter((report): report is DesktopCuaPrivateModeReport => report.type === "cuaPrivateMode")
+        .map(({ active, target }) => ({ active, windowId: target.windowId })),
+    ).toEqual([
       { active: true, windowId: 3 },
       { active: false, windowId: 3 },
     ]);
     // A later watch that sees the field again reports it afresh.
     await follower.setWatching(true);
     session.raise(true, 3);
-    expect(published.at(-1)?.active).toBe(true);
+    const last = published.at(-1);
+    expect(last?.type === "cuaPrivateMode" ? last.active : undefined).toBe(true);
+  });
+
+  it("forwards helper personStop events as cuaPersonStop with generation and ignores late events after detach", async () => {
+    const published: Array<DesktopCuaPrivateModeReport | DesktopCuaPersonStopReport> = [];
+    let currentGeneration = 3;
+    const { follower } = follow({
+      publish: (report) => published.push(report),
+      generation: () => currentGeneration,
+    });
+    const session = fakeSession([], "a");
+    await follower.attach(session);
+    await follower.setWatching(true);
+    session.raisePersonStop();
+    currentGeneration = 4;
+    session.raisePersonStop();
+    follower.detach();
+    session.raisePersonStop();
+    expect(published).toEqual([
+      { version: 1, type: "cuaPersonStop", generation: 3, reason: "person_esc" },
+      { version: 1, type: "cuaPersonStop", generation: 4, reason: "person_esc" },
+    ]);
   });
 });
