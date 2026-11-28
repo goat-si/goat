@@ -470,12 +470,7 @@ it("shows how long a running remote subagent has been running, as a local one do
     ],
   };
   await using screen = await render(
-    <ThreadRelationshipsPanel
-      environmentId={environmentId}
-      threadId={projection.thread.id}
-      showLineage
-      showSideChats={false}
-    />,
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={projection.thread.id} />,
     { router: "/environment/fork" },
   );
 

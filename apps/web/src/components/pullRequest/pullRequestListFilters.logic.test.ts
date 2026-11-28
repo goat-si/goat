@@ -67,7 +67,10 @@ function entry(
     baseBranch: "main",
     createdAt: "2026-07-01T00:00:00Z",
     updatedAt: "2026-07-01T00:00:00Z",
-    reviewers: [],
+    mergeability: "unknown",
+    additions: 1,
+    deletions: 0,
+    viewerReviewRequested: false,
     labels: [],
     ...overrides,
   };

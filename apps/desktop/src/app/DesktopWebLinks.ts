@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { WEB_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export const isWebLink = (value: string) => {
   if (!URL.canParse(value)) return false;
@@ -23,6 +24,7 @@ export class DesktopWebLinks extends Context.Service<
 >()("@goat/desktop/app/DesktopWebLinks") {}
 
 const make = Effect.gen(function* () {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const pending: Array<string> = [];
   let listening: Electron.WebContents | null = null;

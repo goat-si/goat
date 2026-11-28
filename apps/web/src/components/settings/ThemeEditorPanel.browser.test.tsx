@@ -247,7 +247,11 @@ describe("ThemeEditorPanel", () => {
 
     const pickerHex = page.getByRole("textbox", { name: "Accent picker hex value" });
     await act(() =>
-      pickerHex.element().dispatchEvent(new KeyboardEvent("keydown", IME_ESCAPE_229)),
+      pickerHex
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { bubbles: true, key: "Escape", keyCode: 229 }),
+        ),
     );
     await expect.element(hue).toBeInTheDocument();
     expect((hex.element() as HTMLInputElement).value).toBe(edited);

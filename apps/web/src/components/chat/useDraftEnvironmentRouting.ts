@@ -154,19 +154,16 @@ export function useDraftEnvironmentRouting(input: DraftEnvironmentRoutingInput) 
     if (branch) {
       let cursor: number | undefined;
       do {
-        const matching = await readRefs(
-          {
-            environmentId,
-            input: { cwd, query: branch.slice(0, 256), cursor, includeMatchingRemoteRefs: true },
-          },
-          call,
-        );
+        const matching = await readRefs({
+          environmentId,
+          input: { cwd, query: branch.slice(0, 256), cursor, includeMatchingRemoteRefs: true },
+        });
         if (matching._tag !== "Success") break;
         if (matching.value.refs.some((ref) => ref.name === branch)) return branch;
         cursor = matching.value.nextCursor ?? undefined;
       } while (cursor !== undefined && !call.signal.aborted);
     }
-    const result = await readRefs({ environmentId, input: { cwd, limit: 2 } }, call);
+    const result = await readRefs({ environmentId, input: { cwd, limit: 2 } });
     return result._tag === "Success" ? resolveDefaultWorktreeBaseBranch(result.value.refs) : null;
   };
   const refreshBeforeSend = () => {

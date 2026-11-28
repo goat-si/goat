@@ -32,10 +32,10 @@ it("names the page on screen, not the one still loading", async () => {
       }),
       createRoute({
         getParentRoute: () => root,
-        path: "/settings/voice",
+        path: "/settings/appearance",
         // Stands in for a lazy route chunk that has not arrived yet.
         loader: () => slowPage.promise,
-        component: () => <p>Voice page</p>,
+        component: () => <p>Appearance page</p>,
       }),
     ]),
     history: createMemoryHistory({ initialEntries: ["/settings/general"] }),
@@ -44,13 +44,13 @@ it("names the page on screen, not the one still loading", async () => {
   const chrome = screen.getByTestId("chrome");
   await expect.element(chrome).toHaveTextContent("/settings/general");
 
-  const navigation = router.navigate({ to: "/settings/voice" });
-  await expect.poll(() => router.state.location.pathname).toBe("/settings/voice");
+  const navigation = router.navigate({ to: "/settings/appearance" });
+  await expect.poll(() => router.state.location.pathname).toBe("/settings/appearance");
   await expect.element(screen.getByText("General page")).toBeVisible();
   await expect.element(chrome).toHaveTextContent("/settings/general");
 
   slowPage.resolve();
   await navigation;
-  await expect.element(screen.getByText("Voice page")).toBeVisible();
-  await expect.element(chrome).toHaveTextContent("/settings/voice");
+  await expect.element(screen.getByText("Appearance page")).toBeVisible();
+  await expect.element(chrome).toHaveTextContent("/settings/appearance");
 });

@@ -104,8 +104,8 @@ vi.mock("./chatViewSend", async () => {
   const { Atom } = await import("effect/reactivity");
   return { draftFanoutSelectionsAtom: Atom.family(() => Atom.make([])) };
 });
-vi.mock(import("../files/projectFilesQueryState"), async (original) => ({
-  ...(await original()),
+vi.mock("../files/projectFilesQueryState", async (original) => ({
+  ...(await original<typeof import("../files/projectFilesQueryState")>()),
   getProjectFileQueryAtom: state.getProjectFileQueryAtom,
 }));
 

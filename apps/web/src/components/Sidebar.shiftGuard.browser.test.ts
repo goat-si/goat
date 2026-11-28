@@ -93,7 +93,7 @@ describe("sidebar shift guard", () => {
   it("keeps a lazily revealed row clickable when a later update finds it where it was", async () => {
     await using screen = await render(null);
     using list = mountList(screen.container, ["A", "B", "C"]);
-    using _clock = fakeTimers();
+    using _clock = manualClock();
 
     list.reveal("B");
     list.guard.update();
@@ -104,7 +104,7 @@ describe("sidebar shift guard", () => {
   it("ignores positions read while the list is hidden", async () => {
     await using screen = await render(null);
     using list = mountList(screen.container, ["A", "B", "C"]);
-    using _clock = fakeTimers();
+    using _clock = manualClock();
 
     list.element.style.display = "none";
     list.guard.update();

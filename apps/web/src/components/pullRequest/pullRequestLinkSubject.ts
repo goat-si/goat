@@ -30,9 +30,9 @@ function markdownExcerpt(body: string): string | null {
     if (node.type === "blockquote") {
       const paragraph = node.children[0];
       const first = paragraph?.type === "paragraph" ? paragraph.children[0] : undefined;
-      if (first?.type === "text") {
+      if (paragraph?.type === "paragraph" && first?.type === "text") {
         const marker = GITHUB_ALERT_MARKER.exec(first.value);
-        if (marker && (/[\r\n]$/.test(marker[0]) || paragraph?.children.length === 1)) {
+        if (marker && (/[\r\n]$/.test(marker[0]) || paragraph.children.length === 1)) {
           first.value = first.value.slice(marker[0].length);
         }
       }

@@ -12,9 +12,10 @@ const { workspaceSearch, filesystemMetadata } = vi.hoisted(() => ({
   filesystemMetadata: vi.fn(),
 }));
 const nativeFileDrag = vi.hoisted(() => ({ enabled: false }));
-vi.mock(import("../useNativeFileDrag"), async (original) => {
-  const actual = await original();
+vi.mock("../useNativeFileDrag", async (original) => {
+  const actual = await original<typeof import("../useNativeFileDrag")>();
   return {
+    ...actual,
     useNativeFileDrag: (...args: Parameters<typeof actual.useNativeFileDrag>) => {
       const drag = actual.useNativeFileDrag(...args);
       return nativeFileDrag.enabled ? { ...drag, draggable: true } : drag;

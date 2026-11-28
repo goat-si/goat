@@ -20,11 +20,11 @@ vi.mock(import("../../browser/previewRuntime"), async (original) => ({
 vi.mock(import("../../browser/useOpenLink"), () => ({
   useOpenLink: () => previewAccess.openLink,
 }));
-vi.mock(import("../../state/queries"), () => ({
+vi.mock("../../state/queries", () => ({
   useTurnItemDetail: () => ({ data: undefined, isPending: false, error: null }),
 }));
-vi.mock(import("../../state/v2ItemSupport"), () => ({ useV2ItemSupport: () => ({}) }));
-vi.mock(import("../ChatMarkdown"), () => ({
+vi.mock("../../state/v2ItemSupport", () => ({ useV2ItemSupport: () => ({}) }));
+vi.mock("../ChatMarkdown", () => ({
   default: () => null,
   ChatMarkdownAssetImage: () => null,
 }));

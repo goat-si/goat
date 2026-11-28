@@ -1235,7 +1235,7 @@ function ScheduledTaskEditorForm({
                     model={activeModel}
                     modelOptions={activeSelection.options ?? []}
                     allowPromptInjectedEffort={false}
-                    includePlanAgent={selectsPlanAgent(activeSelection.options)}
+                    planModeEnabled={selectsPlanAgent(activeSelection.options)}
                     disabled={saving || !connected}
                     triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
                     onModelOptionsChange={(options) =>

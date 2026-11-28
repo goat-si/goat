@@ -33,7 +33,7 @@ const RAW_INPUT_HEADER_SIZE = 24;
 // Raw Input queues every key event, so a keystroke between two polls is still seen.
 async function openKeyboardActivity(): Promise<() => boolean> {
   const { DataType, load, open } = await import("ffi-rs");
-  const library = "t3-user32-raw-input";
+  const library = "goat-user32-raw-input";
   open({ library, path: "user32.dll" });
   const className = Buffer.from("STATIC\0", "utf16le");
   const window = load({
