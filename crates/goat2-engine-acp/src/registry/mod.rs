@@ -1,13 +1,31 @@
-//! ACP registry pieces ported from GOAT v1 at 916b5ccc1b2.
-//!
-//! Installation, discovery and agent-specific protocol handling are not yet implemented.
+//! ACP registry pieces ported from GOAT v1 at 916b5ccc1b2: the index and its cache, settings and
+//! contracts, managed installs (npm, uv, binary archives), command resolution and the catalog the
+//! host factory uses ([catalog::AcpRegistryCatalog::launch]).
 
 pub mod agents;
+pub mod archive;
+pub mod catalog;
+pub mod command_path;
+pub mod contracts;
+pub mod coordinator;
+pub mod display;
+pub mod environment;
 pub mod index;
+pub mod install;
 pub mod local;
-pub mod resolve;
+pub mod local_presets;
+pub mod package;
+pub mod runtime_temp;
+pub mod schema;
+pub mod settings;
 
+#[cfg(all(test, unix))]
+mod catalog_tests;
+
+pub use catalog::{AcpRegistryCatalog, CatalogOptions, HostContext, RegistryLaunch};
+pub use install::{ArchiveDownload, HttpsDownload, RegistryError};
 pub use local::prefers_http_mcp;
+pub use settings::RegistrySettings;
 
 use goat2_contracts::{EngineDriver, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};

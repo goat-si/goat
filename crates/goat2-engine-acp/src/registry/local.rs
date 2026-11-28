@@ -1,8 +1,7 @@
 //! Local resolution and MCP transport, ported from GOAT v1 at 916b5ccc1b2.
 //! `AcpRegistrySupport.ts:1557-1567,1715-1750`, `mcpTransport.ts:3-26`.
 
-use std::path::Path;
-
+use super::command_path::{self, Environment};
 use super::index::{RegistrySettings, Source};
 use crate::flavor::LaunchCommand;
 
@@ -27,6 +26,7 @@ pub fn prefers_http_mcp(settings: &RegistrySettings) -> bool {
 
 /// v1 `AcpRegistrySupport.ts:1719-1750`: resolve a local executable against the
 /// supplied PATH. The caller provides the environment to avoid global mutations.
+/// [super::catalog::AcpRegistryCatalog::resolve] is the full path with v1's error reasons.
 pub fn resolve_local(
     settings: &RegistrySettings,
     path: &std::ffi::OsStr,
@@ -35,16 +35,11 @@ pub fn resolve_local(
     if command.is_empty() {
         return Err("Local ACP provider requires an executable.");
     }
-    let candidate = Path::new(command);
-    let found = if candidate.components().count() > 1 || candidate.is_absolute() {
-        executable(candidate).then(|| candidate.to_path_buf())
-    } else {
-        std::env::split_paths(path)
-            .map(|p| p.join(candidate))
-            .find(|p| executable(p))
-    };
-    let found = found.ok_or("Local ACP executable is not available on this environment's PATH.")?;
-    if cfg!(windows)
+    let platform = command_path::host_platform();
+    let env: Environment = [("PATH".to_owned(), path.to_string_lossy().into_owned())].into();
+    let found = command_path::resolve_executable(command, platform, &env)
+        .ok_or("Local ACP executable is not available on this environment's PATH.")?;
+    if platform == "win32"
         && found
             .extension()
             .and_then(|s| s.to_str())
@@ -54,14 +49,10 @@ pub fn resolve_local(
             "Local ACP commands launch without a shell. For a Windows batch wrapper, configure the underlying executable (for example node.exe) and pass the script path as an argument.",
         );
     }
-    let absolute = if found.is_absolute() {
-        found
-    } else {
-        std::env::current_dir()
-            .map_err(|_| "Could not resolve local ACP executable.")?
-            .join(found)
-    };
-    Ok(LaunchCommand::new(absolute, settings.command_args.clone()))
+    Ok(LaunchCommand::new(
+        command_path::resolve_absolute_local_command(&found),
+        settings.command_args.clone(),
+    ))
 }
 
 /// Resolve an explicit registry executable override, retaining registry arguments and environment.
@@ -85,24 +76,6 @@ pub fn resolve_override(
     })?;
     command.env = distribution.env.into_iter().collect();
     Ok(command)
-}
-
-fn executable(path: &Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
 }
 
 #[cfg(test)]

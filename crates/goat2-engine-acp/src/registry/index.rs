@@ -141,23 +141,32 @@ fn valid_agent(a: &Agent) -> bool {
             })
         })
 }
-/// Decode the envelope strictly, discarding malformed individual agents (v1 `AcpRegistrySupport.ts:594-625`).
+/// v1 `AcpRegistrySupport.ts:693-698` size error.
+pub fn index_too_large() -> String {
+    format!("ACP Registry index exceeds {MAX_REGISTRY_BYTES} bytes.")
+}
+/// Decode the envelope strictly, discarding malformed individual agents
+/// (v1 `AcpRegistrySupport.ts:594-626,693-705`), with v1's messages.
 pub fn decode(bytes: &[u8]) -> Result<Index, String> {
     if bytes.len() > MAX_REGISTRY_BYTES {
-        return Err("index too large".into());
+        return Err(index_too_large());
     }
-    let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| "ACP Registry index is not valid UTF-8.".to_owned())?;
+    let value: Value =
+        serde_json::from_str(text).map_err(|_| "ACP Registry returned invalid JSON.".to_owned())?;
+    let invalid = || "ACP Registry returned an invalid index.".to_owned();
     let ver = value
         .get("version")
         .and_then(Value::as_str)
-        .ok_or("missing version")?
+        .ok_or_else(invalid)?
         .trim();
     let agents = value
         .get("agents")
         .and_then(Value::as_array)
-        .ok_or("missing agents")?;
+        .ok_or_else(invalid)?;
     if !version(ver) || agents.len() > MAX_AGENTS {
-        return Err("invalid index envelope".into());
+        return Err(invalid());
     }
     let agents = agents
         .iter()
@@ -234,141 +243,44 @@ mod tests {
     }
 }
 
-/// v1 `settings.ts:10-11,27-112`, registry instance settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct RegistrySettings {
-    pub source: Source,
-    pub enabled: bool,
-    pub agent_id: String,
-    pub command_path: String,
-    pub command_args: Vec<String>,
-    pub read_mini_max_code_quota: bool,
-    pub auth_method_id: String,
-    pub distribution: DistributionPreference,
-    pub custom_models: Vec<CustomModel>,
-    pub custom_model_details: Option<Vec<CustomModelEntry>>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Source {
-    Registry,
-    Local,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DistributionPreference {
-    Auto,
-    Binary,
-    Npx,
-    Uvx,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum CustomModel {
-    Slug(String),
-    Entry(CustomModelEntry),
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomModelEntry {
-    pub slug: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<Value>,
-}
-impl Default for RegistrySettings {
-    fn default() -> Self {
-        Self {
-            source: Source::Registry,
-            enabled: true,
-            agent_id: String::new(),
-            command_path: String::new(),
-            command_args: vec![],
-            read_mini_max_code_quota: false,
-            auth_method_id: String::new(),
-            distribution: DistributionPreference::Auto,
-            custom_models: vec![],
-            custom_model_details: None,
-        }
-    }
-}
-impl RegistrySettings {
-    /// v1 `settings.ts:13-25`.
-    pub fn is_minimax_code(&self) -> bool {
-        matches!(self.source, Source::Local)
-            && self.command_path.trim().rsplit('/').next() == Some("mcode")
-            && self.command_args == ["acp"]
-    }
-    /// v1 `settings.ts:100-110`.
-    pub fn validate_model_details(&self) -> bool {
-        let ids: std::collections::HashSet<&str> = self
-            .custom_models
-            .iter()
-            .map(|m| match m {
-                CustomModel::Slug(s) => s.as_str(),
-                CustomModel::Entry(e) => e.slug.as_str(),
-            })
-            .collect();
-        let mut seen = std::collections::HashSet::new();
-        self.custom_model_details
-            .as_deref()
-            .unwrap_or_default()
-            .iter()
-            .all(|e| ids.contains(e.slug.as_str()) && seen.insert(e.slug.as_str()))
-    }
-    /// v1 `customModels.ts:4-10`.
-    pub fn resolved_custom_models(&self) -> Vec<CustomModel> {
-        self.custom_models
-            .iter()
-            .map(|m| {
-                let id = match m {
-                    CustomModel::Slug(s) => s,
-                    CustomModel::Entry(e) => &e.slug,
-                };
-                self.custom_model_details
-                    .as_deref()
-                    .unwrap_or_default()
-                    .iter()
-                    .find(|e| &e.slug == id)
-                    .cloned()
-                    .map(CustomModel::Entry)
-                    .unwrap_or_else(|| m.clone())
-            })
-            .collect()
-    }
-}
+use super::contracts::{AcpRegistryDistribution, AcpRegistryIntegrity, AcpRegistrySearchAgent};
+pub use super::settings::{DistributionPreference, RegistrySettings, Source};
 
-/// v1 `AcpRegistrySupport.ts:320-367`: pick the first compatible distribution.
+/// v1 `AcpRegistrySupport.ts:320-326`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedDistribution {
-    pub kind: &'static str,
+    pub kind: AcpRegistryDistribution,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub binary_target: Option<BinaryTarget>,
     pub package_name: Option<String>,
 }
+/// v1 `AcpRegistrySupport.ts:328-367`: `auto` tries binary, npx, uvx; a binary uses the first
+/// platform candidate the agent ships.
 pub fn resolve_distribution(
     agent: &Agent,
     preference: &DistributionPreference,
     target: Option<&str>,
 ) -> Option<ResolvedDistribution> {
-    let kinds: &[&str] = match preference {
-        DistributionPreference::Auto => &["binary", "npx", "uvx"],
-        DistributionPreference::Binary => &["binary"],
-        DistributionPreference::Npx => &["npx"],
-        DistributionPreference::Uvx => &["uvx"],
+    let binary = super::platform_candidates(target)
+        .into_iter()
+        .find_map(|k| agent.distribution.binary.as_ref()?.get(k));
+    let kinds: &[AcpRegistryDistribution] = match preference {
+        DistributionPreference::Auto => &[
+            AcpRegistryDistribution::Binary,
+            AcpRegistryDistribution::Npx,
+            AcpRegistryDistribution::Uvx,
+        ],
+        DistributionPreference::Binary => &[AcpRegistryDistribution::Binary],
+        DistributionPreference::Npx => &[AcpRegistryDistribution::Npx],
+        DistributionPreference::Uvx => &[AcpRegistryDistribution::Uvx],
     };
     for kind in kinds {
-        match *kind {
-            "binary" => {
-                if let Some(b) = &agent.distribution.binary
-                    && let Some(t) = super::platform_candidates(target)
-                        .into_iter()
-                        .find_map(|k| b.get(k))
-                {
+        match kind {
+            AcpRegistryDistribution::Binary => {
+                if let Some(t) = binary {
                     return Some(ResolvedDistribution {
-                        kind: "binary",
+                        kind: *kind,
                         args: t.args.clone().unwrap_or_default(),
                         env: t.env.clone().unwrap_or_default(),
                         binary_target: Some(t.clone()),
@@ -376,15 +288,15 @@ pub fn resolve_distribution(
                     });
                 }
             }
-            "npx" | "uvx" => {
-                let p = if *kind == "npx" {
+            AcpRegistryDistribution::Npx | AcpRegistryDistribution::Uvx => {
+                let package = if *kind == AcpRegistryDistribution::Npx {
                     agent.distribution.npx.as_ref()
                 } else {
                     agent.distribution.uvx.as_ref()
                 };
-                if let Some(p) = p {
+                if let Some(p) = package {
                     return Some(ResolvedDistribution {
-                        kind: if *kind == "npx" { "npx" } else { "uvx" },
+                        kind: *kind,
                         args: p.args.clone().unwrap_or_default(),
                         env: p.env.clone().unwrap_or_default(),
                         binary_target: None,
@@ -392,83 +304,87 @@ pub fn resolve_distribution(
                     });
                 }
             }
-            _ => {}
         }
     }
     None
 }
 
-/// v1 `registryIndexCache.ts:17-40`: stable launch identity, including sorted env entries.
+/// v1 `registryIndexCache.ts:17-40`: the launch identity, byte for byte as v1's `JSON.stringify`
+/// (key order kept; env entries sorted by `compareText`).
 pub fn launch_identity(
     version: Option<&str>,
     distribution: &ResolvedDistribution,
     command_override: Option<&str>,
 ) -> String {
-    let mut o = serde_json::Map::new();
-    o.insert("version".into(), serde_json::json!(version));
-    o.insert("kind".into(), serde_json::json!(distribution.kind));
-    if let Some(c) = command_override.filter(|s| !s.is_empty()) {
-        o.insert("commandOverride".into(), serde_json::json!(c));
+    fn json<T: Serialize + ?Sized>(value: &T) -> String {
+        serde_json::to_string(value).unwrap_or_default()
     }
-    if let Some(p) = &distribution.package_name {
-        o.insert("packageName".into(), serde_json::json!(p));
+    let mut s = format!(
+        "{{\"version\":{},\"kind\":{}",
+        json(&version),
+        json(distribution.kind.as_str())
+    );
+    if let Some(c) = command_override.filter(|s| !s.is_empty()) {
+        s.push_str(&format!(",\"commandOverride\":{}", json(c)));
+    }
+    if let Some(p) = distribution
+        .package_name
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        s.push_str(&format!(",\"packageName\":{}", json(p)));
     }
     if let Some(b) = &distribution.binary_target {
-        o.insert("archive".into(), serde_json::json!(b.archive));
-        o.insert("cmd".into(), serde_json::json!(b.cmd));
-        o.insert("sha256".into(), serde_json::json!(b.sha256));
+        s.push_str(&format!(
+            ",\"archive\":{},\"cmd\":{},\"sha256\":{}",
+            json(&b.archive),
+            json(&b.cmd),
+            json(&b.sha256)
+        ));
     }
-    o.insert("args".into(), serde_json::json!(distribution.args));
-    o.insert(
-        "env".into(),
-        serde_json::json!(distribution.env.iter().collect::<Vec<_>>()),
-    );
-    serde_json::Value::Object(o).to_string()
+    s.push_str(&format!(
+        ",\"args\":{},\"env\":{}}}",
+        json(&distribution.args),
+        json(&distribution.env.iter().collect::<Vec<_>>())
+    ));
+    s
 }
 
-/// v1 `AcpRegistrySupport.ts:1478-1528`: only show compatible agents whose package manager is available.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SearchAgent {
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub authors: Vec<String>,
-    pub license: Option<String>,
-    pub website: Option<String>,
-    pub repository: Option<String>,
-    pub icon: Option<String>,
-    pub distribution: String,
-    pub integrity: String,
-}
+/// v1 `AcpRegistrySupport.ts:82`.
+pub const DEFAULT_SEARCH_LIMIT: usize = 20;
+
+/// v1 `AcpRegistrySupport.ts:1478-1528`: compatible agents whose package manager is available,
+/// by rank, then lowercase name, then id.
 pub fn search(
     index: &Index,
     query: &str,
     limit: Option<usize>,
     target: Option<&str>,
-    manager_available: impl Fn(&str) -> bool,
-) -> Result<Vec<SearchAgent>, String> {
+    mut manager_available: impl FnMut(&str) -> bool,
+) -> Result<Vec<AcpRegistrySearchAgent>, String> {
     let q = query.trim();
-    if chars(q) > 120 || limit.is_some_and(|n| n == 0 || n > 512) {
+    if chars(q) > 120 || limit.is_some_and(|n| n == 0 || n > MAX_AGENTS) {
         return Err("invalid search input".into());
     }
-    let mut ranked: Vec<_> = index
-        .agents
-        .iter()
-        .filter_map(|a| {
-            let rank = search_rank(a, q)?;
-            let d = resolve_distribution(a, &DistributionPreference::Auto, target)?;
-            let manager = match d.kind {
-                "npx" => Some("npm"),
-                "uvx" => Some("uv"),
-                _ => None,
-            };
-            if manager.is_some_and(|m| !manager_available(m)) {
-                return None;
+    let mut availability: BTreeMap<&str, bool> = BTreeMap::new();
+    let mut ranked = Vec::new();
+    for a in &index.agents {
+        let Some(d) = resolve_distribution(a, &DistributionPreference::Auto, target) else {
+            continue;
+        };
+        let Some(rank) = search_rank(a, q) else {
+            continue;
+        };
+        if let Some(manager) = super::package::package_manager_for(d.kind) {
+            let available = *availability
+                .entry(manager)
+                .or_insert_with(|| manager_available(manager));
+            if !available {
+                continue;
             }
-            Some((rank, a, d))
-        })
-        .collect();
+        }
+        ranked.push((rank, a, d));
+    }
     ranked.sort_by(|a, b| {
         a.0.cmp(&b.0)
             .then_with(|| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
@@ -476,8 +392,8 @@ pub fn search(
     });
     Ok(ranked
         .into_iter()
-        .take(limit.unwrap_or(20))
-        .map(|(_, a, d)| SearchAgent {
+        .take(limit.unwrap_or(DEFAULT_SEARCH_LIMIT))
+        .map(|(_, a, d)| AcpRegistrySearchAgent {
             id: a.id.clone(),
             name: a.name.clone(),
             version: a.version.clone(),
@@ -487,13 +403,14 @@ pub fn search(
             website: a.website.clone(),
             repository: a.repository.clone(),
             icon: a.icon.clone(),
-            distribution: d.kind.into(),
-            integrity: if d.binary_target.as_ref().is_some_and(|t| t.sha256.is_some()) {
-                "sha256"
+            distribution: d.kind,
+            integrity: if d.kind == AcpRegistryDistribution::Binary
+                && d.binary_target.as_ref().is_some_and(|t| t.sha256.is_some())
+            {
+                AcpRegistryIntegrity::Sha256
             } else {
-                "registry"
-            }
-            .into(),
+                AcpRegistryIntegrity::Registry
+            },
         })
         .collect())
 }
@@ -504,16 +421,26 @@ mod index_tests {
     #[test]
     fn distribution_and_search_follow_v1_order() {
         let index=decode(br#"{"version":"1","agents":[{"id":"hello","name":"Hello","version":"1","description":"a","distribution":{"npx":{"package":"hello@1.0.0"},"uvx":{"package":"hello==1.0.0"},"binary":{"windows-x86_64":{"archive":"https://example.com/a","cmd":"bin/app","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}]}"#).unwrap();
-        let d = resolve_distribution(
-            &index.agents[0],
-            &DistributionPreference::Auto,
-            Some("windows-aarch64"),
-        )
-        .unwrap();
-        assert_eq!(d.kind, "binary");
+        let a = &index.agents[0];
+        let d = resolve_distribution(a, &DistributionPreference::Auto, Some("windows-aarch64"))
+            .unwrap();
+        assert_eq!(d.kind, AcpRegistryDistribution::Binary);
+        assert_eq!(
+            resolve_distribution(a, &DistributionPreference::Auto, Some("linux-x86_64"))
+                .unwrap()
+                .kind,
+            AcpRegistryDistribution::Npx
+        );
+        assert_eq!(
+            resolve_distribution(a, &DistributionPreference::Uvx, None)
+                .unwrap()
+                .kind,
+            AcpRegistryDistribution::Uvx
+        );
+        assert!(resolve_distribution(a, &DistributionPreference::Binary, None).is_none());
         assert_eq!(
             search(&index, "hello", None, Some("windows-aarch64"), |_| false).unwrap()[0].integrity,
-            "sha256"
+            AcpRegistryIntegrity::Sha256
         );
         assert!(
             search(&index, "hello", None, None, |_| false)
@@ -522,30 +449,59 @@ mod index_tests {
         );
         assert_eq!(
             search(&index, "hello", None, None, |m| m == "npm").unwrap()[0].distribution,
-            "npx"
+            AcpRegistryDistribution::Npx
         );
     }
     #[test]
     fn malformed_distributions_are_discarded() {
         let doc=br#"{"version":"1","agents":[{"id":"bad","name":"Bad","version":"1","description":"","distribution":{"npx":{"package":"bad@latest"}}},{"id":"bad2","name":"Bad","version":"1","description":"","distribution":{"binary":{"linux-x86_64":{"archive":"https://u:p@example.com/file","cmd":"bin"}}}}]}"#;
         assert!(decode(doc).unwrap().agents.is_empty());
-        assert!(decode(br#"{"version":"..","agents":[]}"#).is_err());
+        assert_eq!(
+            decode(br#"{"version":"..","agents":[]}"#).unwrap_err(),
+            "ACP Registry returned an invalid index."
+        );
+        assert_eq!(
+            decode(b"{").unwrap_err(),
+            "ACP Registry returned invalid JSON."
+        );
+        assert_eq!(
+            decode(b"\xff").unwrap_err(),
+            "ACP Registry index is not valid UTF-8."
+        );
+        assert_eq!(
+            decode(&vec![b' '; MAX_REGISTRY_BYTES + 1]).unwrap_err(),
+            "ACP Registry index exceeds 1048576 bytes."
+        );
     }
     #[test]
-    fn custom_model_details_must_match_and_are_applied() {
-        let mut s = RegistrySettings::default();
-        s.custom_models.push(CustomModel::Slug("x".into()));
-        s.custom_model_details = Some(vec![CustomModelEntry {
-            slug: "x".into(),
-            name: Some("Name".into()),
-            capabilities: None,
-        }]);
-        assert!(s.validate_model_details());
-        assert!(
-            matches!(&s.resolved_custom_models()[0],CustomModel::Entry(e) if e.name.as_deref()==Some("Name"))
+    fn launch_identity_matches_v1_json() {
+        let d = ResolvedDistribution {
+            kind: AcpRegistryDistribution::Binary,
+            args: vec!["acp".into()],
+            env: [("B".into(), "2".into()), ("A".into(), "1".into())].into(),
+            binary_target: Some(BinaryTarget {
+                archive: "https://x.test/a.zip".into(),
+                cmd: "./a".into(),
+                sha256: None,
+                args: None,
+                env: None,
+            }),
+            package_name: None,
+        };
+        assert_eq!(
+            launch_identity(Some("1.0"), &d, Some("/bin/a")),
+            r#"{"version":"1.0","kind":"binary","commandOverride":"/bin/a","archive":"https://x.test/a.zip","cmd":"./a","sha256":null,"args":["acp"],"env":[["A","1"],["B","2"]]}"#
         );
-        let duplicate = s.custom_model_details.as_ref().unwrap()[0].clone();
-        s.custom_model_details.as_mut().unwrap().push(duplicate);
-        assert!(!s.validate_model_details());
+        let npx = ResolvedDistribution {
+            kind: AcpRegistryDistribution::Npx,
+            args: vec![],
+            env: BTreeMap::new(),
+            binary_target: None,
+            package_name: Some("a@1.0.0".into()),
+        };
+        assert_eq!(
+            launch_identity(None, &npx, Some("")),
+            r#"{"version":null,"kind":"npx","packageName":"a@1.0.0","args":[],"env":[]}"#
+        );
     }
 }
