@@ -385,3 +385,53 @@ fn invalid_thread_ids_and_duplicates_are_refused() {
         Err(StoreError::ThreadExists(_))
     ));
 }
+
+#[test]
+fn open_asks_counts_requests_for_a_person_and_not_resend_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    let card = store
+        .create_thread(Some(t.clone()), created("asks", "/w"))
+        .unwrap();
+    assert_eq!(card.open_asks, 0);
+    assert!(!card.unread);
+    let out = store
+        .append(
+            &t,
+            vec![
+                input("i1", "x"),
+                started("r1", &["i1"]),
+                accepted("r1"),
+                request("q1", Some("r1"), RequestKind::Approval),
+                request("q2", Some("r1"), RequestKind::Question),
+            ],
+        )
+        .unwrap();
+    assert_eq!(out.card.open_asks, 2);
+    let out = store
+        .append(&t, vec![resolved("q1", RequestOutcome::Accept)])
+        .unwrap();
+    assert_eq!(out.card.open_asks, 1);
+    // A run that ends unknown opens the store's own resend hold: it blocks the thread
+    // (needs_you) but is not a question for a person.
+    let out = store
+        .append(
+            &t,
+            vec![
+                resolved("q2", RequestOutcome::Answered),
+                finished("r1", RunOutcome::Completed),
+                input("i2", "y"),
+                started("r2", &["i2"]),
+                finished("r2", RunOutcome::Unknown),
+            ],
+        )
+        .unwrap();
+    assert_eq!(out.card.status, ThreadStatus::NeedsYou);
+    assert_eq!(out.card.open_asks, 0);
+    // The count survives a restart and matches a full replay of the log.
+    drop(store);
+    let (store, _) = open(dir.path());
+    assert_eq!(store.card(&t).unwrap().unwrap().open_asks, 0);
+    assert_eq!(replay(dir.path(), "t").0.open_asks, 0);
+}
