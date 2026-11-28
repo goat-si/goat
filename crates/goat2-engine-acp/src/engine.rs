@@ -1775,6 +1775,44 @@ impl Shared {
     }
 }
 
+/// v1 `makeStrictNdJsonRpcParser` (effect-acp strictParser.ts:18-30): the longest stdout line, in
+/// characters (v1 counts UTF-16 units; this counts Unicode scalar values).
+const MAX_FRAME_CHARS: usize = 16 * 1024 * 1024;
+
+/// Read one stdout line (newline included), at most [MAX_FRAME_CHARS] characters: a longer line
+/// fails the connection before it is held whole (final review finding 5). Invalid UTF-8 is
+/// replaced, as v1's `TextDecoder` does. None at end of file.
+async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> std::io::Result<Option<String>> {
+    let mut line: Vec<u8> = Vec::new();
+    let mut chars = 0usize;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok((!line.is_empty()).then(|| String::from_utf8_lossy(&line).into_owned()));
+        }
+        let newline = available.iter().position(|b| *b == b'\n');
+        let take = newline.map_or(available.len(), |i| i + 1);
+        // UTF-8 continuation bytes do not start a character.
+        chars += available[..newline.unwrap_or(take)]
+            .iter()
+            .filter(|b| (**b & 0xC0) != 0x80)
+            .count();
+        if chars > MAX_FRAME_CHARS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ACP frame exceeds the maximum size",
+            ));
+        }
+        line.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(Some(String::from_utf8_lossy(&line).into_owned()));
+        }
+    }
+}
+
 /// The id GOAT gives each `session/prompt` of a turn.
 pub fn prompt_id_of(turn_id: &str, prompt_seq: u64) -> String {
     format!("{turn_id}:{prompt_seq}")
@@ -2503,12 +2541,19 @@ impl AcpEngineFactory {
                 let flavor = Arc::clone(&flavor);
                 async move {
                     loop {
-                        let mut line = String::new();
-                        match reader.read_line(&mut line).await {
-                            Ok(0) => return None,
-                            Err(error) => return Some((Err(error), reader)),
-                            Ok(_) => {}
-                        }
+                        let line = match read_frame(&mut reader).await {
+                            Ok(Some(line)) => line,
+                            Ok(None) => return None,
+                            Err(error) => {
+                                if error.kind() == std::io::ErrorKind::InvalidData
+                                    && let Some(shared) = weak.upgrade()
+                                {
+                                    *shared.transport_failure.lock().expect("failure") =
+                                        Some(error.to_string());
+                                }
+                                return Some((Err(error), reader));
+                            }
+                        };
                         let line = line.trim_end_matches(['\r', '\n']).to_owned();
                         if line.trim().is_empty() {
                             continue;
