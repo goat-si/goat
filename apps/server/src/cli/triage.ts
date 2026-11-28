@@ -109,6 +109,13 @@ export const describeServerProcess = Effect.fn("triage.describeServerProcess")(f
   return `running (pid ${String(state.value.pid)}, ${state.value.origin}, ${version})`;
 });
 
+export const matchAgentAnswer = <Agent extends { readonly id: string }>(
+  agents: ReadonlyArray<Agent>,
+  answer: string,
+) =>
+  agents.find((_, index) => String(index + 1) === answer.trim()) ??
+  agents.find((agent) => agent.id === answer.trim().toLowerCase());
+
 const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
   Effect.tryPromise({
     try: async () => {
@@ -128,13 +135,9 @@ const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
           const answer = (
             await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken.promise])
           ).trim();
-          const byNumber = agents[Number.parseInt(answer, 10) - 1];
-          if (byNumber !== undefined) {
-            return byNumber;
-          }
-          const byId = agents.find((agent) => agent.id === answer.toLowerCase());
-          if (byId !== undefined) {
-            return byId;
+          const picked = matchAgentAnswer(agents, answer);
+          if (picked !== undefined) {
+            return picked;
           }
         }
       } finally {

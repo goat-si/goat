@@ -25,7 +25,7 @@ import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "../serverRuntimeState.ts";
-import { describeServerProcess } from "./triage.ts";
+import { describeServerProcess, matchAgentAnswer } from "./triage.ts";
 
 it.effect("reports the version the running server recorded, not the CLI's", () =>
   Effect.gen(function* () {
@@ -216,3 +216,15 @@ it.live("a failed agent launch points at the prompt it could not run", () =>
     ),
   ),
 );
+
+it.each([
+  ["2", "codex"],
+  [" 1 ", "claude"],
+  ["CLAUDE", "claude"],
+  ["1.5", undefined],
+  ["1x", undefined],
+  ["2codex", undefined],
+  ["3", undefined],
+])("matches picker answer %s", (answer, expected) => {
+  expect(matchAgentAnswer([{ id: "claude" }, { id: "codex" }], answer)?.id).toBe(expected);
+});
