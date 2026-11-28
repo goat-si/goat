@@ -73,6 +73,10 @@ export function extractCwd(parsed: unknown, source: AgentSessionSource): string 
   if (typeof parsed !== "object" || parsed === null) return null;
 
   const record = parsed as Record<string, unknown>;
+  if (source === "pi")
+    return record.type === "session" && typeof record.cwd === "string"
+      ? record.cwd.trim() || null
+      : null;
   if (typeof record.cwd === "string" && record.cwd.trim().length > 0) {
     return record.cwd;
   }
@@ -116,7 +120,7 @@ export function makeCwdScanner(
   const createReader = () =>
     createTranscriptJsonReader(reserveSelected, selectCwdPath, {
       onTopLevelString: (key, value) => {
-        if (key === "cwd" && value.trim().length > 0) topLevelCwd ??= value;
+        if (source !== "pi" && key === "cwd" && value.trim().length > 0) topLevelCwd ??= value;
       },
     });
   let reader = createReader();

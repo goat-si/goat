@@ -84,6 +84,7 @@ import {
   isGoatManagedWorktree,
   makeCwdScanner,
   makeExcludedProjectPath,
+  extractCwd,
 } from "./AgentSessionTranscriptCwd.ts";
 import {
   decodeClaudeSettings,
@@ -144,7 +145,6 @@ interface MetadataReadBudget {
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const processRunner = yield* ProcessRunner.ProcessRunner;
-  // Concurrent client imports must not hold multiple selected-history budgets.
   const importReadLock = yield* Semaphore.make(1);
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
@@ -191,7 +191,6 @@ export const make = Effect.gen(function* () {
     return `path:${normalizeProjectPathForComparison(realPath)}`;
   });
 
-  /** Stats a directory that may be offered as a project, or none when it is missing or excluded. */
   const projectDirectoryStats = Effect.fn("AgentSessionScanner.projectDirectoryStats")(function* (
     directory: string,
   ) {
@@ -201,7 +200,6 @@ export const make = Effect.gen(function* () {
     const realPath = yield* fileSystem
       .realPath(directory)
       .pipe(Effect.orElseSucceed(() => directory));
-    // Symlinks can disguise excluded worktree paths; re-check their targets.
     return isExcludedProjectPath(realPath) ? Option.none() : stats;
   });
 
@@ -380,12 +378,16 @@ export const make = Effect.gen(function* () {
             const finishRecord = () => {
               reader.write(decoder.decode());
               const value = reader.finish();
+              if (source === "pi" && Option.isNone(cwd)) {
+                const found = extractCwd(value, source);
+                if (typeof found === "string") cwd = Option.some(found);
+              }
               const decoded = decodeTranscriptValue(value);
               if (Option.isNone(decoded) && source === "pi") {
-                // Pi accepts messages this schema rejects, such as null content; keep their tree links.
                 records.push(...Option.toArray(decodePiEntryLinks(value)));
               } else if (Option.isSome(decoded)) {
-                if (Option.isNone(cwd)) cwd = Option.fromNullOr(extractDecodedCwd(decoded.value));
+                if (source !== "pi" && Option.isNone(cwd))
+                  cwd = Option.fromNullOr(extractDecodedCwd(decoded.value));
                 if (source === "claudeAgent") {
                   claudeFields = foldClaudeFields(claudeFields, decoded.value);
                 }
@@ -397,7 +399,6 @@ export const make = Effect.gen(function* () {
                     decoded.value.type === "message" &&
                     !isPiConversationRecord(decoded.value)
                   ) {
-                    // Tool output can dwarf the conversation; keep only the tree links.
                     const { message: _message, ...links } = decoded.value;
                     records.push(links);
                   } else {
