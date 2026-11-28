@@ -115,8 +115,9 @@ fn ordering_override_and_happens_before() {
     o.events[1].seq = 0;
     assert!(!compare(&s, &o).passed());
     o.events[1].seq = 2;
+    // Array order is not observation order; only the sequence numbers are.
     o.events.swap(0, 1);
-    assert!(!compare(&s, &o).passed());
+    assert!(compare(&s, &o).passed());
     o.events.swap(0, 1);
     o.events.pop();
     let mut replacement = s.scenario.expect.clone();
@@ -290,6 +291,42 @@ fn reordered_events() {
         });
     o.events.push(ObservedEvent { seq: 2, event });
     assert!(compare(&s, &o).passed());
+    // Array order carries no meaning: the same sequence numbers in a different array order still pass.
     o.events.swap(0, 1);
+    assert!(compare(&s, &o).passed());
+    // Swapping the sequence numbers reverses the observed order and must fail.
+    let (a, b) = (o.events[0].seq, o.events[1].seq);
+    o.events[0].seq = b;
+    o.events[1].seq = a;
+    assert!(!compare(&s, &o).passed());
+}
+
+#[test]
+fn reversed_sequence_numbers_in_expected_array_order_fail() {
+    use goat2_parity::trace::{ExpectedEvent, ObservedEvent, TraceEvent, TraceKind};
+    let (mut s, mut o) = fixture();
+    let event = TraceEvent::HostRestarted {
+        thread: "main".into(),
+    };
+    s.scenario
+        .expect
+        .exhaustive
+        .insert(TraceKind::HostRestarted);
+    s.scenario
+        .expect
+        .threads
+        .get_mut("main")
+        .unwrap()
+        .push(ExpectedEvent {
+            id: "e2".into(),
+            event: event.clone(),
+        });
+    o.events.push(ObservedEvent { seq: 2, event });
+    assert!(compare(&s, &o).passed());
+    // Keep the array in expected order but number it backwards (the reviewer's 3,2,1 case).
+    let n = o.events.len() as u64;
+    for (i, e) in o.events.iter_mut().enumerate() {
+        e.seq = n - i as u64;
+    }
     assert!(!compare(&s, &o).passed());
 }

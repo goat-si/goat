@@ -83,11 +83,13 @@ pub fn compare(loaded: &LoadedScenario, observed: &ObservedTrace) -> Report {
         .chain(observed.events.iter().map(|e| thread(&e.event).to_owned()))
         .collect();
     for name in threads {
-        let actual: Vec<_> = observed
+        // The global sequence is the observation order; array order carries no meaning.
+        let mut actual: Vec<_> = observed
             .events
             .iter()
             .filter(|e| thread(&e.event) == name && expected.exhaustive.contains(&kind(&e.event)))
             .collect();
+        actual.sort_by_key(|e| e.seq);
         let wanted = expected
             .threads
             .get(&name)

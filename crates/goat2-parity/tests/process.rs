@@ -67,6 +67,14 @@ echo success-note >&2"#;
     }
 }
 #[test]
+fn runner_reporting_another_target_is_rejected() {
+    let t = Temp::new();
+    let other = r#"while [ "$1" != "--out" ]; do shift; done
+printf '%s' '{"v":1,"target":"goat2","scenario":"simple_turn","outcome":{"outcome":"ok"},"events":[],"streams":{},"incomplete":false}' > "$2""#;
+    let error = t.runner(other).run(&scenario()).unwrap_err();
+    assert!(error.message.contains("invoked as"), "{error}");
+}
+#[test]
 fn cli_validate_and_missing_runner_and_diff() {
     let bin = env!("CARGO_BIN_EXE_goat2-parity");
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

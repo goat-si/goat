@@ -82,6 +82,15 @@ impl ProcessTarget {
                 stderr,
             });
         }
+        if trace.target != self.name {
+            return Err(TargetError {
+                message: format!(
+                    "runner reported target {:?}, invoked as {:?}",
+                    trace.target, self.name
+                ),
+                stderr,
+            });
+        }
         Ok(TargetRun { trace, stderr })
     }
 }
