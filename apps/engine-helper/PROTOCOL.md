@@ -43,8 +43,10 @@ Each attachment is a goat2-contracts ChatAttachment plus path: the absolute path
 
 probe answers a goat2-contracts ProviderProbeResult. It may add capabilities: a ProviderCapabilities
 the engine selected for what is installed (OpenCode reports its generation's flags). HelperFactory
-then returns them from capabilities() until the next successful probe; a probe without the field
-goes back to the static set in crates/goat2-engine-sdk/src/capabilities/.
+then returns them from capabilities() until the next successful probe (status ready or warning);
+a successful probe without the field goes back to the static set in
+crates/goat2-engine-sdk/src/capabilities/. A probe answering status error or disabled leaves the
+last successful capabilities in place.
 
 TurnStartResult: {status: "accepted", turnId} or {status: "declined" / "refused_unowned" / "unknown",
 reason}. SteerResult: {status: "accepted"} or {status: "declined" / "refused_unowned" / "unknown",

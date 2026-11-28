@@ -504,6 +504,44 @@ async fn probe_reported_capabilities_replace_the_static_ones() {
     assert_eq!(plain.capabilities(), fixed);
 }
 
+/// A probe that answers status error (v1 OpenCode: version, server or catalog failure) keeps the
+/// capabilities of the last successful probe instead of falling back to the static set.
+#[tokio::test]
+async fn failed_probe_keeps_the_last_successful_capabilities() {
+    let fixed = goat2_engine_sdk::capabilities::for_driver(&EngineDriver::Cursor).expect("cursor");
+    let selected = goat2_engine_sdk::capabilities::for_driver(&EngineDriver::Muse).expect("muse");
+    let script = std::env::temp_dir().join(format!("goat2-fake-probe-{}.json", std::process::id()));
+    let factory = HelperFactory::fake(
+        EngineDriver::Cursor,
+        launch().with_env("GOAT2_FAKE_PROBE_FILE", &script),
+    );
+    std::fs::write(
+        &script,
+        serde_json::json!({"status": "ready", "capabilities": selected}).to_string(),
+    )
+    .expect("write script");
+    factory.probe().await.expect("probe");
+    assert_eq!(factory.capabilities(), selected);
+
+    std::fs::write(&script, r#"{"status":"error"}"#).expect("write script");
+    let failed = factory.probe().await.expect("probe answers");
+    assert_eq!(failed.status, goat2_contracts::ServerProviderState::Error);
+    assert_eq!(
+        factory.capabilities(),
+        selected,
+        "error probe keeps the selected set"
+    );
+
+    std::fs::write(&script, r#"{"status":"ready"}"#).expect("write script");
+    factory.probe().await.expect("probe");
+    assert_eq!(
+        factory.capabilities(),
+        fixed,
+        "a successful probe without capabilities resets"
+    );
+    let _ = std::fs::remove_file(&script);
+}
+
 #[tokio::test]
 async fn attachments_reach_the_helper_with_resolved_paths() {
     use goat2_contracts::{ChatAttachment, ChatAttachmentType};

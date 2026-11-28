@@ -11,7 +11,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use goat2_contracts::{
     ChatAttachment, EngineDriver, EngineItemLocator, EngineRef, InputId, ItemId,
-    ProviderCapabilities, ProviderProbeResult, RequestKind, ThreadId, TurnItem,
+    ProviderCapabilities, ProviderProbeResult, RequestKind, ServerProviderState, ThreadId,
+    TurnItem,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -305,7 +306,13 @@ impl EngineFactory for HelperFactory {
                     ),
                     None => None,
                 };
-                if let Ok(mut probed) = self.probed_capabilities.lock() {
+                // Only a successful probe (ready or warning) changes what the factory reports; an
+                // error or disabled answer keeps the last successful one (v1 OpenCode driver.ts).
+                let succeeded = matches!(
+                    result.status,
+                    ServerProviderState::Ready | ServerProviderState::Warning
+                );
+                if succeeded && let Ok(mut probed) = self.probed_capabilities.lock() {
                     *probed = reported;
                 }
                 Ok(result)

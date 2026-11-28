@@ -9,6 +9,7 @@
 // steers are reported with steer_updated: completed if the turn finished, cancelled otherwise.
 // session.set_config is supported unless launch.env GOAT2_FAKE_NO_SET_CONFIG=1; after it, echoes
 // end with " [model: <model>, mode: <runtimeMode>]".
+import { readFile } from "node:fs/promises";
 import type { EngineHost, EngineModule, EngineSession } from "../engine.ts";
 import { assistantMessage, item } from "../items.ts";
 import {
@@ -207,15 +208,20 @@ class FakeSession implements EngineSession {
 
 export const fakeEngine: EngineModule = {
   async probe(_params, host) {
-    const capabilities = process.env["GOAT2_FAKE_PROBE_CAPABILITIES"];
+    // GOAT2_FAKE_PROBE_FILE names a JSON file {status?, capabilities?} read at each probe, so one
+    // factory can see different answers; GOAT2_FAKE_PROBE_CAPABILITIES is a fixed capabilities JSON.
+    const file = process.env["GOAT2_FAKE_PROBE_FILE"];
+    const scripted = file === undefined ? {} : (JSON.parse(await readFile(file, "utf8")) as { status?: string; capabilities?: unknown });
+    const fixed = process.env["GOAT2_FAKE_PROBE_CAPABILITIES"];
+    const capabilities = scripted.capabilities ?? (fixed === undefined ? undefined : JSON.parse(fixed));
     return {
       installed: true,
       version: "0.0.0-fake",
-      status: "ready",
+      status: (scripted.status ?? "ready") as "ready",
       auth: { status: "authenticated" },
       models: [{ slug: "fake-model", name: "Fake", isCustom: false, capabilities: null }],
       checkedAt: host.now(),
-      ...(capabilities === undefined ? {} : { capabilities: JSON.parse(capabilities) }),
+      ...(capabilities === undefined ? {} : { capabilities }),
     };
   },
   async start(params: InitializeParams, host: EngineHost): Promise<EngineSession> {
