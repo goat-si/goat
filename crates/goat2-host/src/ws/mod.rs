@@ -498,7 +498,7 @@ async fn thread(
     let Some(mut last) = do_replay(&host, &tx, &sub, &id, after, None).await else {
         return;
     };
-    let mut texts = HashMap::<ItemId, String>::new();
+    let mut texts = HashMap::<ItemId, (goat2_contracts::ContentStreamKind, String)>::new();
     for item in snapshot {
         send(
             &tx,
@@ -507,36 +507,43 @@ async fn thread(
                 thread_id: id.clone(),
                 item_id: item.item_id.clone(),
                 offset: 0,
+                stream_kind: wire_kind(item.stream_kind),
                 text: item.text.clone(),
             },
         );
-        texts.insert(item.item_id, item.text);
+        texts.insert(item.item_id, (item.stream_kind, item.text));
     }
     loop {
         tokio::select! {
-            requested=resync.recv()=>{if let Some(item_id)=requested && let Some(text)=texts.get(&item_id) {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id,offset:0,text:text.clone()});}},
+            requested=resync.recv()=>{if let Some(item_id)=requested && let Some((kind,text))=texts.get(&item_id) {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id,offset:0,stream_kind:wire_kind(*kind),text:text.clone()});}},
             update=rx.recv()=>match update {
                 Ok(ThreadLive::Line(line)) if line.seq>last => {last=line.seq;send(&tx,HostFrame::ThreadEvent{sub_id:sub.clone(),thread_id:id.clone(),line:Box::new((*line).clone())});},
-                Ok(ThreadLive::Text{item_id,offset,text}) => {
-                let buffer=texts.entry(item_id.clone()).or_default();
+                Ok(ThreadLive::Text{item_id,offset,stream_kind,text}) => {
+                let (_,buffer)=texts.entry(item_id.clone()).or_insert_with(|| (stream_kind, String::new()));
                 let length=buffer.encode_utf16().count() as u64;
-                if offset == length { buffer.push_str(&text); send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id,offset,text}); }
+                if offset == length { buffer.push_str(&text); send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id,offset,stream_kind:wire_kind(stream_kind),text}); }
                 else if offset < length && text_matches_at(buffer, offset, &text) { /* already included in snapshot */ }
                 else { // Refresh rather than retain an incomplete or divergent streaming buffer.
                     let (new_rx, items)=host.watch_thread(&id); rx=new_rx; texts.clear();
                     let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(ResetReason::TooFarBehind)).await else {return};last=seq;
-                    for item in items { send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,text:item.text.clone()}); texts.insert(item.item_id,item.text); }
+                    for item in items { send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,stream_kind:wire_kind(item.stream_kind),text:item.text.clone()}); texts.insert(item.item_id,(item.stream_kind,item.text)); }
                 }
             },
                 Ok(ThreadLive::Usage{usage,updated_at})=>{send(&tx,HostFrame::ThreadUsage{sub_id:sub.clone(),thread_id:id.clone(),usage:*usage,updated_at});},
                 Ok(ThreadLive::TextDone{item_id})=>{texts.remove(&item_id);},
-                Ok(ThreadLive::Reset{reason,..}) => { let (new_rx,items)=host.watch_thread(&id);rx=new_rx;texts.clear(); let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(reason)).await else {return};last=seq; for item in items {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,text:item.text.clone()});texts.insert(item.item_id,item.text);} },
+                Ok(ThreadLive::Reset{reason,..}) => { let (new_rx,items)=host.watch_thread(&id);rx=new_rx;texts.clear(); let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(reason)).await else {return};last=seq; for item in items {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,stream_kind:wire_kind(item.stream_kind),text:item.text.clone()});texts.insert(item.item_id,(item.stream_kind,item.text));} },
                 Ok(_) => {},
-                Err(broadcast::error::RecvError::Lagged(_)) => {let (new_rx,items)=host.watch_thread(&id);rx=new_rx;texts.clear(); let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(ResetReason::TooFarBehind)).await else {return};last=seq; for item in items {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,text:item.text.clone()});texts.insert(item.item_id,item.text);}},
+                Err(broadcast::error::RecvError::Lagged(_)) => {let (new_rx,items)=host.watch_thread(&id);rx=new_rx;texts.clear(); let Some(seq)=do_replay(&host,&tx,&sub,&id,None,Some(ResetReason::TooFarBehind)).await else {return};last=seq; for item in items {send(&tx,HostFrame::TextAppend{sub_id:sub.clone(),thread_id:id.clone(),item_id:item.item_id.clone(),offset:0,stream_kind:wire_kind(item.stream_kind),text:item.text.clone()});texts.insert(item.item_id,(item.stream_kind,item.text));}},
                 Err(broadcast::error::RecvError::Closed)=>return,
             }
         }
     }
+}
+
+fn wire_kind(
+    kind: goat2_contracts::ContentStreamKind,
+) -> Option<goat2_contracts::ContentStreamKind> {
+    (kind != goat2_contracts::ContentStreamKind::AssistantText).then_some(kind)
 }
 
 // Offsets on the wire count UTF-16 code units; an already snapshotted chunk is suppressed.
@@ -619,6 +626,7 @@ mod tests {
                 rx,
                 vec![StreamingItem {
                     item_id: ItemId::from("item"),
+                    stream_kind: goat2_contracts::ContentStreamKind::AssistantText,
                     text: "hello".into(),
                 }],
             )
@@ -820,6 +828,7 @@ mod tests {
         host.lines
             .send(ThreadLive::Text {
                 item_id: ItemId::from("item"),
+                stream_kind: goat2_contracts::ContentStreamKind::AssistantText,
                 offset: 5,
                 text: "!".into(),
             })

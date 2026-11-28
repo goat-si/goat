@@ -38,6 +38,7 @@ export type * from "./CloudSourceRestriction.ts";
 export type * from "./CommandAction.ts";
 export type * from "./CommandError.ts";
 export type * from "./CommandValue.ts";
+export type * from "./ContentStreamKind.ts";
 export type * from "./ContextCapabilities.ts";
 export type * from "./CreationSource.ts";
 export type * from "./CredentialOwner.ts";

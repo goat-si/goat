@@ -240,6 +240,8 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
                 actor
                     .stop_session("the thread log could not be written")
                     .await;
+                // Text that was streaming will never complete: later subscribers must not see it.
+                actor.host.stream_clear(&actor.id);
             }
             actor.sync_runtime();
             let took = started.elapsed();
@@ -897,7 +899,23 @@ impl Actor {
             } => {
                 // Live text only for the running turn; a late item arrives whole.
                 if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
-                    self.host.stream_text(&self.id, &item_id, &text);
+                    self.host.stream_text(
+                        &self.id,
+                        &item_id,
+                        goat2_contracts::ContentStreamKind::AssistantText,
+                        &text,
+                    );
+                }
+            }
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host
+                        .stream_text(&self.id, &item_id, stream_kind, &text);
                 }
             }
             EngineEvent::ItemCompleted {

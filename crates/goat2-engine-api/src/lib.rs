@@ -160,10 +160,18 @@ pub struct RequestAnswer {
 /// Events from a running engine process, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
-    /// Streaming text for an unfinished item. Never stored.
+    /// Assistant text shorthand for ContentDelta with AssistantText. Never stored.
     TextDelta {
         turn_id: String,
         item_id: ItemId,
+        text: String,
+    },
+    /// Streaming text for an unfinished item of the given kind. Never stored.
+    /// Reasoning deltas use the reasoning item id, followed by ItemCompleted with that id.
+    ContentDelta {
+        turn_id: String,
+        item_id: ItemId,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// A finished item.

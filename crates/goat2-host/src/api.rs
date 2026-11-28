@@ -43,6 +43,7 @@ pub enum ThreadLive {
     Text {
         item_id: ItemId,
         offset: u64,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// The item finished (its `item.completed` line follows or preceded); drop its buffer.
@@ -60,6 +61,7 @@ pub enum ThreadLive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamingItem {
     pub item_id: ItemId,
+    pub stream_kind: goat2_contracts::ContentStreamKind,
     pub text: String,
 }
 

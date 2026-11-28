@@ -166,15 +166,90 @@ async fn ui_and_agent_paths_through_the_real_server() {
         "a user thread may start a worker: {child}"
     );
 
+    // Reasoning streams live, survives a mid-stream join, and is never persisted as a delta.
+    let tid = goat2_contracts::ThreadId::from(thread_id.as_str());
+    let turn = fake.active_turn(&tid).unwrap();
+    let item_id = goat2_contracts::ItemId::from("reasoning-item");
+    let log_path = dir
+        .path()
+        .join("threads")
+        .join(&thread_id)
+        .join("goat.jsonl");
+    let before_delta = std::fs::read(&log_path).unwrap();
+    assert!(fake.emit(
+        &tid,
+        goat2_engine_api::EngineEvent::ContentDelta {
+            turn_id: turn.clone(),
+            item_id: item_id.clone(),
+            stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+            text: "thinking".into(),
+        }
+    ));
+    let (reasoning, mut earlier_lines) = until(&mut ws, |f| {
+        f["type"] == "text_append" && f["itemId"] == "reasoning-item"
+    })
+    .await;
+    assert_eq!(reasoning["streamKind"], "reasoning_text");
+    assert_eq!(reasoning["text"], "thinking");
+    assert!(fake.content_delta(
+        &tid,
+        item_id.clone(),
+        goat2_contracts::ContentStreamKind::PlanText,
+        " again"
+    ));
+    let (next, _) = until(&mut ws, |f| {
+        f["type"] == "text_append" && f["itemId"] == "reasoning-item"
+    })
+    .await;
+    assert_eq!(next["offset"], 8);
+    assert_eq!(next["streamKind"], "reasoning_text");
+    assert_eq!(next["text"], " again");
+    assert_eq!(std::fs::read(&log_path).unwrap(), before_delta);
+    let (mut joined, _) =
+        tokio_tungstenite::connect_async(format!("{}?token=ui-secret", ready.ws_url))
+            .await
+            .unwrap();
+    joined
+        .send(Message::text(
+            json!({"type":"subscribe_thread","subId":"join","threadId":thread_id}).to_string(),
+        ))
+        .await
+        .unwrap();
+    let (snapshot, _) = until(&mut joined, |f| f["type"] == "text_append").await;
+    assert_eq!(snapshot["streamKind"], "reasoning_text");
+    assert_eq!(snapshot["offset"], 0);
+    assert_eq!(snapshot["text"], "thinking again");
+    let mut item = goat2_host::engine::fake::assistant_item(&tid, &item_id, &turn, "thinking");
+    item.body = goat2_contracts::TurnItemBody::Reasoning {
+        text: "thinking".into(),
+        streaming: false,
+    };
+    assert!(fake.emit(
+        &tid,
+        goat2_engine_api::EngineEvent::ItemCompleted {
+            turn_id: turn,
+            item: Box::new(item),
+            locator: None
+        }
+    ));
+    let (completed, _) = until(&mut ws, |f| {
+        f["type"] == "thread_event" && f["line"]["type"] == "item.completed"
+    })
+    .await;
+    assert_eq!(completed["line"]["item"]["id"], "reasoning-item");
+    joined.close(None).await.unwrap();
+
     // Streamed text then the finished item and run end reach the subscriber.
     fake.finish_turn(&thread_id.as_str().into(), "hello back");
     let (append, mut lines) = until(&mut ws, |f| f["type"] == "text_append").await;
     assert_eq!(append["text"], "hello back");
     assert_eq!(append["offset"], 0);
+    assert!(append.get("streamKind").is_none());
     let (_, rest) = until(&mut ws, |f| {
         f["type"] == "thread_event" && f["line"]["type"] == "run.finished"
     })
     .await;
+    lines.append(&mut earlier_lines);
     lines.extend(rest);
     assert!(
         lines
