@@ -77,7 +77,7 @@ fn resolve_attachment(
 
 /// `<dataDir>/threads/<threadId>/blobs/<name>` when the attachment is one of the thread's saved
 /// blobs and nothing on the way (thread folder, blobs folder, file) is a symlink.
-fn attachment_path(
+pub(crate) fn attachment_path(
     threads: &Path,
     thread_id: &ThreadId,
     attachment: &ChatAttachment,
