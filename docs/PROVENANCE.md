@@ -457,7 +457,9 @@ Not lifted: account usage/limits, account pools, text generation, cloud, checkpo
 | GOAT 2 path | Source at 916b5ccc1b2 | How |
 |---|---|---|
 | crates/goat2-engine-sdk/src/capabilities/opencode2.json | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | verbatim values, TS literal converted to JSON |
-| apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-opencode/src/server/versionProbe.ts:24-180; packages/provider-core/src/server/snapshotProbe.ts:222-228; packages/shared/src/semver.ts:10-65 | adapted version and server probes to plain async Node; standalone selector not yet connected to an engine |
+| apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-opencode/src/server/versionProbe.ts:24-180 | adapted version and server probes to plain async Node; the OpenCode engine dispatches to the selected generation. |
+| apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-core/src/server/snapshotProbe.ts:222-228 | adapted CLI version token boundaries. |
+| apps/engine-helper/src/engines/opencode2/select.ts | packages/shared/src/semver.ts:10-65 | adapted normalized semantic version parsing. |
 | apps/engine-helper/test/opencode2-selector.test.ts | packages/provider-core/src/server/snapshotProbe.test.ts:311-337 | adapted version parser examples; server and failure tests new |
 | apps/engine-helper/src/engines/opencode2/capabilities.ts | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | adapted literals, filling GOAT 2's serde defaults explicitly for the helper wire type. |
 | apps/engine-helper/src/engines/opencode2/capabilities.ts | packages/provider-opencode/src/server/driver.ts:176-209 | adapted version-gated native goals for probe-reported capabilities. |
@@ -473,7 +475,7 @@ Not lifted: account usage/limits, account pools, text generation, cloud, checkpo
 | apps/engine-helper/src/engines/opencode2/project.ts | packages/provider-opencode/src/server/toolItems.ts | adapted command, edit and dynamic tool items. |
 | apps/engine-helper/src/engines/opencode2/events.ts | packages/provider-opencode/src/server/v2/adapter.ts:458-480,1240-1285,1680-1800 | adapted text/reasoning identities, completed compaction and context token snapshots to the helper protocol. |
 | apps/engine-helper/src/engines/opencode2/events.ts | packages/provider-opencode/src/server/v2/adapter.ts:458-510,1684-1699 | adapted reasoning updates to `content_delta` on the completed item's ID. V1 does not stream output from 2.x tool progress. |
-| apps/engine-helper/src/engines/opencode2/events.ts | packages/provider-opencode/src/server/v2/turnStatusItems.ts | adapted terminal compaction projection and unfinished-compaction settlement. |
+| apps/engine-helper/src/engines/opencode2/events.ts | packages/provider-opencode/src/server/v2/turnStatusItems.ts | adapted terminal compaction projection and unfinished-compaction settlement; replay IDs follow the 2.0.28 schema's `evt_` to `msg_` conversion or explicit input ID. |
 | apps/engine-helper/src/engines/opencode2/attachments.ts | packages/provider-opencode/src/server/v2/adapter.ts:2894-2915 | adapted local existing-image checks and native file URIs. |
 | apps/engine-helper/src/engines/opencode2/attachments.ts | packages/provider-core/src/server/attachmentPrompt.ts:154-181 | adapted supported-image eligibility and attachment path notices. |
 | apps/engine-helper/src/engines/opencode2/runtime.ts | packages/provider-opencode/src/server/v2/OpenCode2Server.ts:63-160 | adapted server password, owned process lifetime and running-version verification to the Promise SDK. |
