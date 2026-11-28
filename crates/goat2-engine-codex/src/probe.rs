@@ -114,13 +114,14 @@ pub async fn probe_instance_with(
             binary_path.is_some(),
             None,
             None,
-            binary_path,
+            binary_path.map(|p| redact.apply(&p)),
             message,
         );
     }
     let mut result = probe_layout(&options, layout.as_ref(), hint, budget).await;
-    // Codex's errors and stderr can name the private home.
+    // Codex's errors and stderr can name the private home, and so can an executable inside it.
     result.message = result.message.map(|m| redact.apply(&m));
+    result.binary_path = result.binary_path.map(|p| redact.apply(&p));
     result
 }
 

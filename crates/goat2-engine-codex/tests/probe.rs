@@ -947,3 +947,50 @@ async fn an_instance_environment_cannot_move_the_shared_home() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Review r2: an executable inside the private home is reported without its path.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_binary_inside_its_home_is_reported_without_the_path() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    use std::os::unix::fs::PermissionsExt;
+    let root = fresh_dir("binary");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(instance.join("bin")).unwrap();
+    let binary = instance.join("bin/codex");
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nexec '{}' \"$@\"\n",
+            env!("CARGO_BIN_EXE_goat2-fake-codex")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(binary.clone()),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let p = factory(api_key_catalog(page))
+        .probe_instance(&target)
+        .await
+        .unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.binary_path.as_deref(), Some("<instance home>/bin/codex"));
+    // The layout-failure branch too.
+    std::fs::write(root.join("shared/config.toml"), "").unwrap();
+    std::fs::write(instance.join("config.toml"), "mine").unwrap();
+    let p = factory(Vec::new()).probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert_eq!(p.binary_path.as_deref(), Some("<instance home>/bin/codex"));
+    std::fs::remove_dir_all(&root).unwrap();
+}

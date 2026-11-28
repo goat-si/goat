@@ -1656,3 +1656,76 @@ async fn a_failed_instance_start_redacts_its_home_from_stderr() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Review r2: every event reaching the host has the private home replaced: the approval's
+/// summary and waiting item, the completed command item and the rest, as Codex names it.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_session_redacts_its_home_from_every_event() {
+    let root = instance_root("events");
+    let instance = root.join("instance");
+    let named = format!("touch {}/approved.txt", instance.display());
+    // The recorded approval session, with Codex naming the private home in what it sends.
+    let mut t = load("codex-0.167.0/approval.json");
+    for entry in &mut t.entries {
+        if let Entry::EmitInbound { frame, .. } = entry {
+            let text = serde_json::to_string(frame).unwrap();
+            *frame = serde_json::from_str(&text.replace("touch approved.txt", &named)).unwrap();
+        }
+    }
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(&instance, &root.join("shared")));
+    let mut h = CodexEngineFactory::new(options(&t))
+        .start(s)
+        .await
+        .expect("start");
+    let _turn = accepted(
+        h.session
+            .start_turn(
+                input(
+                    "goat-input-1",
+                    "Run exactly this shell command once: touch approved.txt  Then reply with exactly: DONE",
+                ),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    let mut events = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened {
+        key, summary, item, ..
+    }) = events.last().cloned()
+    else {
+        unreachable!()
+    };
+    assert!(
+        summary.contains("<instance home>/approved.txt"),
+        "{summary}"
+    );
+    assert!(
+        format!("{item:?}").contains("<instance home>/approved.txt"),
+        "{item:?}"
+    );
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Accept,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    events.extend(until(&mut h, is_finished).await);
+    let shown = format!("{events:?}");
+    assert!(!shown.contains(instance.to_str().unwrap()), "{shown}");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::ItemCompleted { item, .. }
+            if format!("{item:?}").contains("<instance home>/approved.txt"))),
+        "{shown}"
+    );
+    h.session.shutdown().await;
+    std::fs::remove_dir_all(&root).unwrap();
+}

@@ -377,6 +377,59 @@ impl Redactor {
             t.replace(n.as_str(), "<instance home>")
         })
     }
+
+    fn mentions(&self, text: &str) -> bool {
+        self.needles.iter().any(|n| text.contains(n.as_str()))
+    }
+
+    /// A serde value (a TurnItem with its commands, paths, prompts and summaries) with the
+    /// private home replaced in every string and object key. Untouched unless it names the home.
+    pub fn value<T: serde::Serialize + serde::de::DeserializeOwned>(&self, value: T) -> T {
+        if self.needles.is_empty() {
+            return value;
+        }
+        let Ok(mut json) = serde_json::to_value(&value) else {
+            return value;
+        };
+        if !self.json_mentions(&json) {
+            return value;
+        }
+        self.redact_json(&mut json);
+        match serde_json::from_value(json) {
+            Ok(redacted) => redacted,
+            Err(_) => {
+                // A serde round trip of a value just serialized; tests cover every item kind.
+                debug_assert!(false, "redacted value no longer decodes");
+                value
+            }
+        }
+    }
+
+    fn json_mentions(&self, json: &serde_json::Value) -> bool {
+        match json {
+            serde_json::Value::String(s) => self.mentions(s),
+            serde_json::Value::Array(a) => a.iter().any(|v| self.json_mentions(v)),
+            serde_json::Value::Object(o) => o
+                .iter()
+                .any(|(k, v)| self.mentions(k) || self.json_mentions(v)),
+            _ => false,
+        }
+    }
+
+    fn redact_json(&self, json: &mut serde_json::Value) {
+        match json {
+            serde_json::Value::String(s) => *s = self.apply(s),
+            serde_json::Value::Array(a) => a.iter_mut().for_each(|v| self.redact_json(v)),
+            serde_json::Value::Object(o) => {
+                let entries = std::mem::take(o);
+                for (k, mut v) in entries {
+                    self.redact_json(&mut v);
+                    o.insert(self.apply(&k), v);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// v1 `path.resolve`: absolute against the working directory, with `.` and `..` folded

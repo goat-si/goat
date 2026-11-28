@@ -250,6 +250,123 @@ fn launch_for(
     Ok((launch, redact))
 }
 
+/// [EngineEvent] with an instance's private home replaced in every text and item. Exhaustive,
+/// so a new event kind needs a decision here.
+fn redact_event(redact: &Redactor, event: EngineEvent) -> EngineEvent {
+    let text = |t: String| redact.apply(&t);
+    let item = |i: Box<goat2_contracts::TurnItem>| Box::new(redact.value(*i));
+    match event {
+        EngineEvent::TextDelta {
+            turn_id,
+            item_id,
+            text: t,
+        } => EngineEvent::TextDelta {
+            turn_id,
+            item_id,
+            text: text(t),
+        },
+        EngineEvent::ContentDelta {
+            turn_id,
+            item_id,
+            stream_kind,
+            text: t,
+        } => EngineEvent::ContentDelta {
+            turn_id,
+            item_id,
+            stream_kind,
+            text: text(t),
+        },
+        EngineEvent::ItemCompleted {
+            turn_id,
+            item: i,
+            locator,
+        } => EngineEvent::ItemCompleted {
+            turn_id,
+            item: item(i),
+            locator,
+        },
+        EngineEvent::RequestOpened {
+            turn_id,
+            key,
+            item_id,
+            kind,
+            summary,
+            item: i,
+        } => EngineEvent::RequestOpened {
+            turn_id,
+            key,
+            item_id,
+            kind,
+            summary: text(summary),
+            item: i.map(item),
+        },
+        EngineEvent::SessionRequestOpened {
+            key,
+            item_id,
+            kind,
+            summary,
+            item: i,
+        } => EngineEvent::SessionRequestOpened {
+            key,
+            item_id,
+            kind,
+            summary: text(summary),
+            item: i.map(item),
+        },
+        EngineEvent::RequestClosed { key } => EngineEvent::RequestClosed { key },
+        EngineEvent::ContinuationWithdrawn { key } => EngineEvent::ContinuationWithdrawn { key },
+        EngineEvent::AuthRequired {
+            key,
+            turn_id,
+            url,
+            message,
+        } => EngineEvent::AuthRequired {
+            key,
+            turn_id,
+            url: url.map(text),
+            message: text(message),
+        },
+        EngineEvent::TokenUsage { turn_id, usage } => EngineEvent::TokenUsage { turn_id, usage },
+        EngineEvent::SubagentUpdate {
+            turn_id,
+            subagent_id,
+            status,
+            title,
+            progress,
+        } => EngineEvent::SubagentUpdate {
+            turn_id,
+            subagent_id,
+            status,
+            title: title.map(text),
+            progress: progress.map(text),
+        },
+        EngineEvent::SteerUpdated {
+            turn_id,
+            input_ids,
+            status,
+        } => EngineEvent::SteerUpdated {
+            turn_id,
+            input_ids,
+            status,
+        },
+        EngineEvent::TurnFinished { turn_id, outcome } => EngineEvent::TurnFinished {
+            turn_id,
+            outcome: match outcome {
+                TurnOutcome::Failed { reason } => TurnOutcome::Failed {
+                    reason: text(reason),
+                },
+                other => other,
+            },
+        },
+        EngineEvent::ContinuationRequested { key, text: t } => {
+            EngineEvent::ContinuationRequested { key, text: text(t) }
+        }
+        EngineEvent::Exited { reason } => EngineEvent::Exited {
+            reason: text(reason),
+        },
+    }
+}
+
 /// [EngineError] with an instance's private home replaced.
 fn redact_error(redact: &Redactor, error: EngineError) -> EngineError {
     match error {
@@ -809,36 +926,11 @@ impl Actor {
         deadline
     }
 
-    /// Exit and failure reasons can carry Codex's stderr or error text: the instance's private
-    /// home is replaced in them.
+    /// Every event reaching the host has the instance's private home replaced (never shown or
+    /// logged): reasons and Codex's text, request summaries and the waiting and completed
+    /// items with their commands, file paths and prompts.
     fn emit(&self, event: EngineEvent) {
-        let event = match event {
-            EngineEvent::Exited { reason } => EngineEvent::Exited {
-                reason: self.redact.apply(&reason),
-            },
-            EngineEvent::TurnFinished {
-                turn_id,
-                outcome: TurnOutcome::Failed { reason },
-            } => EngineEvent::TurnFinished {
-                turn_id,
-                outcome: TurnOutcome::Failed {
-                    reason: self.redact.apply(&reason),
-                },
-            },
-            EngineEvent::AuthRequired {
-                key,
-                turn_id,
-                url,
-                message,
-            } => EngineEvent::AuthRequired {
-                key,
-                turn_id,
-                url,
-                message: self.redact.apply(&message),
-            },
-            other => other,
-        };
-        let _ = self.events.send(event);
+        let _ = self.events.send(redact_event(&self.redact, event));
     }
 
     fn arm_idle(&mut self) {
