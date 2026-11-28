@@ -18,3 +18,7 @@ thiserror.workspace = true
 [[bin]]
 name = "goat2-parity"
 path = "src/main.rs"
+
+[[bin]]
+name = "goat2-parity-fake-codex"
+path = "src/bin/fake_codex.rs"
