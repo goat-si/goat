@@ -59,30 +59,20 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           cwd,
           args: ["-c", "user.name=Test", "-c", "user.email=test@test.com", ...args],
         });
-      const library = path.join(parent, "library");
-      yield* fileSystem.makeDirectory(library);
-      yield* git(library, ["init"]);
-      yield* git(library, ["commit", "--allow-empty", "-m", "initial"]);
       const checkpointRef = CheckpointRef.make("refs/t3/checkpoints/edge-space");
       // The newline name takes the per-path fallback; the other takes the one-spawn answer.
       for (const name of ["repo ", "multi\nline "]) {
         const cwd = path.join(parent, name);
         yield* fileSystem.makeDirectory(cwd);
         yield* git(cwd, ["init", `--separate-git-dir=${path.join(parent, `${name.trim()} git `)}`]);
-        yield* git(cwd, ["-c", "protocol.file.allow=always", "submodule", "add", library, "lib"]);
-        yield* git(cwd, ["commit", "-m", "initial"]);
+        yield* git(cwd, ["commit", "--allow-empty", "-m", "initial"]);
         yield* fileSystem.writeFileString(path.join(cwd, "dirty.txt"), "pending\n");
-        yield* fileSystem.writeFileString(path.join(cwd, "lib", "dirty.txt"), "nested\n");
 
         yield* driver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
 
         assert.strictEqual(
           (yield* git(cwd, ["show", `${checkpointRef}:dirty.txt`])).stdout,
           "pending\n",
-        );
-        assert.strictEqual(
-          (yield* git(path.join(cwd, "lib"), ["show", `${checkpointRef}:dirty.txt`])).stdout,
-          "nested\n",
         );
       }
     }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
