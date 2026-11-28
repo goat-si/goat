@@ -41,9 +41,12 @@ fn main() {
         .unwrap_or_else(|| "/tmp/fake-pi-session.jsonl".into());
     let mut active = false;
     let mut pending = false;
+    let mut pending_prompt = None::<Value>;
+    let mut reject_abort = false;
     let mut model_provider = "fake".to_owned();
     let mut model_id = "fake-model".to_owned();
     let mut thinking = "off".to_owned();
+    let mut tier = "default".to_owned();
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
@@ -57,7 +60,7 @@ fn main() {
             ),
             "get_available_models" => response(
                 &request,
-                json!({"models":[{"provider":"fake", "id":"fake-model", "name":"Fake model", "reasoning":false}]}),
+                json!({"models":[{"provider":"fake", "id":"fake-model", "name":"Fake model", "reasoning":false}, {"provider":"vendor/nested", "id":"custom/model", "name":"Slash model"}]}),
             ),
             "get_commands" => response(&request, json!({"commands":[]})),
             "set_model" => {
@@ -71,7 +74,13 @@ fn main() {
             }
             "clear_queue" => response(&request, json!({})),
             "prompt" if active && request["streamingBehavior"] == "steer" => {
-                response(&request, json!({}))
+                if request["message"] == "decline-steer" {
+                    emit(
+                        json!({"type":"response","id":request["id"],"command":"prompt","success":false,"error":"steer refused"}),
+                    );
+                } else {
+                    response(&request, json!({}));
+                }
             }
             "steer" => response(&request, json!({})),
             "prompt" => {
@@ -79,12 +88,42 @@ fn main() {
                 if text == "crash" {
                     std::process::exit(23);
                 }
+                if text == "command-only" || text == "/computer off" {
+                    response(&request, json!({"disposition":"handled"}));
+                    continue;
+                }
+                if text.starts_with("/goat-service-tier") {
+                    tier = text
+                        .strip_prefix("/goat-service-tier ")
+                        .unwrap_or("default")
+                        .to_owned();
+                    response(&request, json!({"disposition":"handled"}));
+                    continue;
+                }
+                if text == "late-ack" {
+                    emit(json!({"type":"agent_start"}));
+                    finish("late", false);
+                    response(&request, json!({}));
+                    continue;
+                }
+                if text == "dialog-before-ack" {
+                    active = true;
+                    pending = true;
+                    pending_prompt = Some(request.clone());
+                    emit(
+                        json!({"type":"extension_ui_request", "id":"dialog-1", "method":"input", "title":"Question"}),
+                    );
+                    continue;
+                }
                 response(&request, json!({}));
                 active = true;
                 emit(json!({"type":"agent_start"}));
                 emit(json!({"type":"turn_start"}));
                 match text {
                     "hang" => {}
+                    "hang-reject-abort" => {
+                        reject_abort = true;
+                    }
                     "question" | "approval" => {
                         pending = true;
                         let method = if text == "question" {
@@ -106,6 +145,27 @@ fn main() {
                         finish("tool complete", false);
                         active = false;
                     }
+                    "async-subagent" => {
+                        emit(
+                            json!({"type":"tool_execution_start","toolCallId":"sub-1","toolName":"subagent","args":{}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_end","toolCallId":"sub-1","toolName":"subagent","result":{"details":{"results":[],"asyncId":"run-1"}},"isError":false}),
+                        );
+                        finish("spawned", false);
+                        active = false;
+                        let snapshot = json!({"runs":[{"id":"run-1","state":"complete","children":[{"id":"child-1","kind":"step","agent":"worker","state":"complete"}]}]});
+                        emit(
+                            json!({"type":"extension_ui_request","method":"setWidget","widgetKey":"subagent-async","widgetLines":[format!("PI_SUBAGENT_ASYNC_JSON:{snapshot}")]}),
+                        );
+                    }
+                    "background-dialog" => {
+                        finish("done", false);
+                        active = false;
+                        emit(
+                            json!({"type":"extension_ui_request","id":"background-1","method":"confirm","title":"Background approval"}),
+                        );
+                    }
                     "inspect-launch" => {
                         let extension = args
                             .windows(2)
@@ -116,7 +176,10 @@ fn main() {
                             && std::env::var("GOAT_MCP_BEARER_TOKEN").ok().as_deref()
                                 == Some("test-token")
                             && extension.is_some_and(|path| {
-                                std::fs::metadata(path).is_ok_and(|m| m.len() > 0)
+                                std::fs::read_to_string(path).is_ok_and(|source| {
+                                    source.contains("GOAT_MCP_BEARER_TOKEN")
+                                        && source.contains("registerTool")
+                                })
                             });
                         finish(if good { "launch-ok" } else { "launch-invalid" }, false);
                         active = false;
@@ -133,7 +196,10 @@ fn main() {
                         active = false;
                     }
                     "inspect-config" => {
-                        finish(&format!("{model_provider}/{model_id}:{thinking}"), false);
+                        finish(
+                            &format!("{model_provider}|{model_id}:{thinking}:{tier}"),
+                            false,
+                        );
                         active = false;
                     }
                     _ => {
@@ -145,6 +211,9 @@ fn main() {
             "extension_ui_response" => {
                 if pending && request["id"] == "dialog-1" {
                     pending = false;
+                    if let Some(prompt) = pending_prompt.take() {
+                        response(&prompt, json!({}));
+                    }
                     let answer = request
                         .get("value")
                         .and_then(Value::as_str)
@@ -160,6 +229,15 @@ fn main() {
                 }
             }
             "abort" => {
+                if reject_abort {
+                    reject_abort = false;
+                    emit(
+                        json!({"type":"response","id":request["id"],"command":"abort","success":false,"error":"abort refused"}),
+                    );
+                    finish("still running", false);
+                    active = false;
+                    continue;
+                }
                 response(&request, json!({}));
                 if active {
                     finish("", true);
