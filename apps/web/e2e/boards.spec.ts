@@ -218,3 +218,25 @@ test("question answers survive resolution exactly (single-select vs custom text)
   const answers = await page.evaluate(() => (window as unknown as { __goat2FakeAnswers?: unknown }).__goat2FakeAnswers);
   expect(answers).toEqual({ columns: ["Customer"], format: "Semicolon", name: "  report q4.csv" });
 });
+
+test("thread mode guards: one thread per submit, send while running, one answer at a time", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.getByLabel("New thread").click();
+  const box = page.getByLabel("Message", { exact: true });
+  await box.fill("Only once please");
+  await box.press("Enter");
+  await box.press("Enter");
+  await page.locator("[data-send]").click({ force: true });
+  await expect(page.locator("[data-timeline]")).toContainText("Only once please");
+  await expect(page.locator("[data-thread-row]").filter({ hasText: "Only once please" })).toHaveCount(1);
+  await page.locator("[data-thread-row=t-billing]").click();
+  await box.fill("queue this");
+  await expect(page.locator("[data-send]")).toBeVisible();
+  await expect(page.getByLabel("Stop")).toBeVisible();
+  await page.locator("[data-send]").click();
+  await expect(page.getByText("queue this")).toBeVisible();
+  await page.locator("[data-thread-row=t-auth]").click();
+  await page.locator("[data-option=accept]").dblclick();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("Run the e2e suite?")).toHaveCount(0);
+});

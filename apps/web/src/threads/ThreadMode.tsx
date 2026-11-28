@@ -158,9 +158,15 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
     if (!r.ok) setError(r.error?.message ?? "The host did not take this.");
     return r;
   };
+  const busy = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
   const submit = async () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || busy.current) return;
+    busy.current = true; setSubmitting(true);
+    try { await submitText(text); } finally { busy.current = false; if (mounted.current) setSubmitting(false); }
+  };
+  const submitText = async (text: string) => {
     if (editing && card) {
       const r = await run({ type: "edit_queued", threadId: card.id, inputId: editing, text });
       if (r.ok) { setEditing(null); setDraft(""); }
@@ -190,12 +196,17 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
           remove={btn("Delete queued message", () => card && void run({ type: "cancel_queued", threadId: card.id, inputId: q.inputId }))} />
       )) : null} />
   ) : null;
+  const canSend = draft.trim() !== "" && !submitting;
+  const send = (
+    <div {...(btn(editing ? "Save queued message" : running ? "Send (queues behind the running turn)" : "Send", () => void submit(), { "aria-disabled": !canSend }) as object)} data-send=""
+      style={{ alignItems: "center", backgroundColor: canSend ? "#0D0D0D" : "#0D0D0D33", borderRadius: 9999, display: "flex", height: 28, justifyContent: "center", width: 28, flexShrink: 0 }}>
+      <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
+    </div>
+  );
+  // While a turn runs, Stop stays; a draft (or a queued edit) also gets its own send/save button.
   const sendButton = running && card
-    ? <P.ComposerStop button={btn("Stop", () => void run({ type: "stop_thread", threadId: card.id }))} />
-    : <div {...(btn(editing ? "Save queued message" : "Send", () => void submit()) as object)} data-send=""
-        style={{ alignItems: "center", backgroundColor: draft.trim() ? "#0D0D0D" : "#0D0D0D33", borderRadius: 9999, display: "flex", height: 28, justifyContent: "center", width: 28, flexShrink: 0 }}>
-        <svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
-      </div>;
+    ? <div style={{ display: "flex", gap: 6, alignItems: "center" }}>{(draft.trim() !== "" || editing) && send}<P.ComposerStop button={btn("Stop", () => void run({ type: "stop_thread", threadId: card.id }))} /></div>
+    : send;
   return (
     <P.ThreadMain
       timeline={<div ref={scroller} style={{ flex: 1, minHeight: 0, overflow: "auto" }}

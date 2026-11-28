@@ -299,13 +299,19 @@ export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: 
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [custom, setCustom] = useState<Record<string, string>>({});
   const [title, ...rest] = request.summary.split("\n");
+  const inFlight = useRef(false);
   const resolve = async (key: string, body: { outcome: RequestOutcome; optionId?: string; text?: string; answers?: Record<string, string | string[]> }) => {
+    // One answer at a time: conflicting outcomes cannot be sent while the first is pending.
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPending(key); setError(null);
     const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, ...body });
+    inFlight.current = false;
     setPending(null);
     if (!r.ok) setError(r.error?.message ?? "The host did not take this answer.");
   };
-  const action = (key: string, label: string, primary: boolean, body: Parameters<typeof resolve>[1], hint?: string, disabled = false) => {
+  const action = (key: string, label: string, primary: boolean, body: Parameters<typeof resolve>[1], hint?: string, disabledIn = false) => {
+    const disabled = disabledIn || pending !== null;
     const props = disabled ? { role: "button", "aria-disabled": true, "aria-label": label, title: hint ?? label, "data-option": key } as P.El
       : btn(label, () => void resolve(key, body), { "aria-busy": pending === key, title: hint ?? label, "data-option": key });
     return primary ? <P.DecisionPrimary key={key} label={label} button={props} /> : <P.DecisionSecondary key={key} label={label} button={props} />;
