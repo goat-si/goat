@@ -1,3 +1,507 @@
-//! Host core: per-thread actors, scheduler, follow-ups, child wake, restart settlement.
+//! Host core: shared state, the write path (append + broadcast), and startup settlement.
+//!
+//! Every thread has an actor (`actor.rs`) that owns its mailbox and lane: one run at a time,
+//! follow-up modes, engine process, timers. Shared state here is what crosses threads: the
+//! store, the scheduler, MCP tokens, the per-thread runtime snapshot MCP callers read, child
+//! waiters, live broadcast channels and bots.
 
+pub mod actor;
+pub mod commands;
+pub mod mcp_ops;
 pub mod sched;
+pub mod settle;
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use goat2_contracts::limits::{
+    CHILD_WAKE_COALESCE_MS, COLLECT_WINDOW_MS, ENGINE_IDLE_STOP_SECS, MAX_CHILDREN_PER_BOT,
+    MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
+};
+use goat2_contracts::{
+    BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RunId, ThreadCursor,
+    ThreadId, ThreadKind, text::utf16_len,
+};
+use tokio::sync::{broadcast, mpsc, oneshot};
+
+use crate::api::{CardUpdate, McpGrant, ReportOutcome, StreamingItem, ThreadLive};
+use crate::engine::{EngineFactory, EngineSession};
+use crate::stall::StallRecorder;
+use crate::store::{Appended, StoreResult, ThreadStore};
+use actor::Msg;
+use sched::Scheduler;
+
+/// Engine group memory limit per thread (owner 2026-11-28; to move into goat2-contracts limits).
+pub const ENGINE_GROUP_MEMORY_LIMIT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// How often running engine groups are sampled.
+pub const MEMORY_SAMPLE_SECS: u64 = 10;
+
+/// Tunables; [HostOptions::new] uses the Part 1 values, tests shrink the timers.
+#[derive(Debug, Clone)]
+pub struct HostOptions {
+    pub data_dir: PathBuf,
+    pub host_generation: u64,
+    pub ui_token: String,
+    /// Working folder for bots and threads started without one.
+    pub default_cwd: String,
+    pub max_runs: usize,
+    pub max_starts: usize,
+    pub max_children: usize,
+    pub idle_stop: Duration,
+    pub collect_window: Duration,
+    pub child_coalesce: Duration,
+    pub memory_limit_bytes: u64,
+    pub memory_sample: Duration,
+    /// Longest `thread.wait` / `thread.start {mode: wait}` block.
+    pub max_wait: Duration,
+}
+
+impl HostOptions {
+    pub fn new(
+        data_dir: PathBuf,
+        host_generation: u64,
+        ui_token: String,
+        default_cwd: String,
+    ) -> Self {
+        Self {
+            data_dir,
+            host_generation,
+            ui_token,
+            default_cwd,
+            max_runs: MAX_CONCURRENT_RUNS,
+            max_starts: MAX_CONCURRENT_STARTS,
+            max_children: MAX_CHILDREN_PER_BOT,
+            idle_stop: Duration::from_secs(ENGINE_IDLE_STOP_SECS),
+            collect_window: Duration::from_millis(COLLECT_WINDOW_MS),
+            child_coalesce: Duration::from_millis(CHILD_WAKE_COALESCE_MS),
+            memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
+            memory_sample: Duration::from_secs(MEMORY_SAMPLE_SECS),
+            max_wait: Duration::from_secs(60),
+        }
+    }
+}
+
+/// What MCP callers and other threads may read about a thread without asking its actor.
+#[derive(Debug, Clone, Default)]
+pub struct Runtime {
+    pub kind: Option<ThreadKind>,
+    pub parent: Option<ThreadId>,
+    /// Bumped on every engine start or resume.
+    pub process_generation: u64,
+    pub session_alive: bool,
+    pub active_run: Option<RunId>,
+    /// A run is active or inputs are queued.
+    pub busy: bool,
+    /// `thread.report_result` for the active run.
+    pub report: Option<(ReportOutcome, String)>,
+    /// `user.send` kinds already sent in the active run.
+    pub notified: HashSet<NotifyKind>,
+    /// Final answer text of the active run so far.
+    pub last_answer: String,
+}
+
+/// A finished child run, as delivered to waiters and the parent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildOutcome {
+    pub child_thread_id: ThreadId,
+    pub child_run_id: Option<RunId>,
+    pub status: ChildResultStatus,
+    pub summary: String,
+    pub cursor: ThreadCursor,
+}
+
+/// A parent run blocked on a child (`thread.start {mode: wait}` or `thread.wait`).
+pub struct Waiter {
+    pub parent_run: RunId,
+    pub tx: oneshot::Sender<ChildOutcome>,
+}
+
+/// A running engine process: (process generation, session).
+pub type LiveSession = (u64, Arc<dyn EngineSession>);
+
+struct LiveThread {
+    tx: broadcast::Sender<ThreadLive>,
+    streaming: Vec<(ItemId, String)>,
+}
+
+pub(crate) struct Inner {
+    pub opts: HostOptions,
+    pub store: Arc<dyn ThreadStore>,
+    pub engine: Arc<dyn EngineFactory>,
+    pub sched: Arc<Scheduler>,
+    pub stall: StallRecorder,
+    pub mcp_url: OnceLock<String>,
+    pub cards_tx: broadcast::Sender<CardUpdate>,
+    live: Mutex<HashMap<ThreadId, LiveThread>>,
+    actors: Mutex<HashMap<ThreadId, mpsc::UnboundedSender<Msg>>>,
+    pub runtime: Mutex<HashMap<ThreadId, Runtime>>,
+    pub tokens: Mutex<HashMap<String, McpGrant>>,
+    pub waiters: Mutex<HashMap<ThreadId, Vec<Waiter>>>,
+    pub sessions: Mutex<HashMap<ThreadId, LiveSession>>,
+    pub bots: Mutex<Vec<BotProfile>>,
+    pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
+    pub command_lock: tokio::sync::Mutex<()>,
+    pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
+}
+
+/// The host. Cheap to clone.
+#[derive(Clone)]
+pub struct Host {
+    pub(crate) inner: Arc<Inner>,
+}
+
+impl Host {
+    /// Build the host and settle the previous generation's runs (PRD runtime.md "재시작").
+    /// Call [Host::set_mcp_url] before any engine starts, then [Host::start_background].
+    pub fn open(
+        opts: HostOptions,
+        store: Arc<dyn ThreadStore>,
+        engine: Arc<dyn EngineFactory>,
+        stall: StallRecorder,
+    ) -> StoreResult<Self> {
+        let (cards_tx, _) = broadcast::channel(1024);
+        let host = Self {
+            inner: Arc::new(Inner {
+                sched: Scheduler::new(opts.max_runs, opts.max_starts),
+                opts,
+                store,
+                engine,
+                stall,
+                mcp_url: OnceLock::new(),
+                cards_tx,
+                live: Mutex::new(HashMap::new()),
+                actors: Mutex::new(HashMap::new()),
+                runtime: Mutex::new(HashMap::new()),
+                tokens: Mutex::new(HashMap::new()),
+                waiters: Mutex::new(HashMap::new()),
+                sessions: Mutex::new(HashMap::new()),
+                bots: Mutex::new(Vec::new()),
+                dedupe: Mutex::new(HashMap::new()),
+                command_lock: tokio::sync::Mutex::new(()),
+                memory_warned: Mutex::new(HashSet::new()),
+            }),
+        };
+        Ok(host)
+    }
+
+    pub fn set_mcp_url(&self, url: String) {
+        let _ = self.inner.mcp_url.set(url);
+    }
+
+    pub fn store(&self) -> &Arc<dyn ThreadStore> {
+        &self.inner.store
+    }
+
+    pub fn options(&self) -> &HostOptions {
+        &self.inner.opts
+    }
+
+    /// Settle runs, wake parents, load bots (creating GOAT on first start), resume queues, start
+    /// the memory sampler. Must run inside a tokio runtime.
+    pub async fn start(&self) -> StoreResult<()> {
+        let started = Instant::now();
+        settle::settle_and_resume(self).await?;
+        commands::load_bots(self)?;
+        commands::rebuild_dedupe(self).await;
+        self.spawn_memory_sampler();
+        self.inner.stall.note(
+            "startup",
+            serde_json::json!({ "ms": started.elapsed().as_millis() as u64, "threads": self.inner.store.cards().len() }),
+        );
+        Ok(())
+    }
+
+    /// Stop every engine process (app quit).
+    pub async fn shutdown(&self) {
+        let sessions: Vec<_> = self
+            .inner
+            .sessions
+            .lock()
+            .expect("sessions")
+            .drain()
+            .collect();
+        for (_, (_, session)) in sessions {
+            session.shutdown().await;
+        }
+    }
+
+    /// The actor mailbox for a thread, spawning the actor if needed. `None` if the thread is
+    /// not in the store.
+    pub(crate) fn actor(&self, id: &ThreadId) -> Option<mpsc::UnboundedSender<Msg>> {
+        let mut actors = self.inner.actors.lock().expect("actors");
+        if let Some(tx) = actors.get(id)
+            && !tx.is_closed()
+        {
+            return Some(tx.clone());
+        }
+        let card = self.inner.store.card(id)?;
+        let tx = actor::spawn(self.clone(), card);
+        actors.insert(id.clone(), tx.clone());
+        Some(tx)
+    }
+
+    pub(crate) fn send(&self, id: &ThreadId, msg: Msg) -> bool {
+        self.actor(id).is_some_and(|tx| tx.send(msg).is_ok())
+    }
+
+    /// Append and broadcast. Every log write goes through here.
+    pub(crate) fn append(&self, id: &ThreadId, events: Vec<LogEvent>) -> StoreResult<Appended> {
+        self.append_with(id, events, false)
+    }
+
+    /// Append, flush to disk, then broadcast (the send boundary `run.started`).
+    pub(crate) fn append_durable(
+        &self,
+        id: &ThreadId,
+        events: Vec<LogEvent>,
+    ) -> StoreResult<Appended> {
+        self.append_with(id, events, true)
+    }
+
+    fn append_with(
+        &self,
+        id: &ThreadId,
+        events: Vec<LogEvent>,
+        durable: bool,
+    ) -> StoreResult<Appended> {
+        let appended = if durable {
+            self.inner.store.append_durable(id, events)?
+        } else {
+            self.inner.store.append(id, events)?
+        };
+        self.publish(id, &appended);
+        Ok(appended)
+    }
+
+    pub(crate) fn publish(&self, id: &ThreadId, appended: &Appended) {
+        if let Some(live) = self.inner.live.lock().expect("live").get(id) {
+            for line in &appended.lines {
+                let _ = live.tx.send(ThreadLive::Line(Arc::new(line.clone())));
+            }
+        }
+        let _ = self
+            .inner
+            .cards_tx
+            .send(CardUpdate::Changed(Arc::new(appended.card.clone())));
+    }
+
+    /// Streaming text for an unfinished item (never stored).
+    pub(crate) fn stream_text(&self, id: &ThreadId, item_id: &ItemId, text: &str) {
+        let mut live = self.inner.live.lock().expect("live");
+        let entry = live.entry(id.clone()).or_insert_with(new_live);
+        let offset = match entry.streaming.iter_mut().find(|(i, _)| i == item_id) {
+            Some((_, buf)) => {
+                let offset = utf16_len(buf);
+                buf.push_str(text);
+                offset
+            }
+            None => {
+                entry.streaming.push((item_id.clone(), text.to_owned()));
+                0
+            }
+        };
+        let _ = entry.tx.send(ThreadLive::Text {
+            item_id: item_id.clone(),
+            offset,
+            text: text.to_owned(),
+        });
+    }
+
+    pub(crate) fn stream_done(&self, id: &ThreadId, item_id: &ItemId) {
+        let mut live = self.inner.live.lock().expect("live");
+        if let Some(entry) = live.get_mut(id) {
+            entry.streaming.retain(|(i, _)| i != item_id);
+            let _ = entry.tx.send(ThreadLive::TextDone {
+                item_id: item_id.clone(),
+            });
+        }
+    }
+
+    pub(crate) fn stream_clear(&self, id: &ThreadId) {
+        let mut live = self.inner.live.lock().expect("live");
+        if let Some(entry) = live.get_mut(id) {
+            for (item_id, _) in std::mem::take(&mut entry.streaming) {
+                let _ = entry.tx.send(ThreadLive::TextDone { item_id });
+            }
+        }
+    }
+
+    pub(crate) fn watch(
+        &self,
+        id: &ThreadId,
+    ) -> (broadcast::Receiver<ThreadLive>, Vec<StreamingItem>) {
+        let mut live = self.inner.live.lock().expect("live");
+        let entry = live.entry(id.clone()).or_insert_with(new_live);
+        let snapshot = entry
+            .streaming
+            .iter()
+            .map(|(item_id, text)| StreamingItem {
+                item_id: item_id.clone(),
+                text: text.clone(),
+            })
+            .collect();
+        (entry.tx.subscribe(), snapshot)
+    }
+
+    pub(crate) fn runtime_update(&self, id: &ThreadId, f: impl FnOnce(&mut Runtime)) {
+        let mut rt = self.inner.runtime.lock().expect("runtime");
+        f(rt.entry(id.clone()).or_default());
+    }
+
+    pub(crate) fn runtime_of(&self, id: &ThreadId) -> Option<Runtime> {
+        self.inner.runtime.lock().expect("runtime").get(id).cloned()
+    }
+
+    /// Busy children of a parent (the per-bot child cap counts these).
+    pub(crate) fn busy_children(&self, parent: &ThreadId) -> usize {
+        self.inner
+            .runtime
+            .lock()
+            .expect("runtime")
+            .values()
+            .filter(|rt| rt.parent.as_ref() == Some(parent) && rt.busy)
+            .count()
+    }
+
+    /// Children whose result the given parent run is blocked on (wait mode).
+    pub(crate) fn waited_children(&self, parent_run: &RunId) -> Vec<ThreadId> {
+        self.inner
+            .waiters
+            .lock()
+            .expect("waiters")
+            .iter()
+            .filter(|(_, ws)| {
+                ws.iter()
+                    .any(|w| &w.parent_run == parent_run && !w.tx.is_closed())
+            })
+            .map(|(child, _)| child.clone())
+            .collect()
+    }
+
+    /// Release every waiter of a parent run without a result (Stop / interrupt).
+    pub(crate) fn drop_waiters_of(&self, parent_run: &RunId) {
+        for ws in self.inner.waiters.lock().expect("waiters").values_mut() {
+            ws.retain(|w| &w.parent_run != parent_run);
+        }
+    }
+
+    pub(crate) fn add_waiter(
+        &self,
+        child: &ThreadId,
+        parent_run: RunId,
+    ) -> oneshot::Receiver<ChildOutcome> {
+        let (tx, rx) = oneshot::channel();
+        self.inner
+            .waiters
+            .lock()
+            .expect("waiters")
+            .entry(child.clone())
+            .or_default()
+            .push(Waiter { parent_run, tx });
+        rx
+    }
+
+    /// Deliver a child outcome to its waiters. True if a wait received it.
+    pub(crate) fn deliver_to_waiters(&self, outcome: &ChildOutcome) -> bool {
+        let waiters = self
+            .inner
+            .waiters
+            .lock()
+            .expect("waiters")
+            .remove(&outcome.child_thread_id)
+            .unwrap_or_default();
+        let mut delivered = false;
+        for w in waiters {
+            delivered |= w.tx.send(outcome.clone()).is_ok();
+        }
+        delivered
+    }
+
+    /// Issue a new MCP token for a thread's next engine process and revoke the old ones.
+    pub(crate) fn issue_token(&self, id: &ThreadId, process_generation: u64) -> String {
+        let token = crate::util::new_token();
+        let mut tokens = self.inner.tokens.lock().expect("tokens");
+        tokens.retain(|_, g| &g.thread_id != id);
+        tokens.insert(
+            token.clone(),
+            McpGrant {
+                thread_id: id.clone(),
+                process_generation,
+                host_generation: self.inner.opts.host_generation,
+            },
+        );
+        token
+    }
+
+    pub(crate) fn revoke_tokens(&self, id: &ThreadId) {
+        self.inner
+            .tokens
+            .lock()
+            .expect("tokens")
+            .retain(|_, g| &g.thread_id != id);
+    }
+
+    pub(crate) fn bot(&self, id: &BotId) -> Option<BotProfile> {
+        self.inner
+            .bots
+            .lock()
+            .expect("bots")
+            .iter()
+            .find(|b| &b.bot_id == id)
+            .cloned()
+    }
+
+    fn spawn_memory_sampler(&self) {
+        let host = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(host.inner.opts.memory_sample);
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                host.sample_memory();
+            }
+        });
+    }
+
+    /// Sample every live engine group once (idle-stopped processes have no session).
+    pub fn sample_memory(&self) {
+        let limit = self.inner.opts.memory_limit_bytes;
+        let sessions: Vec<_> = self
+            .inner
+            .sessions
+            .lock()
+            .expect("sessions")
+            .iter()
+            .map(|(id, (pgen, s))| (id.clone(), *pgen, s.clone()))
+            .collect();
+        for (id, pgen, session) in sessions {
+            let Some(bytes) = session.group_rss_bytes() else {
+                continue;
+            };
+            if bytes > limit {
+                self.send(&id, Msg::MemoryLimit { pgen, bytes });
+            } else if bytes * 10 >= limit * 8
+                && self
+                    .inner
+                    .memory_warned
+                    .lock()
+                    .expect("warned")
+                    .insert((id.clone(), pgen))
+            {
+                self.inner.stall.note(
+                    "memory_warning",
+                    serde_json::json!({ "thread": id, "rssBytes": bytes, "limitBytes": limit }),
+                );
+            }
+        }
+    }
+}
+
+fn new_live() -> LiveThread {
+    LiveThread {
+        tx: broadcast::channel(1024).0,
+        streaming: Vec::new(),
+    }
+}
