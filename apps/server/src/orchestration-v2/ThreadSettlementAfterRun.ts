@@ -126,5 +126,19 @@ export const make = (services: {
       releaseOnPendingQuestion: false,
     });
     if (run?.status !== "completed") return;
+    const { turnItems } = yield* services.records(input, ["turnItems"], {
+      turnItemRunIds: [run.id],
+      turnItemTypes: ["user_message"],
+    });
+    if (
+      turnItems.some(
+        (item) =>
+          item.type === "user_message" &&
+          (item.inputIntent === "steer" || item.inputIntent === "promoted_queued_to_steer") &&
+          item.completedAt !== null &&
+          !DateTime.isLessThan(DateTime.makeUnsafe(item.completedAt), requestedAt),
+      )
+    )
+      return;
     yield* settleAfterRun({ ...services, ...input, run, requestedAt });
   });
