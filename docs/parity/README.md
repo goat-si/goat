@@ -28,6 +28,7 @@ export has no `.git`, so its identity rests on how it was made, not on a runtime
 | [queue.md](queue.md) | queued messages and queue edit / cancel / reorder / promote_to_steer |
 | [thread-tools.md](thread-tools.md) | MCP thread.send / wait / watch / unwatch / watch_list / report_result |
 | [child-wake.md](child-wake.md) | how a parent is woken by a child's result, question or failure |
+| [providers.md](providers.md) | Part 2: per provider, the v1 recordings for one turn, stop, approval, question, resume and subagent, and their GOAT 2 status |
 | [restart-settlement.md](restart-settlement.md) | what happens to in-flight work across a server restart |
 | [claude-stream-json.md](claude-stream-json.md) | Claude CLI stream-json control protocol (Part 2 research) |
 
