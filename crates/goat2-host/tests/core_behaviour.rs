@@ -4505,3 +4505,28 @@ async fn a_fenced_thread_drops_its_unfinished_streams() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn an_engine_sign_in_request_rechecks_its_provider_at_once() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let id = start_user_thread(&t, "rejected", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    // The engine finds the saved credentials rejected; the next probe would say so.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    let rejected = |t: &T| goat2_host::engine::EngineEvent::AuthRequired {
+        turn_id: t.fake.active_turn(&id),
+        key: None,
+        url: None,
+        message: "Codex rejected this provider's credentials.".into(),
+    };
+    t.fake.emit(&id, rejected(&t));
+    // Shown without a manual refresh.
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    // A repeat right after probes no more (an engine may repeat AuthRequired).
+    let probes = t.fake.probes();
+    t.fake.emit(&id, rejected(&t));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(t.fake.probes(), probes);
+}
