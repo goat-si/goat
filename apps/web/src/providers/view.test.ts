@@ -2,7 +2,7 @@
 // dot and next step, the catalog's sections and actions, the first-run list.
 import { describe, expect, it } from "vitest";
 import { DEMO_REGISTRY, demoProviderEntries, firstRunProviderEntries } from "../host/fakeProviders.ts";
-import { addedProviders, catalog, detected, nextInstanceId, providerState, rowLine } from "./view.ts";
+import { addedProviders, catalog, detected, enableBody, nextInstanceId, providerState, rowLine } from "./view.ts";
 import type { ServerProviderEntry } from "./wire.ts";
 
 const AT = "2026-11-29T00:00:00.000Z";
@@ -69,6 +69,16 @@ describe("catalog", () => {
     const local = ["codex", "claudeAgent", "grok", "fx", "antigravity", "opencode", "cursor", "muse", "pi", "omo"];
     expect(local.every((k) => items.some((i) => i.key === k))).toBe(true);
     expect(items.find((i) => i.key === "claudeAgent")).toMatchObject({ badge: "Not in this build", action: { kind: "none", reason: "This GOAT build does not include the Claude driver yet." } });
+  });
+});
+
+describe("switched-off instances", () => {
+  it("their install state is unknown (status-only rows); turning one on keeps its stored name and agent", () => {
+    const off = demo().map((e) => (e.instanceId === "grok" ? { ...e, probe: { ...e.probe, status: "disabled" as const } } : e));
+    expect(catalog(off, [], [], "all", "").find((i) => i.key === "grok")).toMatchObject({ badge: "Not checked", installed: false, action: { kind: "enable" } });
+    expect(detected(off, []).map((e) => e.instanceId)).not.toContain("grok");
+    expect(enableBody({ ...byId(demo(), "codex"), enabled: false })).toEqual({ instanceId: "codex", driver: "codex", enabled: true, displayName: "Personal" });
+    expect(enableBody(byId(demo(), "acp-kimi-code"))).toMatchObject({ acpAgentId: "kimi-code", displayName: "Kimi Code" });
   });
 });
 

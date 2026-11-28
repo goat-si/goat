@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AcpRegistrySearchAgent, AcpRegistrySearchResult, ServerProviderEntry } from "./wire.ts";
 import { useAction, useProviderCall } from "./context.tsx";
-import { catalog, type CatalogFilter, type CatalogItem } from "./view.ts";
+import { catalog, enableBody, type CatalogFilter, type CatalogItem } from "./view.ts";
 import { Button, ErrorLine, FAINT, INK, LINE, Logo, MUTED, Plus, text } from "./ui.tsx";
 import { openUrl } from "./ProviderDetail.tsx";
 
@@ -33,11 +33,12 @@ export function Catalog({ entries, keptOff, hidden, onAdded }: { entries: Server
 
   const perform = (i: CatalogItem) => act.run(i.key, async () => {
     const a = i.action;
+    const stored = (id: string, driver: string) => { const e = entries.find((x) => x.instanceId === id); return e ? enableBody(e) : { instanceId: id, driver, enabled: true }; };
     if (a.kind === "enable") {
-      await call("goat2.setProviderInstance", { instanceId: a.instanceId, driver: a.driver, enabled: true });
+      await call("goat2.setProviderInstance", stored(a.instanceId, a.driver));
       onAdded(a.instanceId);
     } else if (a.kind === "install") {
-      await call("goat2.setProviderInstance", { instanceId: a.instanceId, driver: a.driver, enabled: true });
+      await call("goat2.setProviderInstance", stored(a.instanceId, a.driver));
       await call("providerInstall.start", { instanceId: a.instanceId });
       onAdded(a.instanceId);
     } else if (a.kind === "registry") {

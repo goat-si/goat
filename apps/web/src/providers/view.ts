@@ -133,13 +133,16 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
     const meta = DRIVERS[e.driver];
     const name = driverLabel(e.driver);
     const blurb = meta?.blurb ?? "";
-    const installed = base.probe.installed && base.probe.cli !== "missing";
+    const installed = installKnown(base) && base.probe.installed && base.probe.cli !== "missing";
     if (mine.length > 0) {
       items.push({ key: e.driver, name, blurb: mine.length > 1 ? `Already added: ${plural(mine.length, "account")}.` : "Already added.", badge: "Added",
         section: "mac", icon: { driver: e.driver }, action: { kind: "none", reason: "" }, cloud: false, installed: true });
     } else if (isUnserved(base)) {
       items.push({ key: e.driver, name, blurb, badge: "Not in this build", section: "more", icon: { driver: e.driver },
         action: { kind: "none", reason: base.probe.message ?? "" }, cloud: false, installed: false });
+    } else if (!installKnown(base)) {
+      items.push({ key: e.driver, name, blurb, badge: "Not checked", section: "more", icon: { driver: e.driver },
+        action: { kind: "enable", instanceId: base.instanceId, driver: e.driver }, cloud: false, installed: false });
     } else if (installed) {
       items.push({ key: e.driver, name, blurb, badge: "Installed", section: "mac", icon: { driver: e.driver },
         action: { kind: "enable", instanceId: base.instanceId, driver: e.driver }, cloud: false, installed: true });
@@ -182,7 +185,7 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
 /** First run (board 2LEV-2): providers found on this Mac that are not added yet. */
 export function detected(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>, hidden: ReadonlyArray<string> = []): ServerProviderEntry[] {
   return entries.filter((e) => e.driver !== "acpRegistry" && !CLOUD[e.driver] && !isAdded(e, keptOff, hidden) && !isUnserved(e)
-    && e.probe.installed && e.probe.cli !== "missing" && e.instanceId === e.driver);
+    && installKnown(e) && e.probe.installed && e.probe.cli !== "missing" && e.instanceId === e.driver);
 }
 
 export function detectedLine(e: ServerProviderEntry): string {
@@ -191,6 +194,21 @@ export function detectedLine(e: ServerProviderEntry): string {
   if (a.status === "unauthenticated") return "Installed \u00b7 needs sign-in";
   return "Installed";
 }
+
+/**
+ * Drivers whose instances keep separate sign-ins and limits. The host gives every non-default instance its own home
+ * (goat2 6919a56); a driver must use it (Codex: v1's shadow-home overlay, lane B) before a second instance is a second
+ * account. Until then "Add another account" is offered disabled with the reason.
+ */
+export const SEPARATE_ACCOUNT_DRIVERS: ReadonlySet<string> = new Set<string>();
+
+/** set_provider_instance turning an instance on with what the host already stores for it (it replaces the whole instance). */
+export function enableBody(e: ServerProviderEntry) {
+  return { instanceId: e.instanceId, driver: e.driver, enabled: true, ...(e.displayName ? { displayName: e.displayName } : {}), ...(e.acpAgentId ? { acpAgentId: e.acpAgentId } : {}) };
+}
+
+/** A switched-off instance gets a status-only row (probe status "disabled"): its install state is not known. */
+export const installKnown = (e: ServerProviderEntry) => e.probe.status !== "disabled";
 
 /** The next free instance id for another account of a driver: codex-2, codex-3, ... */
 export function nextInstanceId(entries: ReadonlyArray<ServerProviderEntry>, driver: string): string {

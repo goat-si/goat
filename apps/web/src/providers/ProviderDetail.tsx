@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { ServerProviderEntry } from "./wire.ts";
 import { useAction, useProviderCall, useProviderEntries } from "./context.tsx";
 import { CLOUD, CLOUD_LATER, DRIVERS } from "./catalogMeta.ts";
-import { headerLine, maskEmail, nextInstanceId, providerState, titleParts, iconOf } from "./view.ts";
+import { SEPARATE_ACCOUNT_DRIVERS, headerLine, maskEmail, nextInstanceId, providerState, titleParts, iconOf } from "./view.ts";
 import { Button, Chevron, DotMark, ErrorLine, FAINT, INK, LinkButton, Logo, MUTED, Plus, Row, Section, Toggle, text } from "./ui.tsx";
 
 const INSTALLING = new Set(["downloading", "extracting", "verifying"]);
@@ -190,7 +190,8 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
   });
   const acceptUrl = () => act.run("accept", async () => {
     const action = a.action!;
-    await call("server.acceptAcpRegistryUrlAuth", { instanceId: e.instanceId, elicitationId: action.elicitationId });
+    const r = await call<{ accepted: boolean }>("server.acceptAcpRegistryUrlAuth", { instanceId: e.instanceId, elicitationId: action.elicitationId });
+    if (!r?.accepted) throw new Error("This sign-in link is no longer valid. Check again to get a new one.");
     openUrl(action.url);
   });
   const waiting = flow && (flow.phase === "starting" || flow.phase === "waiting" || flow.phase === "verifying");
@@ -240,8 +241,17 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
       <ErrorLine error={act.error} />
       {onAddAccount ? (
         <div style={{ alignItems: "center", display: "flex", gap: 8, paddingTop: 4 }}>
-          <LinkButton onClick={onAddAccount}><Plus /><span style={text(13, INK, 500)}>Add another account</span></LinkButton>
-          <span style={text(12, FAINT)}>Each account keeps its own sign-in and limits.</span>
+          {SEPARATE_ACCOUNT_DRIVERS.has(e.driver) ? (
+            <>
+              <LinkButton onClick={onAddAccount}><Plus /><span style={text(13, INK, 500)}>Add another account</span></LinkButton>
+              <span style={text(12, FAINT)}>Each account keeps its own sign-in and limits.</span>
+            </>
+          ) : (
+            <>
+              <LinkButton disabled><Plus /><span style={text(13, INK, 500)}>Add another account</span></LinkButton>
+              <span style={text(12, FAINT)}>Separate {titleParts(e).name} accounts come with a later GOAT 2 update.</span>
+            </>
+          )}
         </div>
       ) : null}
     </Section>

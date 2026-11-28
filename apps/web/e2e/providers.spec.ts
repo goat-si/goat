@@ -58,6 +58,22 @@ test("ACP URL auth: Continue authentication accepts the engine's sign-in link", 
   await expect.poll(() => sent(page, "accept_acp_registry_url_auth")).toEqual([expect.objectContaining({ instanceId: "antigravity", elicitationId: "agy-signin-1" })]);
 });
 
+test("ACP URL auth: a link the host no longer accepts is not opened; the reason shows", async ({ page }) => {
+  await page.goto("/?fake=1Q0P-2");
+  await page.evaluate(() => {
+    (window as unknown as { __opened: string[] }).__opened = [];
+    window.open = (url?: string | URL) => { (window as unknown as { __opened: string[] }).__opened.push(String(url)); return null; };
+    // The engine replaced its sign-in request; the page still shows the old one.
+    type Probe = { auth: { action?: { elicitationId: string } } };
+    const fake = (window as unknown as { __goat2FakeProviders: { entries: Array<{ instanceId: string; probe: Probe }> } }).__goat2FakeProviders;
+    const e = fake.entries.find((x) => x.instanceId === "antigravity")!; // fake frames share objects with the page: replace, never mutate
+    e.probe = { ...e.probe, auth: { ...e.probe.auth, action: { ...e.probe.auth.action!, elicitationId: "agy-signin-2" } } };
+  });
+  await main(page).getByRole("button", { name: "Continue authentication" }).click();
+  await expect(main(page).getByRole("alert")).toHaveText("This sign-in link is no longer valid. Check again to get a new one.");
+  expect(await page.evaluate(() => (window as unknown as { __opened: string[] }).__opened)).toEqual([]);
+});
+
 test("cloud counterparts are opt-in and off; cloud runs come later", async ({ page }) => {
   await page.goto("/?fake=2LET-2");
   const cloud = main(page).getByLabel("Also run in the cloud");
@@ -94,11 +110,11 @@ test("catalog: Add an installed provider, Install and add a missing one, install
   await expect(item("devinCloud").getByRole("button", { name: "Add" })).toBeDisabled();
 });
 
-test("another account and repair: each is one provider command", async ({ page }) => {
+test("another account waits for driver support; repair is one provider command", async ({ page }) => {
   await page.goto("/?fake=1PBB-2");
-  await main(page).getByRole("button", { name: "Add another account" }).click();
-  await expect(row(page, "codex-3")).toContainText("Codex · Account 3");
-  expect(await sent(page, "set_provider_instance")).toEqual([expect.objectContaining({ instanceId: "codex-3", driver: "codex", enabled: true, displayName: "Account 3" })]);
+  // The host gives each instance its own home, but Codex does not use it yet (lane B): no second row that is the same account.
+  await expect(main(page).getByRole("button", { name: "Add another account" })).toBeDisabled();
+  await expect(main(page)).toContainText("Separate Codex accounts come with a later GOAT 2 update.");
   await row(page, "omo").click();
   await expect(main(page)).toContainText("OmO can’t start: runtime target missing.");
   await main(page).getByRole("button", { name: "Reinstall" }).click();
