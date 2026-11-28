@@ -4,7 +4,10 @@
 
 pub mod agents;
 pub mod index;
+pub mod local;
 pub mod resolve;
+
+pub use local::prefers_http_mcp;
 
 use goat2_contracts::{EngineDriver, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};
