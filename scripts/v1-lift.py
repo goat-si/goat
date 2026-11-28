@@ -43,8 +43,22 @@ def mirror(p):
 
 def git(*a):
     return subprocess.run(["git", "-C", V1, *a], capture_output=True, text=True, check=True).stdout
+_batch = None
+_blobs = {}
 def show(p):
-    return subprocess.run(["git", "-C", V1, "show", f"{V1_REF}:{p}"], capture_output=True, check=True).stdout
+    """Blob bytes of v1 <V1_REF>:<p> through one long-lived `git cat-file --batch` (same bytes as `git show`);
+    a missing path raises CalledProcessError like `git show` did."""
+    global _batch
+    if p in _blobs: return _blobs[p]
+    if _batch is None:
+        _batch = subprocess.Popen(["git", "-C", V1, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    _batch.stdin.write(f"{V1_REF}:{p}\n".encode()); _batch.stdin.flush()
+    header = _batch.stdout.readline().decode().split()
+    if len(header) < 3 or header[1] == "missing":
+        raise subprocess.CalledProcessError(128, ["git", "show", f"{V1_REF}:{p}"])
+    data = _batch.stdout.read(int(header[2])); _batch.stdout.read(1)
+    _blobs[p] = data
+    return data
 
 FILES = set(git("ls-tree", "-r", "--name-only", V1_REF).split())
 def pkg_exports(pkg):
