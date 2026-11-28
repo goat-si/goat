@@ -1866,6 +1866,80 @@ async fn a_sign_in_url_only_in_the_message_stays_out_of_the_log() {
     assert!(!data_contains(&t, "SECRET-PATH"));
 }
 
+#[tokio::test]
+async fn part2_fields_carry_what_the_host_knows() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "p2-fields", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    // request.ask's detail becomes the request's context, trimmed and bounded.
+    let long = format!(
+        "  {}  ",
+        "d".repeat(goat2_contracts::limits::REQUEST_CONTEXT_MAX_CHARS + 50)
+    );
+    let asked = t
+        .host
+        .request_ask(
+            &me,
+            goat2_host::api::RequestAskArgs {
+                kind: goat2_host::api::AskKind::Question,
+                summary: "Which branch?".into(),
+                detail: Some(long),
+                options: Vec::new(),
+                client_request_id: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(asked, SurfaceResult::NeedsHuman { .. }),
+        "{asked:?}"
+    );
+    let context = events(&t, &id)
+        .into_iter()
+        .find_map(|e| match e {
+            LogEvent::RequestOpened(o) if o.summary == "Which branch?" => Some(o.context),
+            _ => None,
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        context.chars().count(),
+        goat2_contracts::limits::REQUEST_CONTEXT_MAX_CHARS
+    );
+    assert!(context.starts_with('d'));
+    // user.send by the agent is recorded as written by its session.
+    t.host
+        .user_send(
+            &me,
+            UserSendArgs {
+                kind: goat2_contracts::NotifyKind::Ack,
+                text: "on it".into(),
+            },
+        )
+        .await;
+    assert!(events(&t, &id).iter().any(|e| matches!(
+        e,
+        LogEvent::UserNotified(n)
+            if n.source == Some(goat2_contracts::NotificationSource::Session)
+    )));
+    // A Part 2 command whose module has not landed is refused as not available.
+    let refused = t
+        .host
+        .command(ClientFrame::RefreshProviders {
+            req_id: "r".into(),
+            client_request_id: "p2-refresh".into(),
+            instance_id: None,
+            refresh_models: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "not_available");
+    assert_eq!(
+        refused.code,
+        goat2_contracts::AgentSurfaceErrorCode::Unavailable
+    );
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()

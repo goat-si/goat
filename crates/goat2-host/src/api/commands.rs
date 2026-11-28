@@ -30,6 +30,8 @@ pub enum Reason {
     ChildBudget,
     PayloadTooLarge,
     InvalidRequest,
+    /// A command this host build does not serve yet (Part 2 frames whose module is not in).
+    NotAvailable,
     Internal,
 }
 
@@ -46,6 +48,7 @@ impl Reason {
             Self::ChildBudget => "child_budget",
             Self::PayloadTooLarge => "payload_too_large",
             Self::InvalidRequest => "invalid_request",
+            Self::NotAvailable => "not_available",
             Self::Internal => "internal",
         }
     }
@@ -63,6 +66,7 @@ impl Reason {
             Self::IdempotencyConflict | Self::NotQueued => AgentSurfaceErrorCode::Conflict,
             Self::ChildBudget => AgentSurfaceErrorCode::ResourceExhausted,
             Self::PayloadTooLarge | Self::InvalidRequest => AgentSurfaceErrorCode::InvalidRequest,
+            Self::NotAvailable => AgentSurfaceErrorCode::Unavailable,
             Self::Internal => AgentSurfaceErrorCode::Internal,
         }
     }
