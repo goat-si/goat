@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import type { ChatAttachment } from "@goat/contracts";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
@@ -10,7 +11,8 @@ export interface ThreadTitleSeedInput {
 }
 
 function normalizeTitleSeed(value: string): string {
-  return assistantCitationsToPlainText(value).trim().replace(/\s+/gu, " ");
+  // Mentioned macOS paths can be NFD; titles show them composed.
+  return assistantCitationsToPlainText(value).trim().replace(/\s+/gu, " ").normalize("NFC");
 }
 
 export function threadTitleTextFromPrompt(value: string): string {
@@ -23,7 +25,7 @@ export function threadTitleTextFromPrompt(value: string): string {
     return reference.label;
   });
   return (
-    normalizeTitleSeed(prose) ||
+    normalizeTitleSeed(composerFileLinksToPlainText(prose)) ||
     (imageIds.size > 0 ? (imageIds.size === 1 ? "Attached image" : "Attached images") : "")
   );
 }

@@ -83,6 +83,8 @@ it.effect.each([
   { status: "completed" as const, followUp: "notification", settles: true },
   { status: "completed" as const, followUp: "replayed-notification", settles: true },
   { status: "completed" as const, followUp: "delegated", settles: true },
+  { status: "completed" as const, followUp: "cancelled-delegated", settles: true },
+  { status: "completed" as const, followUp: "stopped-delegated", settles: false },
   { status: "completed" as const, followUp: "failed-notification", settles: false },
   { status: "completed" as const, followUp: "held-notification", settles: true },
   { status: "completed" as const, followUp: "user", settles: false },
@@ -106,6 +108,7 @@ it.effect.each([
       status: "running" as OrchestrationV2Run["status"],
       userMessageId: MessageId.make("follow-up"),
       queueHeld: followUp === "held-notification",
+      startedAt: followUp === "stopped-delegated" ? "2026-01-01T00:00:00Z" : null,
     };
     const dispatched: Array<string> = [];
     // The notification starts after the completed run was observed, before settlement commits.
@@ -138,7 +141,7 @@ it.effect.each([
                       runId: followUpId,
                       role: "user" as const,
                       ...(followUp.endsWith("notification") ? { notification: {} } : {}),
-                      ...(followUp === "delegated" ? { delegatedCompletion: {} } : {}),
+                      ...(followUp.endsWith("delegated") ? { delegatedCompletion: {} } : {}),
                     },
                     { id: MessageId.make("reply"), runId: followUpId, role: "assistant" as const },
                     ...(followUp === "steered-notification"
@@ -202,7 +205,9 @@ it.effect.each([
           ? "failed"
           : followUp === "held-notification"
             ? "queued"
-            : "completed";
+            : followUp.endsWith("ed-delegated")
+              ? "cancelled"
+              : "completed";
       yield* Queue.offer(events, {
         sequence: 1,
         event: { type: "run.updated", threadId, payload: nextRun },

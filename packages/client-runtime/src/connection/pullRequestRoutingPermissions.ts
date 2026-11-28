@@ -7,6 +7,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
+import * as Persistence from "../platform/persistence.ts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import { ConnectionBlockedError, type ConnectionAttemptError } from "./model.ts";
 
@@ -167,3 +168,20 @@ export const makePullRequestRoutingPermissions = Effect.fn("makePullRequestRouti
     });
   },
 );
+
+/** A failure to forget trust is reported as the catalog write that caused it. */
+export const forgetRoutingTrust = (
+  permissions: {
+    readonly forget: (environmentId: EnvironmentId) => Effect.Effect<void, ConnectionAttemptError>;
+  },
+  environmentId: EnvironmentId,
+  operation: "register-connection" | "set-connection-routes",
+) =>
+  permissions
+    .forget(environmentId)
+    .pipe(
+      Effect.mapError(
+        (error) =>
+          new Persistence.ConnectionPersistenceError({ operation, message: error.message }),
+      ),
+    );

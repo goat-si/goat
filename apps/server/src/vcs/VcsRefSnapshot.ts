@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
 const REF_SNAPSHOT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -45,3 +46,18 @@ export const layer = Layer.effect(
     );
   }),
 );
+
+export const refreshMovedRefs = Effect.fn("VcsRefSnapshot.refreshIfMoved")(function* <E>(
+  cwd: string,
+  previous: Ref.Ref<string | null> | undefined,
+  read: (cwd: string) => Effect.Effect<string | null>,
+  refresh: (cwd: string) => Effect.Effect<unknown, E>,
+) {
+  if (previous === undefined) return yield* refresh(cwd);
+  const refs = yield* read(cwd);
+  if (refs === null || refs !== (yield* Ref.get(previous))) {
+    yield* Ref.set(previous, null);
+    yield* refresh(cwd);
+    yield* Ref.set(previous, refs);
+  }
+});

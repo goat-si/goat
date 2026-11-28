@@ -7,6 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ThreadResultService from "../threadResults/ThreadResultService.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -37,6 +38,7 @@ export const layerRecordingTools = (calls: Array<unknown>) => {
       goat_project_update: record,
     }),
   ).pipe(
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(

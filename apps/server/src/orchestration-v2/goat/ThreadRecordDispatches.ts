@@ -145,26 +145,29 @@ export const makeThreadRecordDispatches = (
       events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     ) {
       const projection = yield* projectionStore
-        .getThreadRecords(
-          command.threadId,
-          ["runs", "nodes", "turnItems", "attempts", "providerTurns"],
-          { turnItemTypes: ["secret_request", "human_handoff"], messageRoles: [] },
-        )
+        .getRunCardRecords(command.threadId, command.runId, command.nodeId)
         .pipe(
           Effect.mapError(
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
       const run = projection.runs.find((candidate) => candidate.id === command.runId);
-      if (run === undefined || run.rootNodeId !== command.nodeId) {
+      if (run === undefined) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Run ${command.runId} was not found.`,
+        });
+      }
+      // Each blocking caller owns its one-use ref; only the stable request item ID deduplicates.
+      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
+      if (existing === undefined && run.rootNodeId !== command.nodeId) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
           cause: `Node ${command.nodeId} is not the root of run ${command.runId}.`,
         });
       }
-      // Each blocking caller owns its one-use ref; only the stable request item ID deduplicates.
-      const existing = projection.turnItems.find((item) => item.id === command.turnItemId);
       if (existing !== undefined && existing.type !== "secret_request") {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
@@ -179,6 +182,7 @@ export const makeThreadRecordDispatches = (
           cause: `Secret request ${command.turnItemId} belongs to another run.`,
         });
       }
+      const nodeId = existing?.nodeId ?? command.nodeId;
       const now = yield* DateTime.now;
       if (!existing && command.secretStatus === "pending") {
         const outstanding = projection.turnItems.filter((item) => {
@@ -239,9 +243,13 @@ export const makeThreadRecordDispatches = (
             id: command.turnItemId,
             threadId: command.threadId,
             runId: command.runId,
-            nodeId: command.nodeId,
-            providerThreadId: run.providerThreadId,
-            providerTurnId: providerTurnForRun(projection, run)?.id ?? null,
+            nodeId,
+            providerThreadId:
+              existing === undefined ? run.providerThreadId : existing.providerThreadId,
+            providerTurnId:
+              existing === undefined
+                ? (providerTurnForRun(projection, run)?.id ?? null)
+                : existing.providerTurnId,
             nativeItemRef: null,
             parentItemId: null,
             ordinal: existing?.ordinal ?? (yield* nextTurnItemOrdinal(projection)),
@@ -309,7 +317,7 @@ export const makeThreadRecordDispatches = (
         type: "turn-item.updated",
         threadId: command.threadId,
         runId: command.runId,
-        nodeId: command.nodeId,
+        nodeId,
         providerInstanceId: run.providerInstanceId,
         occurredAt: now,
         payload: turnItem,

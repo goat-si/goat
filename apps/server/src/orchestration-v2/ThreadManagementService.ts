@@ -1458,6 +1458,9 @@ const make = Effect.gen(function* () {
       if (yield* readRestartReceipt(receipts, input, ThreadManagementProjectionLoadError)) {
         return yield* dispatchAndRead(input, input.commandId, { type: "start_immediately" }, true);
       }
+      if (input.mode === "steer" && (yield* hasReceipt(input.commandId))) {
+        return yield* dispatchAndRead(input, input.commandId, { type: "start_immediately" });
+      }
       const sequence = yield* orchestrator.getThreadEventSequence(input.threadId);
       return yield* readDelivery(
         input,
@@ -1473,6 +1476,14 @@ const make = Effect.gen(function* () {
     >["dispatchMode"];
     if (input.mode === "steer" || input.mode === "restart") {
       if (steerableRun === undefined) {
+        if (yield* hasReceipt(input.commandId)) {
+          return yield* dispatchAndRead(
+            input,
+            input.commandId,
+            { type: "start_immediately" },
+            input.mode === "restart",
+          );
+        }
         return yield* new ThreadManagementNoSteerableRunError({
           threadId: input.threadId,
           mode: input.mode,

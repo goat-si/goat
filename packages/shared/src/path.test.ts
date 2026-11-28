@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  isWslSharePath,
   workspaceRelativeFilePath,
   isWindowsShellOs,
   msysDrivePathToWindows,
@@ -57,6 +58,18 @@ describe("path helpers", () => {
   it("folds Vietnamese d-stroke and German sharp s in project names", () => {
     expect(newProjectFolderName("Đường Straße")).toBe("duong-strasse");
   });
+  it("recognizes WSL shares and nothing else", () => {
+    expect(isWslSharePath("\\\\wsl.localhost\\Ubuntu\\home")).toBe(true);
+    expect(isWslSharePath("\\\\wsl$\\Ubuntu")).toBe(true);
+    expect(isWslSharePath(" //WSL.LOCALHOST/Ubuntu/home")).toBe(true);
+    expect(isWslSharePath("\\\\?\\UNC\\wsl.localhost\\Ubuntu\\repo")).toBe(true);
+    expect(isWslSharePath("\\\\.\\UNC\\wsl$\\Ubuntu\\repo")).toBe(true);
+    expect(isWslSharePath("\\\\?\\C:\\work\\repo")).toBe(false);
+    expect(isWslSharePath("\\\\wslserver\\share")).toBe(false);
+    expect(isWslSharePath("\\\\fileserver\\wsl.localhost")).toBe(false);
+    expect(isWslSharePath("C:\\work\\repo")).toBe(false);
+  });
+
   // regression: #17923 literal colons in names are kept, not parsed as positions
   it.each([
     ["report:123", "/workspace", "/workspace/report:123"],
@@ -77,6 +90,11 @@ describe("path helpers", () => {
   it("names a new project's folder from any typed name", () => {
     expect(newProjectFolderName("Pinball Stats")).toBe("pinball-stats");
     expect(newProjectFolderName("  Café & Crème!  ")).toBe("cafe-creme");
+    expect(newProjectFolderName("Đặt tên dự án")).toBe("dat-ten-du-an");
+    expect(newProjectFolderName("Straßenbahn GROẞ")).toBe("strassenbahn-gross");
+    expect(newProjectFolderName("Łódź sklep")).toBe("lodz-sklep");
+    expect(newProjectFolderName("Øl på Þingvellir ı")).toBe("ol-pa-thingvellir-i");
+    expect(newProjectFolderName("Aŉa")).toBe("ana");
     expect(newProjectFolderName("../../etc")).toBe("etc");
     expect(newProjectFolderName("🎱🎱")).toBe("project");
     expect(newProjectFolderName(`${"a".repeat(63)} b`)).toBe("a".repeat(63));
@@ -105,6 +123,7 @@ describe("resolvePastedPath", () => {
     ["over a selection", "/Users/me/old", "'/Users/me/My Code'", "/Users/me/My Code"],
     ["after a prefilled folder", "~/", "~/'/Users/me/My Code'", "/Users/me/My Code"],
     ["plain, after a prefilled folder", "~/", "~//Users/me/code", "/Users/me/code"],
+    ["backslash home, after a folder", "~/", "~/~\\folder\\ child", "~/~\\folder\\ child"],
     ["after a Windows folder", "C:\\Users\\", 'C:\\Users\\"D:\\My Code"', "D:\\My Code"],
     ["a shell's quoted apostrophe", "", "'/Users/me/Bob'\\''s Work'", "/Users/me/Bob's Work"],
     ["after a clone destination", "~/code/repo", "~/code/repo'/a b'", "/a b"],

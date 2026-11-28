@@ -22,6 +22,7 @@ import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalSt
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   isRichTextBoldShortcut,
+  isSidebarToggleShortcut,
   resolveShortcutCommand,
   shortcutLabelForCommand,
 } from "../keybindings";
@@ -359,15 +360,18 @@ export function SidebarControl({
         // the toggle stays available everywhere else.
         return;
       }
-      const command = resolveShortcutCommand(event, keybindings, {
-        context: {
-          terminalFocus: isTerminalFocused(),
-          previewFocus: isPreviewFocused(),
-          ...readRoutePanelsOpen(router),
-          usagePageOpen,
-        },
-      });
-      if (command !== "sidebar.toggle" && command !== "sidebar.toggleActivity") return;
+      const context = {
+        terminalFocus: isTerminalFocused(),
+        previewFocus: isPreviewFocused(),
+        ...readRoutePanelsOpen(router),
+        usagePageOpen,
+      };
+      const command = resolveShortcutCommand(event, keybindings, { context });
+      if (command === "sidebar.toggle") {
+        if (!isSidebarToggleShortcut(event, keybindings, { context })) return;
+      } else if (command !== "sidebar.toggleActivity" || (event.ctrlKey && context.terminalFocus)) {
+        return;
+      }
 
       event.preventDefault();
       event.stopPropagation();

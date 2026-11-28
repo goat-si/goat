@@ -27,13 +27,41 @@ describe("SSH preparation retry policy", () => {
     assert.isFalse(isTransientPreparationFailure(sshFailure(1, "unsupported platform")));
   });
 
-  it("backs off exponentially with jitter up to a one-minute cap", () => {
+  it("backs off exponentially with jitter up to a ten-minute cap", () => {
     assert.equal(preparationRetryDelayMs(0, 0), 1_000);
     assert.equal(preparationRetryDelayMs(0, 1), 2_000);
     assert.equal(preparationRetryDelayMs(1, 1), 4_000);
-    assert.equal(preparationRetryDelayMs(10, 1), 60_000);
-    assert.equal(preparationRetryDelayMs(10, 0), 30_000);
+    assert.equal(preparationRetryDelayMs(10, 1), 600_000);
+    assert.equal(preparationRetryDelayMs(10, 0), 300_000);
   });
+
+  it.effect("reduces repeated unreachable attempts and resets after success", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      let attempts = 0;
+      let succeeds = false;
+      const retries = makePreparationRetries({
+        scope,
+        wanted: () => true,
+        attempt: () =>
+          Effect.suspend(() => {
+            attempts++;
+            return succeeds ? Effect.void : Effect.fail(timedOut);
+          }),
+      });
+      yield* retries.failed("devbox", 1, timedOut, uploadTarget);
+      yield* TestClock.adjust("1 hour");
+      assert.isBelow(attempts, 30);
+      succeeds = true;
+      yield* TestClock.adjust("10 minutes");
+      assert.isUndefined(retries.refusal("devbox", "devbox"));
+      const previous = attempts;
+      yield* retries.failed("devbox", 1, timedOut, uploadTarget);
+      yield* TestClock.adjust("2 seconds");
+      assert.equal(attempts, previous + 1);
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
 
   it.effect(
     "keeps retrying transient failures and stops on success, a lasting failure, or cancel",

@@ -8,6 +8,7 @@ import type {
   VcsStatusLocalResult,
   VcsStatusRemoteResult,
   VcsStatusResult,
+  VcsRefreshStatusResult,
   VcsStatusStreamEvent,
   VcsStatusSubscriptionInput,
 } from "@goat/contracts";
@@ -35,7 +36,7 @@ export class VcsStatusBroadcaster extends Context.Service<
     readonly refreshStatus: (
       cwd: string,
       options?: { readonly localOnly?: boolean },
-    ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
+    ) => Effect.Effect<VcsRefreshStatusResult, GitManagerServiceError>;
     readonly refreshPullRequestStatus: (
       cwd: string,
     ) => Effect.Effect<VcsStatusRemoteResult | null, GitManagerServiceError>;

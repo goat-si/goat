@@ -1,3 +1,4 @@
+import { withSocketHeartbeat } from "../socketHeartbeat.ts";
 import { requestUrl } from "../requestUrl.ts";
 import {
   SOCKET_FRAME_PARTS_QUERY_PARAM,
@@ -13,13 +14,17 @@ export function withSocketFrameParts<A, E, R>(
   program: Effect.Effect<A, E, R>,
 ) {
   const url = requestUrl(request);
-  if (url._tag === "None" || !url.value.searchParams.has(SOCKET_FRAME_PARTS_QUERY_PARAM))
-    return program;
+  const splitFrames =
+    url._tag === "Some" && url.value.searchParams.has(SOCKET_FRAME_PARTS_QUERY_PARAM);
   return program.pipe(
     Effect.provideService(
       HttpServerRequest.HttpServerRequest,
       Object.create(request, {
-        upgrade: { value: Effect.map(request.upgrade, splitLargeSocketFrames) },
+        upgrade: {
+          value: Effect.map(request.upgrade, (socket) =>
+            withSocketHeartbeat(splitFrames ? splitLargeSocketFrames(socket) : socket),
+          ),
+        },
       }),
     ),
   );

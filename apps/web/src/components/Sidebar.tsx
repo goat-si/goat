@@ -1,3 +1,4 @@
+import { createSidebarNewThreadHandler } from "./sidebar/scopedNewThread";
 import { olderSettledScopes } from "./sidebar/olderSettledScopes";
 import { scrollSidebarToTop, threadShellKey } from "./sidebar/sidebarKeys";
 import { SidebarEmptyState } from "./sidebar/SidebarEmptyState";
@@ -110,7 +111,6 @@ import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -2739,22 +2739,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const showJumpHints = useThreadJumpHintsVisible(keybindings, routeThreadRef);
 
-  // Shift+click keeps the current-project action.
-  const handleNewThreadClick = (event?: ReactMouseEvent) => {
-    if (isMobile) setOpenMobile(false);
-    if (event?.shiftKey) {
-      void startNewThreadFromContext({
-        activeDraftThread: newThreadContext.activeDraftThread,
-        activeThread: newThreadContext.activeThread ?? undefined,
-        defaultProjectRef: newThreadContext.defaultProjectRef,
-        handleNewThread,
-      }).then((started) => {
-        if (!started) openCommandPalette({ open: "new-thread-in" });
-      });
-      return;
-    }
-    void startChatNew();
-  };
+  const handleNewThreadClick = createSidebarNewThreadHandler({
+    context: newThreadContext,
+    groups: scopedProjectGroups,
+    isMobile,
+    closeMobile: () => setOpenMobile(false),
+    startChatNew,
+  });
 
   // The button mirrors chat.new; chat.newLocal keeps the contextual action.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
@@ -2776,6 +2767,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 hasProjects={projectGroups.length > 0}
                 projectScope={
                   <SidebarProjectScope
+                    onAddProject={openAddProjectCommandPalette}
                     projectGroups={projectGroups}
                     scopedProjectGroups={scopedProjectGroups}
                     projectScopeKeys={projectScopeKeys}
@@ -2786,7 +2778,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     environmentMachineById={environmentMachineById}
                   />
                 }
-                onNewProject={openAddProjectCommandPalette}
                 onNewThread={handleNewThreadClick}
                 newThreadDisabled={projects.length === 0}
                 newThreadShortcutLabel={newThreadShortcutLabel}

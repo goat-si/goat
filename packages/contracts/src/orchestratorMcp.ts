@@ -165,7 +165,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Options from `goat_provider_list`, such as {effort:'max'}. Given values override inherited. [] or {} clears.",
+        "Ids vary by provider; see `goat_provider_list`. Given values override inherited. [] or {} clears.",
     }),
   ),
 });

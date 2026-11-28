@@ -972,6 +972,45 @@ html[data-published-background] [data-workspace-area="conversation"] {
   will-change: var(--visible-animation-will-change, auto);
 }
 
+/* Stepped sidebar spinner: updates 10 times/sec instead of every vsync, pauses when off-screen
+   or hidden, and isolates paint/layout so rotating glyphs do not trigger outer repaints. */
+@utility visible-animate-sidebar-spin {
+  display: block;
+  animation: spin 1.6s steps(16, end) infinite;
+  animation-play-state: var(--visible-animation-state, paused);
+  will-change: var(--visible-animation-will-change, auto);
+  contain: layout paint;
+}
+
+@utility visible-animate-status-pulse {
+  animation: var(--animate-status-pulse);
+  animation-play-state: var(--visible-animation-state, paused);
+}
+
+/* Skip GPU backdrop-filter passes when transparency is solid or reduced. */
+html[data-glass-solid] {
+  [data-slot="composer-shell"]::before,
+  [data-slot="composer-context-strip"]::before,
+  [data-composer-banner-surface]::before,
+  [data-chat-composer-main-surface],
+  [data-slot="composer-banner-peek"] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :is(.surface-glass, .alert-glass, .dialog-glass, .dialog-backdrop, .dropdown-glass),
+  [data-slot="composer-shell"]::before,
+  [data-slot="composer-context-strip"]::before,
+  [data-composer-banner-surface]::before,
+  [data-chat-composer-main-surface],
+  [data-slot="composer-banner-peek"] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 @keyframes live-activity-focus {
   0% {
     transform: translateX(0);

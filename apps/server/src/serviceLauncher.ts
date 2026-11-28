@@ -46,6 +46,7 @@ import {
   type DatabaseSnapshot,
   type BackupSpaceProbe,
 } from "./serviceLauncherDatabase.ts";
+import { appendOutput, isRegularFile } from "./serviceLauncherOutput.ts";
 import { stateDirOwner } from "./serviceLauncherOwner.ts";
 import { acquireServiceServingLock } from "./serviceServingLock.ts";
 import { removeServiceUpdateHandoff, SERVICE_PREPARED_TIMEOUT_MS } from "./serviceUpdateHandoff.ts";
@@ -475,6 +476,8 @@ export class Launcher {
         : {}),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
+    const appendStdout = isRegularFile(1);
+    const appendStderr = isRegularFile(2);
     const spawned = Promise.withResolvers<void>();
     // Fails the start until the child spawns; afterwards an error is queued like its other events.
     let onChildError: ErrorRoute = spawned.reject;
@@ -484,10 +487,17 @@ export class Launcher {
           ...this.#environment,
           ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
         },
-        stdio: ["inherit", "inherit", "inherit", "ipc"],
+        stdio: [
+          "inherit",
+          appendStdout ? "pipe" : "inherit",
+          appendStderr ? "pipe" : "inherit",
+          "ipc",
+        ],
       }),
       (error) => onChildError(error),
     );
+    if (child.stdout !== null) appendOutput(child.stdout, 1);
+    if (child.stderr !== null) appendOutput(child.stderr, 2);
     child.once("spawn", () => {
       onChildError = (error) => this.#enqueue(() => Promise.reject(error));
       spawned.resolve();

@@ -60,7 +60,6 @@ import {
   type DesktopWslState,
   type EnvironmentId,
   SourceControlProviderKind,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
   resolveEnvironmentMachineKind,
 } from "@goat/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -118,7 +117,11 @@ import { useGoatBotPaletteNewBot } from "./goatBot/goatBotPaletteNewBot";
 import { GoatBotTemplatePicker } from "./goatBot/GoatBotTemplatePicker";
 import { useAtomValue } from "@effect/atom-react";
 
-import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
+import {
+  desktopLocalBackendId,
+  isDesktopLocalConnectionTarget,
+  readDesktopPrimaryBootstrap,
+} from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useSshWorkspaceFetchBack } from "~/hooks/useSshWorkspaceFetchBack";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -132,7 +135,6 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useTheme } from "../hooks/useTheme";
 import { readLocalApi } from "../localApi";
-import { desktopLocalBackendId } from "../connection/desktopLocal";
 import { filesystemEnvironment, useFilesystemReadAccess } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
@@ -2261,7 +2263,7 @@ function OpenCommandPaletteDialog(props: {
           cloneDirectoryName: pinnedCloneDirectoryName,
           caseSensitive: !isWindowsPlatform(browseEnvironmentPlatform),
         })
-      : appendBrowsePathSegment(query, name);
+      : appendBrowsePathSegment(browsePath.directoryPath, name);
     await browseNavigation.run(
       () => prefetchBrowsePath(getBrowseDirectoryPath(nextQuery)),
       () => {
@@ -2679,7 +2681,7 @@ function OpenCommandPaletteDialog(props: {
         void browseTo(completion.name);
       } else if (completion && !pinnedCloneDirectoryName) {
         setHighlightedItemValue(null);
-        setQuery(`${getBrowseDirectoryPath(query)}${completion.name}`);
+        setQuery(`${browsePath.directoryPath}${completion.name}`);
       }
       return;
     }
@@ -2789,11 +2791,7 @@ function OpenCommandPaletteDialog(props: {
       }
       let primaryRunningDistro: string | null = null;
       try {
-        primaryRunningDistro =
-          window.desktopBridge
-            ?.getLocalEnvironmentBootstraps()
-            .find((bootstrap) => bootstrap.id === PRIMARY_LOCAL_ENVIRONMENT_ID)?.runningDistro ??
-          null;
+        primaryRunningDistro = readDesktopPrimaryBootstrap()?.runningDistro ?? null;
       } catch {}
       const selection = resolveWslProjectSelection(
         pickedPath,

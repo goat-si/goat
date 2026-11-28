@@ -1,4 +1,5 @@
 import { synchronizeSidebarSpinner } from "./sidebarSpinner";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useSidebarBranch, withoutRemovedCheckout } from "./useSidebarBranch";
 import { JumpHintBadge } from "./SidebarJumpHintBadge";
 import { sidebarWorkingLabel } from "./sidebarWorkingLabel";
@@ -1291,11 +1292,11 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                           )}
                         >
                           {topStatus.icon === "working" ? (
-                            // oxlint-disable shadcn/no-arbitrary-values -- The sidebar spinner turns smoothly once every 1.6s.
                             <svg
+                              ref={observeVisibleAnimation}
                               aria-hidden
                               viewBox="0 0 16 16"
-                              className="size-3.5 shrink-0 animate-[spin_1.6s_linear_infinite] motion-reduce:animate-none"
+                              className="size-3.5 shrink-0 motion-safe:visible-animate-sidebar-spin motion-reduce:animate-none"
                               onAnimationStart={synchronizeSidebarSpinner}
                               fill="none"
                             >
@@ -1314,8 +1315,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                                 strokeLinecap="round"
                               />
                             </svg>
-                          ) : // oxlint-enable shadcn/no-arbitrary-values
-                          topStatus.icon === "waiting" ? (
+                          ) : topStatus.icon === "waiting" ? (
                             <CircleDotIcon aria-hidden className="size-3.5 shrink-0" />
                           ) : topStatus.icon === "input" ? (
                             <MessageCircleQuestionIcon aria-hidden className="size-4 shrink-0" />

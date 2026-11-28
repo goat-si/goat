@@ -193,6 +193,39 @@ it.effect(
     ),
 );
 
+it.effect("opens a new secret card when a later run reuses a clientRequestId", () =>
+  withRunningTurn(({ orchestrator, worker, requestSecret }) =>
+    Effect.gen(function* () {
+      yield* requestSecret(scope, input);
+      yield* requestSecret(scope, input);
+      yield* orchestrator.dispatch({
+        type: "thread.stop",
+        commandId: CommandId.make("stop"),
+        threadId,
+      });
+      yield* worker.drain();
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("start-run-again"),
+        threadId,
+        messageId: MessageId.make("message:secret-tool-again"),
+        text: "Continue",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* worker.drain();
+      expect(yield* requestSecret(scope, input)).toMatchObject({ status: "pending" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toHaveLength(2);
+      expect(cards[0]?.id).not.toEqual(cards[1]?.id);
+    }),
+  ),
+);
+
 it.effect("refuses wait:false without a clientRequestId, which the next call would need", () =>
   withRunningTurn(({ orchestrator, requestSecret }) =>
     Effect.gen(function* () {

@@ -78,6 +78,7 @@ import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { waitForTunnelReady } from "./tunnelForwardReadiness.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
+import { cancelForwardInUserMaster, forwardSharingArgs } from "./userMasterForward.ts";
 import { admitLive } from "./tunnelAttachment.ts";
 import {
   SSH_READY_PROBE_TIMEOUT_MS,
@@ -1631,6 +1632,9 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   );
   let master = yield* healthySshMaster(input.resolvedTarget);
   const platform = yield* HostProcess.Platform;
+  const sharing = yield* SshConnectionSharing;
+  const configuration = sharing?.configurations.get(input.resolvedTarget.alias);
+  const forward = `${input.localPort}:127.0.0.1:${input.remotePort}`;
   const args = [
     ...SSH_DIAGNOSTIC_ARGS,
     ...baseSshArgs(input.resolvedTarget, {
@@ -1638,17 +1642,12 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
     }),
     "-o",
     "ExitOnForwardFailure=yes",
-    "-o",
-    "ControlMaster=no",
-    "-o",
-    "ControlPath=none",
-    "-o",
-    "ControlPersist=no",
+    ...forwardSharingArgs(configuration, platform, input.resolvedTarget),
     ...SSH_KEEPALIVE_ARGS,
     "-n",
     "-N",
     "-L",
-    `${input.localPort}:127.0.0.1:${input.remotePort}`,
+    forward,
     "--",
     hostSpec,
   ];
@@ -1667,7 +1666,6 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
   });
   if (master !== undefined) {
     const connection = master;
-    const forward = `${input.localPort}:127.0.0.1:${input.remotePort}`;
     const added = yield* runSshCommand(input.resolvedTarget, {
       ...input.authOptions,
       preHostArgs: [
@@ -1699,6 +1697,15 @@ const startSshTunnelAttempt = Effect.fn("ssh/tunnel.startSshTunnel")(function* (
       );
     }
   }
+  if (master === undefined)
+    yield* cancelForwardInUserMaster({
+      scope,
+      target: input.resolvedTarget,
+      auth: input.authOptions,
+      forward,
+      configuration,
+      platform,
+    });
   const child =
     master !== undefined
       ? { ...master.process, stderr: Stream.empty, kill: () => Effect.void }

@@ -105,6 +105,7 @@ export const makeCloudflareApiGate = (alchemyRuntimeContext: Alchemy.BaseRuntime
     });
     return <A, E>(
       call: Effect.Effect<A, E, Alchemy.RuntimeContext>,
+      timeout: Duration.Input = "8 seconds",
     ): Effect.Effect<A, E | CloudflareApiPaused | Cause.TimeoutError> =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
@@ -123,7 +124,7 @@ export const makeCloudflareApiGate = (alchemyRuntimeContext: Alchemy.BaseRuntime
         }
         return yield* call.pipe(
           Effect.provideService(CloudflareRetry.Retry, withoutRateLimitRetries),
-          Effect.timeout("8 seconds"),
+          Effect.timeout(timeout),
           Effect.tapError((cause) =>
             isCloudflareRateLimited(cause) ? recordRateLimit(cause) : Effect.void,
           ),

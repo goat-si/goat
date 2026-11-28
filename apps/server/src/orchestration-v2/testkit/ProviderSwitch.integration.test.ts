@@ -1054,7 +1054,7 @@ describe("orchestration v2 provider switching", () => {
               ["completed", "failed", "completed", "completed"],
             );
             const run4NativeThreadId = (yield* Ref.get(capturedTurns)).at(-1)?.nativeThreadId;
-            assert.equal(
+            assert.notEqual(
               projection.contextHandoffs.find(
                 (handoff) => handoff.targetRunId === projection.runs[1]?.id,
               )?.delivery?.nativeThreadId,

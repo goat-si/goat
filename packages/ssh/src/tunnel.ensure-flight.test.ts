@@ -20,6 +20,62 @@ import { uploadTarget } from "./tunnel.fixture.ts";
 import { SshEnvironmentManager } from "./tunnel.ts";
 
 describe("real manager preparation sharing", () => {
+  it.effect("equivalent unresolved and explicit targets share one acquisition and tunnel", () =>
+    Effect.gen(function* () {
+      const f = yield* makeEnsureFlightFixture;
+      yield* Effect.gen(function* () {
+        const manager = yield* SshEnvironmentManager;
+        const first = yield* manager
+          .ensureEnvironment({ ...uploadTarget, username: null, port: null })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(f.uploadEntered);
+        const admissions = yield* Queue.unbounded<PreparationAdmission>();
+        const second = yield* manager
+          .ensureEnvironment(uploadTarget, {
+            onPreparationAdmission: (admission) => {
+              Queue.offerUnsafe(admissions, admission);
+            },
+          })
+          .pipe(Effect.forkChild);
+        assert.equal((yield* Queue.take(admissions)).disposition, "join");
+        yield* Deferred.succeed(f.releaseUpload, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        assert.equal(f.count.launches, 1);
+        assert.equal(f.count.forwards, 1);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
+  );
+
+  it.effect("disconnect with explicit identity supersedes an unresolved ensure", () =>
+    Effect.gen(function* () {
+      const f = yield* makeEnsureFlightFixture;
+      yield* Effect.gen(function* () {
+        const manager = yield* SshEnvironmentManager;
+        const terminal = yield* Deferred.make<void>();
+        const caller = yield* Effect.exit(
+          manager.ensureEnvironment(
+            { ...uploadTarget, username: null, port: null },
+            {
+              onPreparationProgress: (p) => {
+                if (p.outcome === "superseded") Deferred.doneUnsafe(terminal, Exit.void);
+              },
+            },
+          ),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(f.uploadEntered);
+        const disconnect = yield* manager
+          .disconnectEnvironment(uploadTarget)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(terminal);
+        yield* Deferred.succeed(f.releaseUpload, undefined);
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(caller)));
+        yield* Fiber.join(disconnect);
+        assert.equal(f.count.forwards, 0);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)), Effect.scoped),
+  );
+
   it.effect("returns a savable alias that follows later SSH config port changes", () =>
     Effect.gen(function* () {
       const f = yield* makeEnsureFlightFixture;

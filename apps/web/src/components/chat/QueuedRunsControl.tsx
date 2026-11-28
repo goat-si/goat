@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -325,7 +326,9 @@ export function QueuedRunsControl({
               const previewText = isAttachmentOnlyBootstrapPrompt(item.text)
                 ? ""
                 : assistantCitationsToPlainText(
-                    replaceComposerContextReferences(item.text, (reference) => reference.label),
+                    composerFileLinksToPlainText(
+                      replaceComposerContextReferences(item.text, (reference) => reference.label),
+                    ),
                   ).trim();
               const rowRunId = item.runId;
               const rowServerIndex = item.serverIndex;

@@ -3,6 +3,7 @@ import { useGT } from "gt-react";
 import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
 import { Spinner } from "~/components/ui/spinner";
@@ -2321,8 +2322,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 >
                   <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                     <span
+                      ref={projectStatus.pulse ? observeVisibleAnimation : undefined}
                       className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                        projectStatus.pulse ? "motion-safe:animate-status-pulse" : ""
+                        projectStatus.pulse ? "motion-safe:visible-animate-status-pulse" : ""
                       }`}
                     />
                   </span>

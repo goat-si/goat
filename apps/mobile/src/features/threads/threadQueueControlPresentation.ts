@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import type { EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import {
@@ -48,7 +49,9 @@ export function resolveThreadQueueRowControls(input: {
     displayText: isAttachmentOnlyBootstrapPrompt(input.text)
       ? ""
       : assistantCitationsToPlainText(
-          replaceComposerContextReferences(input.text, (reference) => reference.label),
+          composerFileLinksToPlainText(
+            replaceComposerContextReferences(input.text, (reference) => reference.label),
+          ),
         ).trim(),
     isEditing,
   };

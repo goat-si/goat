@@ -1390,15 +1390,10 @@ export function pullRequestMatchesSearchQuery(
   return normalizedQuery.split(" ").every((token) => haystack.includes(token));
 }
 
-export function filterSidebarProjectScopeItems<TItem extends { readonly value: string }>(input: {
-  items: readonly TItem[];
-  query: string;
-  matches: (item: TItem, query: string) => boolean;
-}): readonly TItem[] {
-  const query = input.query.trim();
-  if (query.length === 0) return input.items;
-  return input.items.filter((item) => item.value !== "all" && input.matches(item, query));
-}
+export {
+  ADD_PROJECT_SCOPE_ITEM_VALUE,
+  filterSidebarProjectScopeItems,
+} from "./SidebarProjectScopeFilter";
 
 export interface SidebarProjectScopeMenuState {
   readonly open: boolean;

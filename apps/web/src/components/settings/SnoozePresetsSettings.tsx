@@ -224,7 +224,7 @@ function SnoozePresetList(props: {
   const now = new Date(`${nowMinute}Z`);
   const locale = useLocale();
   const formatTime = (date: Date) =>
-    formatShortTimestamp(date.toISOString(), props.timestampFormat);
+    formatShortTimestamp(date.toISOString(), props.timestampFormat, locale);
   const formatLabel = useSnoozePresetLabel();
   const seenIds = new Set<string>();
   const seenWakes = new Set<string>();

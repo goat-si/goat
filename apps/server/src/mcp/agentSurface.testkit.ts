@@ -329,7 +329,9 @@ const inertDependencies = Layer.mergeAll(
 );
 // goatclaw off: the capability gate admits every call, so handlers decide access.
 const servicesOff = Layer.mergeAll(layerPermissionProfilesOff, inertDependencies);
-const settingsOff = Layer.mock(Settings.ServerSettingsService)({});
+const settingsOff = Layer.mock(Settings.ServerSettingsService)({
+  getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+});
 export const dependencies = Layer.mergeAll(servicesOff, settingsOff);
 
 export const dependenciesWithPullRequests = (

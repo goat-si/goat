@@ -9,6 +9,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { makeThreadProjectionFixture } from "../test-fixtures";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
@@ -20,11 +21,24 @@ const LOCAL = EnvironmentId.make("local");
 const REMOTE = EnvironmentId.make("remote");
 
 type Status = "running" | "starting" | "preparing" | "queued" | "waiting" | "idle";
-function shell(id: string, status: Status | null) {
-  return { id: ThreadId.make(id), status: status ?? "idle" } satisfies Pick<
+type ShellOverrides = Partial<
+  Pick<
     OrchestrationV2ThreadShell,
-    "id" | "status"
-  >;
+    | "lineage"
+    | "archivedAt"
+    | "deletedAt"
+    | "creationSource"
+    | "launchedBy"
+    | "lastVisitedAt"
+    | "createdAt"
+  >
+>;
+function shell(id: string, status: Status | null, overrides: ShellOverrides = {}) {
+  return {
+    id: ThreadId.make(id),
+    status: status ?? "idle",
+    ...overrides,
+  } satisfies Pick<OrchestrationV2ThreadShell, "id" | "status"> & ShellOverrides;
 }
 function detail(id: string, status: Status, overrides: Partial<EnvironmentThreadState> = {}) {
   const projection = makeThreadProjectionFixture();
@@ -63,7 +77,7 @@ function detail(id: string, status: Status, overrides: Partial<EnvironmentThread
   });
 }
 
-function makeHarness() {
+function makeHarness(options?: { readonly maxKeptThreads?: number }) {
   const tasks: Array<() => void> = [];
   const registry = AtomRegistry.make({
     scheduleTask: (task) => {
@@ -95,6 +109,7 @@ function makeHarness() {
     environmentIdsAtom: environmentIds,
     threadsAtom: threads,
     stateAtom,
+    ...(options?.maxKeptThreads === undefined ? {} : { maxKeptThreads: options.maxKeptThreads }),
   });
   registry.mount(keepAlive);
   return {
@@ -165,5 +180,69 @@ describe("createRunningThreadKeepAliveAtom", () => {
     expect(h.openStreams()).toEqual(["remote:d"]);
     h.registry.set(h.environmentIds, [LOCAL]);
     expect(h.openStreams()).toEqual([]);
+  });
+
+  it("excludes subagents, mcp, delegated-task, channel-worker, goat-bot, and archived threads", () => {
+    const h = makeHarness();
+    h.registry.set(h.threads(LOCAL), [
+      shell("user-1", "running"),
+      shell("sub-1", "running", {
+        lineage: {
+          parentThreadId: ThreadId.make("user-1"),
+          relationshipToParent: "subagent",
+          rootThreadId: ThreadId.make("user-1"),
+        },
+      }),
+      shell("mcp:worker-1", "running"),
+      shell("ordinary-mcp", "running", { creationSource: "mcp" }),
+      shell("thread:delegated-task:abc", "running"),
+      shell("delegated-by-launcher", "running", {
+        launchedBy: {
+          kind: "launch",
+          via: "delegate_task",
+          threadId: ThreadId.make("user-1"),
+          environmentId: LOCAL,
+          environmentLabel: null,
+          threadTitle: null,
+        },
+      }),
+      shell("channel-worker:abc", "running"),
+      shell("remote-channel-worker:abc", "running"),
+      shell("channel-bot:main", "running"),
+      shell("goat-bot-session:abc", "running"),
+      shell("archived-1", "running", {
+        archivedAt: DateTime.makeUnsafe("2026-11-28T00:00:00.000Z"),
+      }),
+      shell("deleted-1", "running", {
+        deletedAt: DateTime.makeUnsafe("2026-11-28T00:00:00.000Z"),
+      }),
+    ]);
+
+    expect(h.openStreams()).toEqual(["local:user-1"]);
+  });
+
+  it("caps concurrently kept-alive streams and prioritizes recently visited user threads", () => {
+    const h = makeHarness({ maxKeptThreads: 2 });
+    h.registry.set(h.threads(LOCAL), [
+      shell("older-visited", "running", {
+        lastVisitedAt: DateTime.makeUnsafe("2026-11-28T01:00:00.000Z"),
+        createdAt: DateTime.makeUnsafe("2026-11-28T00:00:00.000Z"),
+      }),
+      shell("never-visited", "running", {
+        createdAt: DateTime.makeUnsafe("2026-11-28T02:00:00.000Z"),
+      }),
+      shell("newest-visited", "running", {
+        lastVisitedAt: DateTime.makeUnsafe("2026-11-28T03:00:00.000Z"),
+        createdAt: DateTime.makeUnsafe("2026-11-28T00:00:00.000Z"),
+      }),
+    ]);
+    h.registry.set(h.threads(REMOTE), [
+      shell("remote-visited", "running", {
+        lastVisitedAt: DateTime.makeUnsafe("2026-11-28T02:30:00.000Z"),
+        createdAt: DateTime.makeUnsafe("2026-11-28T00:00:00.000Z"),
+      }),
+    ]);
+
+    expect(h.openStreams()).toEqual(["local:newest-visited", "remote:remote-visited"]);
   });
 });

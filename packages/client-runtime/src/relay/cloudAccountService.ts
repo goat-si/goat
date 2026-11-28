@@ -8,11 +8,21 @@ import { reportAtomCommandResult, settlePromise } from "../state/runtime.ts";
 export interface CloudAccountSource {
   readonly addListener: (
     listener: (resources: {
+      readonly client?: { readonly id?: string | null | undefined } | null | undefined;
       readonly user?: { readonly id: string } | null | undefined;
       readonly session?: { readonly status: string } | null | undefined;
     }) => void,
   ) => () => void;
 }
+
+/**
+ * Clerk's load status cannot prove its API answered: offline it emits an
+ * id-less client, and a failed launch fetch emits a "client_init" placeholder
+ * built from the session cookie. Only a real /v1/client response has an id.
+ */
+const isClientFromClerkApi = (
+  client: { readonly id?: string | null | undefined } | null | undefined,
+) => Boolean(client?.id) && client?.id !== "client_init";
 
 interface CloudAccountSignIn {
   readonly _tag: "SignIn";
@@ -35,7 +45,8 @@ export type CloudAccountStep =
 /**
  * `previous` is undefined until Clerk's first emission. A first emission that
  * is signed out still cleans up, so data left by an account that signed out
- * while the app was closed does not linger.
+ * while the app was closed does not linger. The service only plans that step
+ * once Clerk's API has confirmed the sign-out.
  */
 export function planCloudAccountStep(
   previous: string | null | undefined,
@@ -201,10 +212,16 @@ export function createCloudAccountService<S extends CloudAccountSource>(
         source,
         unsubscribe: source.addListener((resources) => {
           if (resources.user === undefined) return;
-          observe(
-            source,
-            resources.session?.status === "active" ? (resources.user?.id ?? null) : null,
-          );
+          const next = resources.session?.status === "active" ? (resources.user?.id ?? null) : null;
+          // An unreachable Clerk API at launch must not erase saved environments.
+          if (
+            resources.user === null &&
+            state._tag === "Unobserved" &&
+            !isClientFromClerkApi(resources.client)
+          ) {
+            return;
+          }
+          observe(source, next);
         }),
       };
       attached = current;

@@ -197,6 +197,17 @@ it.effect.each(["on a branch", "detached", "unborn"] as const)(
           general.sources.find((source) => source.kind === "branch-range")!.headRef,
           state === "detached" ? "HEAD" : yield* git(cwd, ["branch", "--show-current"]),
         );
+        const mergeBase = general.sources.find(
+          (source) => source.kind === "branch-range",
+        )!.mergeBase;
+        assert.isDefined(mergeBase);
+        spawnedArgs.length = 0;
+        yield* driver.getReviewDiffPreview({
+          cwd,
+          mergeBase,
+          file: { path: "new.txt", previousPath: null, sourceKind: "branch-range" },
+        });
+        assert.isFalse(spawnedArgs.some((args) => args.includes("merge-base")));
       }),
     ).pipe(Effect.provide(layerTest)),
 );
@@ -567,6 +578,11 @@ it.effect.each([
     stderr: "error: fetching ref refs/remotes/origin/main failed: reference already exists",
     expected: "could not update a local reference",
     attempts: 2,
+  },
+  {
+    name: "broken local ref",
+    stderr: "fatal: bad object refs/remotes/origin/dev 2",
+    expected: "broken local ref",
   },
   {
     name: "unrelated remote chatter",
@@ -2771,7 +2787,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, "nested/untracked.txt", "one\ntwo\n");
         yield* writeTextFile(cwd, "new [1].txt", "literal\n");
 
-        const status = yield* driver.statusDetailsLocal(pathService.join(cwd, "nested"), {
+        const nested = pathService.join(cwd, "nested");
+        const alias = pathService.join(yield* makeTmpDir(), "alias");
+        const platform = yield* HostProcess.Platform;
+        yield* Effect.promise(() =>
+          NodeFS.promises.symlink(nested, alias, platform === "win32" ? "junction" : "dir"),
+        );
+        const status = yield* driver.statusDetailsLocal(alias, {
           includeBranchChanges: true,
         });
         assert.deepStrictEqual(status.branchChanges, {
@@ -2779,6 +2801,8 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           insertions: 4,
           deletions: 0,
         });
+        yield* driver.ensureRemote({ cwd: alias, preferredName: "origin", url: cwd });
+        assert.isTrue((yield* driver.statusDetailsLocal(alias)).hasOriginRemote);
         assert.isUndefined((yield* driver.statusDetailsLocal(cwd)).branchChanges);
       }),
     );
@@ -4426,6 +4450,23 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           null,
         );
         assert.equal(yield* fileSystem.exists(pathService.join(cwd, ".git/config.lock")), true);
+      }),
+    );
+
+    it.effect("reports a rename as done when Git moved the ref but kept the config locked", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "-b", "goat/abcd1234"]);
+        yield* writeTextFile(cwd, ".git/config.lock", "");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const renamed = yield* TestClock.withLive(
+          driver.renameBranch({ cwd, oldBranch: "goat/abcd1234", newBranch: "goat/fix-login" }),
+        );
+
+        assert.equal(renamed.branch, "goat/fix-login");
+        assert.equal(yield* git(cwd, ["branch", "--show-current"]), "goat/fix-login");
       }),
     );
 

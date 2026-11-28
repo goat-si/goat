@@ -11,8 +11,26 @@ const REF_MOVE_REFLOG_SUBJECT =
 /** Paths a turn wrote between two checkpoints, leaving out what moving HEAD brought in. */
 export const makeListAuthoredPaths = (
   execute: VcsDriver.VcsDriver["Service"]["execute"],
-): VcsDriver.VcsCheckpointOps["listAuthoredPaths"] =>
-  Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {
+): VcsDriver.VcsCheckpointOps["listAuthoredPaths"] => {
+  let remergeDiffSupported: boolean | undefined;
+  const supportsRemergeDiff = Effect.fn("GitVcsDriver.supportsRemergeDiff")(function* (
+    cwd: string,
+  ) {
+    if (remergeDiffSupported === undefined) {
+      const version = yield* execute({
+        operation: "GitVcsDriver.version",
+        cwd,
+        args: ["version"],
+      }).pipe(Effect.option);
+      if (version._tag === "None") return false;
+      const match = /^git version (\d+)\.(\d+)/.exec(version.value.stdout);
+      remergeDiffSupported =
+        match !== null &&
+        (Number(match[1]) > 2 || (Number(match[1]) === 2 && Number(match[2]) >= 36));
+    }
+    return remergeDiffSupported;
+  });
+  return Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {
     const operation = "GitVcsDriver.checkpoints.listAuthoredPaths";
     const turnStart = yield* resolveTurnStart(execute, input);
     const heads = yield* execute({
@@ -103,12 +121,54 @@ export const makeListAuthoredPaths = (
     });
 
     // Remerge diffs retain merge conflict fixes while excluding clean upstream changes.
+    // Older Git gets dense combined diffs, which miss a conflict resolved to one side's
+    // version, so it also keeps every path more than one parent changed since the merge base.
+    const remerge = yield* supportsRemergeDiff(input.cwd);
+    const listMergeSharedPaths = (args: ReadonlyArray<string>, stdin?: string) =>
+      listLines(["rev-list", "--merges", "--parents", ...args], stdin).pipe(
+        Effect.flatMap((merges) =>
+          Effect.forEach(
+            merges,
+            Effect.fnUntraced(function* (merge) {
+              const parents = merge.split(" ").slice(1);
+              const [base] = yield* listLines(["merge-base", "--octopus", ...parents]).pipe(
+                // Unrelated histories have no merge base; the combined diff still applies.
+                Effect.orElseSucceed((): ReadonlyArray<string> => []),
+              );
+              if (base === undefined) return [];
+              const changed = yield* Effect.forEach(
+                parents,
+                (parent) => listPaths(["diff", base, parent]),
+                { concurrency: "unbounded" },
+              );
+              const counts = new Map<string, number>();
+              for (const path of changed.flatMap((paths) => [...new Set(paths)])) {
+                if (path === "") continue;
+                counts.set(path, (counts.get(path) ?? 0) + 1);
+              }
+              return [...counts].flatMap(([path, count]) => (count > 1 ? [path] : []));
+            }),
+            { concurrency: 4 },
+          ),
+        ),
+        Effect.map((lists) => lists.flat()),
+      );
+    const listCommitPaths = (args: ReadonlyArray<string>, stdin?: string) =>
+      remerge
+        ? listPaths(["log", ...args, "--format=", "--diff-merges=remerge"], stdin)
+        : Effect.all(
+            [
+              listPaths(["log", ...args, "--format=", "--cc"], stdin),
+              listMergeSharedPaths(args, stdin),
+            ],
+            { concurrency: "unbounded" },
+          ).pipe(Effect.map((lists) => lists.flat()));
     const [recentCommits, ...pathLists] = yield* Effect.all(
       [
         listLines(["rev-list", `--since=@${capturedAt}`, `${startHead}..${endHead}`]),
         listPaths(["diff", startHead, `${turnStart}^{commit}`]),
         listPaths(["diff", endHead, `${input.toCheckpointRef}^{commit}`]),
-        listPaths(["log", "--format=", "--diff-merges=remerge", `${endHead}..${startHead}`]),
+        listCommitPaths([`${endHead}..${startHead}`]),
       ],
       { concurrency: "unbounded" },
     );
@@ -121,9 +181,7 @@ export const makeListAuthoredPaths = (
     const ownCommitPaths =
       ownCommits.length === 0
         ? []
-        : yield* listPaths(
-            ["log", "--no-walk=unsorted", "--stdin", "--format=", "--diff-merges=remerge"],
-            `${ownCommits.join("\n")}\n`,
-          );
+        : yield* listCommitPaths(["--no-walk=unsorted", "--stdin"], `${ownCommits.join("\n")}\n`);
     return new Set([...pathLists.flat(), ...ownCommitPaths].filter((path) => path.length > 0));
   });
+};

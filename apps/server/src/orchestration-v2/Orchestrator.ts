@@ -1,3 +1,5 @@
+import * as DispatchModeAdjustment from "./goat/DispatchModeAdjustment.ts";
+import { mergeBackClosedThread } from "./mergeBackClosedThread.ts";
 import { enqueueProviderTitleEffect } from "./goat/ProviderTitleEffect.ts";
 import { recoverTerminalSubagents } from "./goat/RecoverTerminalSubagents.ts";
 import {
@@ -58,6 +60,8 @@ import {
   providerTurnForRun,
   contextSourcePointForRun,
   pendingForkTransferForThread,
+  supersedeForkEvent,
+  queuedFreshForkEvents,
   pendingMergeBackTransfersForThread,
   latestContextTransfer,
   visibleDeltaRunOrdinals,
@@ -1810,6 +1814,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         : "Provider or model selection changed.";
       yield* writeSystemEvents(
         [
+          ...queuedFreshForkEvents(projection, queuedRun, queuedMessage, now),
           ...(selectionChanged
             ? [
                 {
@@ -3991,7 +3996,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       "orchestration_v2.target_thread_id": command.targetThreadId,
       "orchestration_v2.source_point_type": command.sourcePoint.type,
     });
-
     const sourceProjection = yield* projectionStore
       .getThreadRecords(command.sourceThreadId, [
         "runs",
@@ -4023,7 +4027,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             }),
         ),
       );
-
     if (
       sourceProjection.thread.lineage.relationshipToParent !== "fork" ||
       sourceProjection.thread.lineage.parentThreadId !== command.targetThreadId
@@ -4034,7 +4037,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.sourceThreadId} is not a fork of ${command.targetThreadId}.`,
       });
     }
-
+    const closed = mergeBackClosedThread(sourceProjection.thread, targetProjection.thread);
+    if (closed !== null)
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: closed,
+      });
     const sourceRun = runForSourcePoint(sourceProjection, command.sourcePoint);
     if (sourceRun === null) {
       return yield* new OrchestratorDispatchError({
@@ -4050,7 +4059,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Merge-back source run ${sourceRun.id} is ${sourceRun.status}; only provider-finished runs are supported.`,
       });
     }
-
     const forkTransfer = sourceProjection.contextTransfers.findLast(
       (transfer) =>
         transfer.type === "fork" &&
@@ -4064,7 +4072,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `No fork transfer exists between ${command.targetThreadId} and ${command.sourceThreadId}.`,
       });
     }
-
     // Queued runs cannot consume merge-back context. Refuse under the target's
     // command lock before a pending transfer can block its ordinary messages.
     if (targetProjection.runs.some((run) => isBlockingRun(run) || run.status === "queued")) {
@@ -4075,7 +4082,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           "Finish or stop the target thread's active work and clear its queue before merging back.",
       });
     }
-
     const sourceProviderThread = providerThreadForRun(sourceProjection, sourceRun);
     const now = command.createdAt ?? (yield* DateTime.now);
     const emitEvent = emit(events, command);
@@ -4112,7 +4118,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       updatedAt: now,
       consumedAt: null,
     };
-
     for (const pendingTransfer of pendingMergeBackTransfersForPair) {
       yield* emitEvent({
         type: "context-transfer.updated",
@@ -5328,33 +5333,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         });
       }
     }
-    if (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") {
-      const targetRunId = dispatchMode.targetRunId;
-      const target = projection.runs.find((run) => run.id === targetRunId);
-      const turn = latestProviderTurnForAttempt(
-        projection.providerTurns.filter((candidate) => candidate.nodeId === target?.rootNodeId),
-        target?.activeAttemptId,
-      );
-      // The client may still show a running turn while its completion is being
-      // projected. Preserve the submission as a new turn when steering is too late.
-      if (
-        target !== undefined &&
-        (target.status === "completed" ||
-          (dispatchMode.type === "restart_active" && !isBlockingRun(target)) ||
-          ((target.status === "running" || target.status === "waiting") &&
-            turn !== undefined &&
-            (turn.status === "completed" ||
-              (dispatchMode.type === "restart_active" &&
-                turn.status !== "pending" &&
-                turn.status !== "running"))))
-      ) {
-        dispatchMode = { type: "start_immediately" };
-      }
-    }
-    // Stop leaves the run reading as running until its provider stops. A plain
-    // send in that window queues behind the stopped queue instead of steering
-    // text the agent never receives, and like any user send it releases the
-    // hold; an explicit steer still fails below.
+    dispatchMode = DispatchModeAdjustment.afterLateSteer(projection, dispatchMode);
+    // After Stop, a plain send queues and releases the hold; an explicit steer fails below.
     if (
       command.deliveryIntent === "auto" &&
       (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active") &&
@@ -5362,6 +5342,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       dispatchMode = { type: "queue_after_active" };
     }
+    dispatchMode = yield* DispatchModeAdjustment.forAgentQueue(
+      projectionStore,
+      projection.runs,
+      command,
+      dispatchMode,
+    ).pipe(mapDispatchError(command));
     if (
       dispatchMode.type === "restart_active" &&
       (yield* stopReachedRun(command, command.threadId, dispatchMode.targetRunId))
@@ -5369,12 +5355,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       dispatchMode = { type: "start_immediately" };
     }
     const freshContext = command.freshContext === true;
-    if (
-      freshContext &&
-      (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active")
-    ) {
-      dispatchMode = { type: "queue_after_active" };
-    }
+    dispatchMode = DispatchModeAdjustment.forFreshContext(dispatchMode, freshContext);
     // Native goal commands must not steer an existing turn.
     const parsedGoalCommand = parseGoalCommand(command);
     const goalCommand =
@@ -5997,7 +5978,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           runId: moved.id,
           providerInstanceId: moved.providerInstanceId,
           occurredAt: now,
-          payload: moved,
+          payload: heldRunsToRelease.some((held) => held.id === moved.id)
+            ? { ...moved, queueHeld: false }
+            : moved,
         });
       }
       yield* completeSourcePlan(now);
@@ -6087,7 +6070,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       }
       return;
     }
-    const pendingForkTransfer = pendingForkTransferForThread(projection);
+    const forkTransfer = pendingForkTransferForThread(projection);
+    const supersedesForkTransfer = freshContext && command.scheduledTaskId === undefined;
+    const pendingForkTransfer = supersedesForkTransfer ? undefined : forkTransfer;
     const pendingMergeBackSourceThreadIds = new Set(
       pendingMergeBackTransfers.map((transfer) => transfer.sourceThreadId),
     );
@@ -6133,7 +6118,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: "A fresh session can't start while a fork or merge is still being applied.",
+        cause:
+          pendingMergeBackTransfer !== undefined
+            ? "Send a message without /clear to apply the merged context first."
+            : "A fresh session can't start while a fork or merge is still being applied.",
       });
     }
     const ordinal = nextRunOrdinal(projection);
@@ -6463,6 +6451,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         payload: run,
       });
       yield* completeSourcePlan(now);
+      if (supersedesForkTransfer && forkTransfer !== undefined)
+        yield* emitEvent(supersedeForkEvent(forkTransfer, run, now));
       yield* emitEvent({
         type: "run-attempt.created",
         threadId: command.threadId,
@@ -10998,6 +10988,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ["providerThreads", "checkpoints", "checkpointScopes", "runs", "providerTurns", "attempts"],
         { turnItemTypes: [], messageRoles: ["user"] },
       );
+      if (projection.thread.deletedAt !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Thread ${command.threadId} is deleted.`,
+        });
+      }
       const providerThread = projection.providerThreads.find(
         (candidate) => candidate.id === projection.thread.activeProviderThreadId,
       );
@@ -11050,7 +11047,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       // Missing snapshots support conversation rewind only.
       if (
         targetCheckpoint.status !== "ready" &&
-        !(command.restoreFiles === false && targetCheckpoint.status === "missing")
+        !(
+          command.restoreFiles === false &&
+          (targetCheckpoint.status === "missing" || targetCheckpoint.status === "error")
+        )
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,

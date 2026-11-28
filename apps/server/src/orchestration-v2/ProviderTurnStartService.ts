@@ -1,6 +1,7 @@
 import { rejectedCodexHistory, pendingBackgroundFailure } from "./goat/RejectedCodexHistory.ts";
 import { isImportedNativeSession } from "./ProviderContextBoundaries.ts";
 import { makeCloudStartFailureHandler } from "./goat/CloudStartFailure.ts";
+import { prepareSideChatHandoffs as prepareHandoffs } from "./SideChatHandoffSelection.ts";
 import { makeFailedStartSettlement } from "./goat/FailedStartSettlement.ts";
 import { ensureSafeNativeFork } from "./goat/BusyForkSource.ts";
 import { makeInheritedBackgroundSelection } from "./goat/InheritedBackgroundSelection.ts";
@@ -12,6 +13,8 @@ import {
   hasUnknownProviderOutcome,
   AMBIGUOUS_RESUME_MESSAGE,
 } from "./goat/ProviderTurnStartErrorChecks.ts";
+import * as Continuation from "./manualContinuationMessage.ts";
+import { pendingResumeContext } from "./goat/ResumePendingContext.ts";
 import { manualContinuationDelivery } from "@goat/shared/orchestrationV2ManualContinuation";
 import { makeMemoryRefreshFactory } from "./goat/MemoryRefreshFactory.ts";
 import { makeNativeForkRecovery } from "./goat/NativeForkRecovery.ts";
@@ -38,7 +41,6 @@ import {
   isRegisteredAttach,
   nativeForkTurns,
   providerThreadAfterSignOut,
-  readyHandoffsForRun,
 } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -62,8 +64,6 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2TurnItem,
   isGoatBotSessionThreadId,
-  isCompactionCommandMessage,
-  parseGoalCommand,
   RunId,
   ThreadId,
 } from "@goat/contracts";
@@ -87,7 +87,11 @@ import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
-import { deliverContextHandoffs } from "./ContextHandoffDelivery.ts";
+import {
+  deliverContextHandoffs,
+  isSlashCommandMessage,
+  slashCommandMessageIds,
+} from "./ContextHandoffDelivery.ts";
 import { sideChatNote } from "./SideChatNote.ts";
 import { providerTextWithSkills } from "../skills/GoatSkillText.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -219,7 +223,6 @@ export const layer: Layer.Layer<
             launchSource?: ProviderAdapter.ProviderAdapterV2CloudLaunchSource;
           }
         | undefined;
-      const handoffs = readyHandoffsForRun(projection, run);
       const nativeForkTransfer = projection.contextTransfers.find(
         (transfer) =>
           transfer.type === "fork" &&
@@ -241,6 +244,8 @@ export const layer: Layer.Layer<
           cause: `Run ${runId} is missing its execution projection state.`,
         });
       }
+      const handoffs = yield* prepareHandoffs(projection, run, eventSink, idAllocator.allocate);
+      if (handoffs === undefined) return;
       // A file restore overlapping the folder the turn works in sends this start back to retry.
       const turnFolder = projection.thread.worktreePath ?? checkpointScope?.cwd;
       if (turnFolder != null && !(yield* reserveTurnStart(fileSystem, path, turnFolder)))
@@ -266,7 +271,7 @@ export const layer: Layer.Layer<
               threadId: replaySource.threadId,
               runOrdinal: replaySource.ordinal,
             };
-      const nativeResume = resumeDelivery?.type === "native";
+      let nativeResume = resumeDelivery?.type === "native" && handoffs.length === 0;
       const privateBrief =
         !observeOnly &&
         !nativeResume &&
@@ -274,8 +279,12 @@ export const layer: Layer.Layer<
         (isChannelWorkerThreadId(input.threadId) || isGoatBotSessionThreadId(input.threadId))
           ? yield* readChannelProviderBrief(sql.value, input.threadId, providerMessage.id)
           : undefined;
-      const turnMessage =
-        privateBrief === undefined ? providerMessage : { ...providerMessage, text: privateBrief };
+      let turnMessage = Continuation.message(
+        providerMessage,
+        privateBrief,
+        resumeDelivery,
+        nativeResume,
+      );
       const settleRunBeforeStart = makeSettleRunBeforeStart({
         eventSink,
         idAllocator,
@@ -721,6 +730,14 @@ export const layer: Layer.Layer<
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       if (session.providerSession === undefined)
         return yield* missingProviderSession(runId, session.driver);
+      const goalDriver = hasNativeGoals(session);
+      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
+        runs: projection.runs,
+        providerTurns: projection.providerTurns,
+        compactionMessageIds: () => slashCommandMessageIds(projection.messages, goalDriver),
+        run,
+        attempts: projection.attempts,
+      });
       if (
         nativeResume &&
         (session.resumeInterruptedTurn === undefined ||
@@ -731,15 +748,20 @@ export const layer: Layer.Layer<
               source.providerThreadId === providerThread.id,
           ))
       ) {
-        yield* settleStartFailure({
-          signal: "resume-unsupported",
-          title: "Native resume is unavailable",
-          error: new ProviderAdapter.ProviderResumeUnsupportedError({
-            driver: session.driver,
-            providerThreadId: providerThread.id,
-          }),
-        });
-        return;
+        if (!pendingResumeContext(projection.thread, noteContinuation, restartCancelledWork)) {
+          yield* settleStartFailure({
+            signal: "resume-unsupported",
+            title: "Native resume is unavailable",
+            error: new ProviderAdapter.ProviderResumeUnsupportedError({
+              driver: session.driver,
+              providerThreadId: providerThread.id,
+            }),
+          });
+          return;
+        }
+        // Pending context turns the Resume into a prompted turn, which needs no native resume.
+        nativeResume = false;
+        turnMessage = Continuation.message(providerMessage, privateBrief, resumeDelivery, false);
       }
       if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return;
       const loadFromProvider = Effect.fn("ProviderTurnStartService.loadFromProvider")(function* (
@@ -772,23 +794,7 @@ export const layer: Layer.Layer<
         observeOnly || nativeResume
           ? userText
           : yield* appendRemoteWorkerNotes(sql, projection.thread, providerMessage.id, userText);
-      const goalDriver = hasNativeGoals(session);
-      const goalCommand = goalDriver && parseGoalCommand(turnMessage) !== null;
-      const restartCancelledWork = pendingRestartCancelledBackgroundWork({
-        runs: projection.runs,
-        providerTurns: projection.providerTurns,
-        compactionMessageIds: new Set(
-          projection.messages
-            .filter(
-              (candidate) =>
-                isCompactionCommandMessage(candidate) ||
-                (goalDriver && parseGoalCommand(candidate) !== null),
-            )
-            .map((candidate) => candidate.id),
-        ),
-        run,
-        attempts: projection.attempts,
-      });
+      const slashCommand = isSlashCommandMessage(turnMessage, goalDriver);
       const restartNote = [
         yield* sideChatNote(projectionStore, projection.thread, userText),
         restartCancelledWork.length === 0
@@ -809,8 +815,7 @@ export const layer: Layer.Layer<
           restartNote,
           attachments: providerMessage.attachments,
           goalDriver,
-          carriesImages:
-            !nativeResume && !cloud && !goalCommand && !isCompactionCommandMessage(turnMessage),
+          carriesImages: !nativeResume && !cloud && !slashCommand,
           ...(replaySource === undefined ? {} : { replayedRunId: replaySource.id }),
           replayedInput,
         });
@@ -963,7 +968,7 @@ export const layer: Layer.Layer<
             handoffs: [...handoffs, ...resumedRetryHandoff.handoffs],
             providerThread: { ...resumed.success, id: providerThread.id },
             budget: resumedRetryHandoff.budget,
-            deferInline: isCompactionCommandMessage(turnMessage) || goalCommand,
+            deferInline: slashCommand,
             alreadyDeliveredItemIds: context.deliveredItemIds,
             persist: () => Effect.void,
           }).pipe(
@@ -1324,7 +1329,7 @@ export const layer: Layer.Layer<
           const delivery = yield* deliverContextHandoffs({
             replayedInput,
             handoffs: [...effectiveHandoffs, ...retryHandoff.handoffs],
-            deferInline: compact || goalCommand,
+            deferInline: compact || slashCommand,
             providerThread: runningProviderThread,
             budget: retryHandoff.budget,
             alreadyDeliveredItemIds: deliveredItemIds,
@@ -1365,7 +1370,7 @@ export const layer: Layer.Layer<
             compact ? session.compactThread! : session.startTurn,
             noteContinuation ? promptedInput : turnInput,
             delivery,
-            goalCommand ? "" : context,
+            slashCommand ? "" : context,
             session.driver,
           );
         },

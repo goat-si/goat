@@ -1,3 +1,4 @@
+import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import * as RemoteReportInbox from "../../remoteReports/RemoteReportInbox.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
@@ -363,11 +364,28 @@ export function layerWithRegistry<Error>(
       ServerConfig.ServerConfig,
       makeReplayServerConfig(scenario.name).pipe(Effect.orDie),
     ).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
+  const layerScenarioWorkspacePolicy = Layer.effect(
+    RuntimePolicy.RuntimePolicyV2,
+    Effect.gen(function* () {
+      const workspace = yield* checkpointWorkspace(
+        scenario.name.replace(/[^a-z0-9_-]+/gi, "-"),
+      ).pipe(Effect.orDie);
+      return {
+        resolve: Effect.fn("RuntimePolicy.RuntimePolicyV2.resolve")((input) =>
+          Effect.succeed({
+            runtimeMode: input.thread.runtimeMode,
+            interactionMode: input.thread.interactionMode,
+            cwd: input.thread.worktreePath ?? workspace,
+          }),
+        ),
+      };
+    }),
+  );
   const layerRuntime =
     scenario.runtimePolicyOverride === undefined
-      ? RuntimePolicy.layer
+      ? layerScenarioWorkspacePolicy
       : RuntimePolicy.layerWithOverride(scenario.runtimePolicyOverride).pipe(
-          Layer.provide(RuntimePolicy.layer),
+          Layer.provide(layerScenarioWorkspacePolicy),
         );
   const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
   // Share one continuation queue across adapters, orchestrator, and worker through layer memoization.

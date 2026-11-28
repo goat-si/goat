@@ -38,6 +38,7 @@ it.effect.skipIf(windowsHost)(
           layerTest({
             platform: "darwin",
             env: { PATH: bin },
+            existingPaths: ["/Users/server/notes/todo.md"],
             onSpawn: (command) => spawned.push(command),
           }),
         ),

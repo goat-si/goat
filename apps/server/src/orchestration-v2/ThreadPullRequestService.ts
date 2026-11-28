@@ -106,6 +106,7 @@ export function projectWorkspaceMatchesSnapshot(
 }
 
 const BACKFILL_ATTEMPTS = 5;
+const BACKFILL_THREADS = 64;
 
 interface RefreshRequest {
   readonly threadId: ThreadId | null;
@@ -161,14 +162,20 @@ export const make = Effect.gen(function* () {
     const projects = new Map(projectShells.map((project) => [project.id, project]));
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
     if (request.backfill) {
-      for (const thread of snapshotThreads) {
-        if (
-          (thread.settledOverride === "settled" || thread.settledAt !== null) &&
-          thread.branchPullRequest == null
-        ) {
-          pendingBackfill.set(thread.id, BACKFILL_ATTEMPTS);
-        }
-      }
+      const recent = snapshotThreads
+        .filter(
+          (thread) =>
+            thread.archivedAt === null &&
+            thread.branch !== null &&
+            (thread.settledOverride === "settled" || thread.settledAt !== null) &&
+            thread.branchPullRequest == null,
+        )
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+        )
+        .slice(0, BACKFILL_THREADS);
+      for (const thread of recent) pendingBackfill.set(thread.id, BACKFILL_ATTEMPTS);
     }
     const visibleThreadIds = new Set(
       snapshotThreads.filter((thread) => thread.branch !== null).map((thread) => thread.id),
@@ -185,8 +192,26 @@ export const make = Effect.gen(function* () {
           pendingBackfill.has(thread.id)) &&
         (thread.branch !== null || thread.branchPullRequest != null),
     );
+    const lookupCwds = new Map<ThreadId, string | null>();
+    yield* Effect.forEach(
+      threads,
+      (thread) =>
+        Effect.gen(function* () {
+          const project = projects.get(thread.projectId);
+          const exists =
+            thread.worktreePath !== null &&
+            (yield* fileSystem
+              .exists(path.join(thread.worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true)));
+          lookupCwds.set(
+            thread.id,
+            exists ? thread.worktreePath : (project?.workspaceRoot ?? null),
+          );
+        }),
+      { concurrency: 32, discard: true },
+    );
     const groups = Map.groupBy(threads, (thread) =>
-      JSON.stringify([thread.projectId, thread.worktreePath, thread.branch]),
+      JSON.stringify([thread.projectId, lookupCwds.get(thread.id), thread.branch]),
     );
 
     const scheduled = new Map(
@@ -228,15 +253,7 @@ export const make = Effect.gen(function* () {
           );
           if (first.branch !== null && resolvedProject.repositoryIdentity == null)
             return finishBackfill(group);
-          const worktreeExists =
-            first.worktreePath !== null &&
-            (yield* fileSystem
-              .exists(path.join(first.worktreePath, ".git"))
-              .pipe(Effect.orElseSucceed(() => true)));
-          const cwd =
-            worktreeExists && first.worktreePath !== null
-              ? first.worktreePath
-              : project.workspaceRoot;
+          const cwd = lookupCwds.get(first.id) ?? project.workspaceRoot;
           // A detected PR is confirmed against fresh git state before it is saved.
           const detected =
             first.branch === null

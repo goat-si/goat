@@ -6,12 +6,12 @@ import {
   type DuoControlState,
   type DuoPose,
 } from "./duoControl.ts";
+import { doubleTapHome } from "./homeButton.ts";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import { createCanvasFrameSink, type DeviceFrameSink } from "./frame.ts";
 import { type DeviceHubAccess, withDeviceHubQuery } from "./hubAccess.ts";
 import type { DevicePlatform } from "@goat/contracts";
-
 export type DeviceStreamStatus = "connecting" | "streaming" | "error";
 
 export interface DeviceScreenSize {
@@ -1403,7 +1403,7 @@ export function createDeviceStreamClient(
       }
       if (chunk.length > 0) send(JSON.stringify({ type: "text", text: chunk }));
     },
-    pressButton: (button) => {
+    pressButton: doubleTapHome((button) => {
       if (platform === "ios") {
         const name =
           button === "home"
@@ -1420,7 +1420,7 @@ export function createDeviceStreamClient(
       if (type === "home" || type === "back" || type === "recents" || type === "power") {
         send(JSON.stringify({ type }));
       }
-    },
+    }),
     rotate: () => {
       if (platform !== "ios") return;
       const current = screen?.supportsHingeAngle

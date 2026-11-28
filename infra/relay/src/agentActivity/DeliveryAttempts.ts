@@ -250,7 +250,6 @@ export const make = Effect.gen(function* () {
     }),
     completeSourceJob: Effect.fn("relay.delivery_attempts.complete_source_job")(function* (input) {
       yield* Effect.annotateCurrentSpan({ "relay.delivery.job_id": input.sourceJobId });
-      const completedAt = DateTime.formatIso(yield* DateTime.now);
       const [owner] = yield* db.$client<{
         user_id: string | null;
         account_epoch: number | null;
@@ -281,10 +280,10 @@ export const make = Effect.gen(function* () {
               return yield* eligible.failure;
             }
             if (eligible.success.accountEpoch !== owner.account_epoch) return;
+            // Only unindexed columns change, so with the table's fillfactor headroom this stays a HOT update.
             yield* db
               .update(relayDeliveryAttempts)
               .set({
-                createdAt: completedAt,
                 apnsStatus: input.apnsStatus ?? null,
                 apnsReason: input.apnsReason ?? null,
                 apnsId: input.apnsId ?? null,

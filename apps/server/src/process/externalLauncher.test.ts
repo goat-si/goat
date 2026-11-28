@@ -216,6 +216,7 @@ it.effect.skipIf(windowsHost)(
         Effect.provide(
           layerTest({
             platform: "linux",
+            existingPaths: ["/home/t3/workspace [draft]/author's ‘$media/clip|draft.mp4"],
             env: {
               PATH: binDir,
               WSL_DISTRO_NAME: "Ubuntu-24.04",
@@ -276,6 +277,7 @@ it.effect.each([
       Effect.provide(
         layerTest({
           platform: "win32",
+          existingPaths: ["C:/my project/a,b.ts"],
           env: { PATH: binDir, PATHEXT: ".EXE" },
           spawnResult: (command) => {
             if (!command.command.endsWith("reg.exe")) return undefined;
@@ -332,6 +334,7 @@ for (const wsl of [false, true]) {
           Effect.provide(
             layerTest({
               platform: "linux",
+              existingPaths: [target],
               env: {
                 PATH: binDir,
                 WAYLAND_DISPLAY: "wayland-1",

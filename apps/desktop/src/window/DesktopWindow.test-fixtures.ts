@@ -6,6 +6,11 @@ export function makeFakeBrowserWindow() {
   const webContentsListeners = new Map<string, (...args: readonly unknown[]) => void>();
   let zoomLevel = 0;
   const webContents = {
+    id: 1,
+    session: {
+      webRequest: { onBeforeSendHeaders: vi.fn() },
+      setPermissionRequestHandler: vi.fn(),
+    },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),
@@ -31,9 +36,6 @@ export function makeFakeBrowserWindow() {
     reloadIgnoringCache: vi.fn(),
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
-    session: {
-      setPermissionRequestHandler: vi.fn(),
-    },
     setBackgroundThrottling: vi.fn(),
     setWindowOpenHandler: vi.fn(),
     setIgnoreMenuShortcuts: vi.fn(),

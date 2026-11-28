@@ -10,6 +10,17 @@ export interface SupervisorIntent {
   readonly network: NetworkStatus;
 }
 
+export function mergeRefusedRoutes(
+  known: ReadonlyArray<string>,
+  refused: ReadonlyArray<string>,
+  keep: (routeId: string) => boolean,
+): ReadonlyArray<string> {
+  const next = [...new Set([...known, ...refused])].filter(keep);
+  return next.length === known.length && next.every((id, index) => id === known[index])
+    ? known
+    : next;
+}
+
 export function availableState(
   intent: SupervisorIntent,
   generation: number,

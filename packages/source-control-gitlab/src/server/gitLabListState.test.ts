@@ -207,7 +207,11 @@ describe("decodeMergeRequestGraphqlListJson", () => {
                     targetBranch: "main",
                     conflicts: true,
                     mergeStatusEnum: "CHECKING",
-                    author: { username: "bilal", name: "Bilal", avatarUrl: null },
+                    author: {
+                      username: "bilal",
+                      name: "Bilal",
+                      avatarUrl: "/uploads/avatar.png?v=1",
+                    },
                     labels: { nodes: [{ title: "bug" }] },
                     approved: false,
                     approvedBy: { nodes: [] },
@@ -233,6 +237,11 @@ describe("decodeMergeRequestGraphqlListJson", () => {
     expect(page.items).toEqual([
       expect.objectContaining({
         number: 7,
+        author: {
+          login: "bilal",
+          name: "Bilal",
+          avatarUrl: "https://gitlab.com/uploads/avatar.png?v=1",
+        },
         state: "open",
         isDraft: true,
         mergeability: "conflicting",
@@ -244,6 +253,36 @@ describe("decodeMergeRequestGraphqlListJson", () => {
       [7, { reviewDecision: "changes-requested", checksState: "failing" }],
     ]);
     expect(page).toMatchObject({ rawCount: 2, hasNextPage: true, endCursor: "eyJpZCI6IjcifQ" });
+  });
+  it.each(["", " "])("keeps a blank avatar URL as null", (avatarUrl) => {
+    const page = expectSuccess(
+      decodeMergeRequestGraphqlListJson(
+        JSON.stringify({
+          data: {
+            metadata: { enterprise: false },
+            project: {
+              mergeRequests: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    iid: "7",
+                    title: "PR",
+                    webUrl: "https://gitlab.com/o/r/-/merge_requests/7",
+                    state: "opened",
+                    createdAt: "2026-07-01T00:00:00Z",
+                    updatedAt: "2026-07-02T00:00:00Z",
+                    sourceBranch: "feature",
+                    targetBranch: "main",
+                    author: { username: "bilal", name: "Bilal", avatarUrl },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    );
+    expect(page.items[0]?.author).toEqual({ login: "bilal", name: "Bilal", avatarUrl: null });
   });
   it("fails on a project the reader cannot see, rather than reading it as empty", () => {
     expect(

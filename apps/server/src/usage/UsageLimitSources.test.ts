@@ -231,7 +231,7 @@ it.effect("keeps a refused account's last reading within its hub and login", () 
     const stale = yield* read;
     expect(stale?.accounts[0]?.usageLimits).toEqual(latest);
     expect(stale?.accounts[0]?.usageLimits.windows[0]?.usedPercent).toBe(100);
-    expect(stale?.error).toContain("The hub could not read this account's usage.");
+    expect(stale?.error).toContain("The provider refused the hub request (HTTP 429).");
     if (stale) {
       expect(
         UsageLimitSources.hubPoolResetAt([stale], ProviderDriverKind.make("codex"), null, NOW),

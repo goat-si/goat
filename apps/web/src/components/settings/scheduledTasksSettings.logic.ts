@@ -69,6 +69,8 @@ export interface DraftState {
   readonly weekdays: ReadonlySet<number>;
   readonly projectId: string;
   readonly threadId: string;
+  /** The thread the form opened with, so a save can tell a cleared destination from an unbound one. */
+  readonly savedThreadId: string;
   readonly threadMode: ScheduledTaskThreadMode;
   /** Set when leaving the thread dropped Important updates, so the form can say so. */
   readonly notificationPolicyReset?: boolean;
@@ -234,9 +236,10 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
+    savedThreadId: task.threadId ?? "",
     threadMode: scheduledTaskThreadMode(task),
     workspaceMode: task.workspaceStrategy.type,
-    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
+    baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "",
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
         ? (task.workspaceStrategy.startFromOrigin ?? false)
@@ -339,9 +342,10 @@ export const EMPTY_DRAFT: DraftState = {
   weekdays: new Set([1, 2, 3, 4, 5]),
   projectId: "",
   threadId: "",
+  savedThreadId: "",
   threadMode: "new_thread",
   workspaceMode: "worktree",
-  baseRef: "main",
+  baseRef: "",
   startFromOrigin: true,
   existingWorktreePath: "",
   modelSelection: null,
