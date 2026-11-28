@@ -28,6 +28,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as NetService from "@goat/shared/Net";
 import {
   connectCommand,
+  connectLinkNextStep,
   acquireRelayClientForLink,
   disconnectCloud,
   checkLiveReachability,
@@ -389,4 +390,30 @@ it.effect.each([false, true])(
         ),
       ),
     ),
+);
+
+it.effect("link guidance restarts a live server and starts an absent server", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const absent = yield* connectLinkNextStep(false);
+    assert.include(absent, "serve");
+    const state = yield* makePersistedServerRuntimeState({
+      config: { host: "127.0.0.1", devUrl: undefined },
+      port: 3773,
+    });
+    yield* persistServerRuntimeState({
+      path: config.serverRuntimeStatePath,
+      state: { ...state, pid: process.pid },
+    });
+    for (const publishOnly of [false, true]) {
+      const next = yield* connectLinkNextStep(publishOnly);
+      assert.include(next, "already running");
+      assert.include(next, "service restart");
+      assert.notInclude(next, "serve`");
+    }
+  }).pipe(
+    Effect.provide(ServerConfig.layerTest("/", { prefix: "goat-connect-next-test-" })),
+    Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, NetService.layer)),
+    Effect.scoped,
+  ),
 );
