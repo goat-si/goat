@@ -33,6 +33,8 @@ no "read every thread body" API, no log migrations (per-line `v`), index epoch n
 | `user.notified` | `send_to_user` ack / result |
 | `checkpoint` | `{card, fold}` after each run |
 
+`Fold` (contracts `log.rs`, owned by lane C, shaped with lane A): `{activeRunId, queuedInputIds, openRequests, counters {inputs, runs, items}}`. One type for `card.json` and `checkpoint`; the store never keeps its own.
+
 Card status precedence: needs_you (open request or unresolved unknown, kind `resend`) > running >
 queued > failed > idle.
 
