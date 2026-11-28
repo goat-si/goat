@@ -186,7 +186,7 @@ pub struct LaunchFolds {
 }
 
 /// v1 `CLAUDE_HOST_SESSION_VARIABLES` (`ClaudeHome.ts:49-63`) plus the SDK's removals.
-const REMOVED_ENV: [&str; 15] = [
+pub(crate) const REMOVED_ENV: [&str; 15] = [
     "CLAUDECODE",
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_CODE_HOST_SESSION_ID",
@@ -205,12 +205,15 @@ const REMOVED_ENV: [&str; 15] = [
 ];
 
 /// GOAT's own agent identity must not leak into the Claude child (same rule as the Codex driver).
-const REMOVED_ENV_PREFIXES: [&str; 2] = ["GOAT_", "T3CODE_"];
-const REMOVED_HOST_IDENTITY: [&str; 4] = [
+pub(crate) const REMOVED_ENV_PREFIXES: [&str; 2] = ["GOAT_", "T3CODE_"];
+pub(crate) const REMOVED_HOST_IDENTITY: [&str; 5] = [
     "CODEX_THREAD_ID",
     "CODEX_SESSION_ID",
     "CODEX_TOOL_CALL_ID",
     "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+    // The GOAT 2 host's UI bearer token: agent commands must never see it (as in the Codex
+    // driver's process.rs).
+    "GOAT2_HOST_TOKEN",
 ];
 
 /// v1 `CLAUDE_GOAT_MCP_TOOL_WILDCARD`.

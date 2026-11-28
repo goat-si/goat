@@ -948,6 +948,7 @@ dependencies = [
  "futures-util",
  "goat2-contracts",
  "goat2-engine-api",
+ "goat2-engine-claude",
  "goat2-engine-codex",
  "goat2-thread-store",
  "libc",

@@ -86,10 +86,14 @@ pub(crate) async fn settle_and_resume(host: &Host, settled: &[ThreadId]) -> Stor
         }
     }
     for card in store.cards() {
-        if store
-            .fold(&card.id)
-            .is_some_and(|f| !f.queued_inputs.is_empty())
-        {
+        // Queued inputs need their actor; so does a session sign-in left open by the previous
+        // process (an idle thread too): its actor closes it when it starts.
+        if store.fold(&card.id).is_some_and(|f| {
+            !f.queued_inputs.is_empty()
+                || f.open_requests
+                    .iter()
+                    .any(|r| r.run_id.is_none() && r.kind == goat2_contracts::RequestKind::Signin)
+        }) {
             host.send(&card.id, Msg::Tick);
         }
     }

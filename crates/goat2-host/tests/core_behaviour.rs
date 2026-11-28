@@ -3228,6 +3228,234 @@ async fn providers_are_probed_on_demand_and_once() {
     );
 }
 
+#[tokio::test]
+async fn an_unsafe_instance_id_is_refused_before_any_folder_exists() {
+    let t = setup(manual()).await;
+    let long = "a".repeat(65);
+    for (n, id) in [
+        "../x",
+        "a/b",
+        "..",
+        ".hidden",
+        "x\0y",
+        "",
+        " codex-2",
+        "2nd",
+        long.as_str(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let refused = t
+            .host
+            .command(set_instance(&format!("unsafe-{n}"), id, "codex", true))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.reason, "invalid_request", "{id:?}");
+    }
+    t.host.command(refresh("unsafe-r", None)).await.unwrap();
+    eventually_provider(&t, |_| true).await;
+    let data = t._dir.as_ref().unwrap().path();
+    assert!(
+        !data.join("provider-homes").exists(),
+        "no home for the default instance or a refused id"
+    );
+    assert!(!data.join("x").exists() && !data.parent().unwrap().join("x").exists());
+}
+
+#[tokio::test]
+async fn each_provider_instance_runs_with_its_own_home() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host
+        .command(set_instance("home-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    t.host.command(refresh("home-r", None)).await.unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let home = t
+        ._dir
+        .as_ref()
+        .unwrap()
+        .path()
+        .join("provider-homes")
+        .join("codex-2");
+    eventually("both instances probed", || {
+        let seen = t.fake.probe_targets();
+        seen.iter().any(|p| p.instance_id.as_str() == "codex")
+            && seen.iter().any(|p| p.instance_id.as_str() == "codex-2")
+    })
+    .await;
+    for target in t.fake.probe_targets() {
+        match target.instance_id.as_str() {
+            // The default instance keeps the driver's shared home.
+            "codex" => assert_eq!(target.home, None),
+            "codex-2" => assert_eq!(target.home.as_deref(), Some(home.as_path())),
+            other => panic!("unexpected instance {other}"),
+        }
+    }
+    let meta = std::fs::metadata(&home).unwrap();
+    assert!(meta.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(meta.permissions().mode() & 0o777, 0o700);
+    }
+    // A thread on the second instance starts with that instance and its home.
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: "r-home-thread".into(),
+            client_request_id: "home-thread".into(),
+            kind: ThreadKind::User,
+            title: Some("second account".into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: "codex-2".into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap();
+    eventually("started", || !t.fake.start_targets().is_empty()).await;
+    let started = t.fake.start_targets().pop().unwrap().expect("an instance");
+    assert_eq!(started.instance_id.as_str(), "codex-2");
+    assert_eq!(started.home.as_deref(), Some(home.as_path()));
+    // Turning it off keeps its home (credentials stay until sign-out).
+    t.host
+        .command(set_instance("home-off", "codex-2", "codex", false))
+        .await
+        .unwrap();
+    assert!(home.is_dir());
+}
+
+#[tokio::test]
+async fn instance_ids_that_differ_only_in_case_are_refused() {
+    // macOS folders ignore case: such ids would share one home and its credentials.
+    let t = setup(manual()).await;
+    t.host
+        .command(set_instance("case-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    for (n, id) in ["Codex-2", "CODEX"].into_iter().enumerate() {
+        let refused = t
+            .host
+            .command(set_instance(&format!("case-r{n}"), id, "codex", true))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.reason, "invalid_request", "{id}");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_provider_home_is_never_used() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    let data = t._dir.as_ref().unwrap().path().to_path_buf();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::create_dir(data.join("provider-homes")).unwrap();
+    std::os::unix::fs::symlink(
+        elsewhere.path(),
+        data.join("provider-homes").join("codex-2"),
+    )
+    .unwrap();
+    t.host
+        .command(set_instance("link-1", "codex-2", "codex", true))
+        .await
+        .unwrap();
+    t.host.command(refresh("link-r", None)).await.unwrap();
+    let rx = t.host.watch_providers();
+    eventually("codex-2 reported as an error", || {
+        rx.borrow()
+            .as_ref()
+            .and_then(|l| {
+                l.iter()
+                    .find(|e| e.instance_id.as_str() == "codex-2")
+                    .cloned()
+            })
+            .is_some_and(|e| e.probe.status == goat2_contracts::ServerProviderState::Error)
+    })
+    .await;
+    assert!(
+        t.fake
+            .probe_targets()
+            .iter()
+            .all(|p| p.instance_id.as_str() != "codex-2"),
+        "never probed through the link"
+    );
+    // A thread on it never starts (no fallback to the shared home).
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: "r-link-thread".into(),
+            client_request_id: "link-thread".into(),
+            kind: ThreadKind::User,
+            title: Some("linked".into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: "codex-2".into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(t.fake.start_targets().is_empty(), "no session started");
+    assert!(
+        std::fs::read_dir(elsewhere.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_invalid_instance_id_in_the_file_is_kept_but_never_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let file = path.join("provider-instances.json");
+    std::fs::write(
+        &file,
+        r#"[{"instanceId":"../x","driver":"codex","enabled":true}]"#,
+    )
+    .unwrap();
+    let fake = FakeEngine::new(manual());
+    fake.set_probe(Ok(ready_probe("0.167.0")));
+    let t = open_at(&path, Some(dir), fake, 1).await;
+    t.host.command(refresh("bad-file", None)).await.unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    let list = t.host.watch_providers().borrow().clone().unwrap();
+    assert!(
+        list.iter().all(|e| e.instance_id.as_str() != "../x"),
+        "{list:?}"
+    );
+    assert!(
+        t.fake
+            .probe_targets()
+            .iter()
+            .all(|p| p.instance_id.as_str() != "../x")
+    );
+    let refused = t
+        .host
+        .command(refresh("bad-one", Some("../x")))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "provider_not_found");
+    assert!(!path.join("provider-homes").exists());
+    assert!(std::fs::read_to_string(&file).unwrap().contains("../x"));
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
@@ -3871,6 +4099,8 @@ async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
 struct FlakyStore {
     inner: LaneAStore,
     fail: Arc<std::sync::atomic::AtomicBool>,
+    /// Fail only appends that carry an event of this type (e.g. "run.started").
+    fail_type: Arc<std::sync::Mutex<Option<&'static str>>>,
 }
 
 impl goat2_host::store::ThreadStore for FlakyStore {
@@ -3890,6 +4120,13 @@ impl goat2_host::store::ThreadStore for FlakyStore {
         events: Vec<LogEvent>,
     ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
         if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
+        }
+        if let Some(tag) = *self.fail_type.lock().unwrap()
+            && events.iter().any(|e| e.type_tag() == tag)
+        {
             return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
                 "injected append failure",
             )));
@@ -3943,6 +4180,157 @@ impl goat2_host::store::ThreadStore for FlakyStore {
     }
 }
 
+/// A host on a [FlakyStore]: `fail` fails every append, `fail_type` only appends with that event.
+async fn flaky_setup(
+    script: FakeScript,
+) -> (
+    T,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::Mutex<Option<&'static str>>>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(script);
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fail_type = Arc::new(std::sync::Mutex::new(None));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+        fail_type: fail_type.clone(),
+    };
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    (
+        T {
+            host,
+            fake,
+            _dir: Some(dir),
+        },
+        fail,
+        fail_type,
+    )
+}
+
+fn send_frame(id: &ThreadId, key: &str, mode: InputMode) -> ClientFrame {
+    ClientFrame::SendInput {
+        req_id: format!("r-{key}"),
+        client_request_id: key.into(),
+        thread_id: id.clone(),
+        text: key.into(),
+        mode,
+        attachments: None,
+    }
+}
+
+fn turns_of(t: &T, id: &ThreadId) -> usize {
+    t.fake
+        .calls()
+        .iter()
+        .filter(|c| matches!(c, FakeCall::Turn { thread_id, .. } if thread_id == id))
+        .count()
+}
+
+#[tokio::test]
+async fn a_failed_run_start_fences_the_thread_and_input_is_refused_visibly() {
+    let (t, _fail, fail_type) = flaky_setup(manual()).await;
+    let id = start_user_thread(&t, "wf-start", None).await;
+    // The durable run start cannot be written: no turn reaches the engine, the thread fences.
+    *fail_type.lock().unwrap() = Some("run.started");
+    t.host
+        .command(send_frame(&id, "wf-start-1", InputMode::Followup))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(turns_of(&t, &id), 0);
+    *fail_type.lock().unwrap() = None;
+    // Writes work again, but the fenced thread refuses input instead of accepting it silently.
+    let refused = t
+        .host
+        .command(send_frame(&id, "wf-start-2", InputMode::Followup))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "restart_required");
+    assert_eq!(turns_of(&t, &id), 0);
+}
+
+#[tokio::test]
+async fn a_steer_whose_outcome_cannot_be_saved_is_not_acknowledged() {
+    let (t, _fail, fail_type) = flaky_setup(manual()).await;
+    let id = start_user_thread(&t, "wf-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    *fail_type.lock().unwrap() = Some("input.delivered");
+    let refused = t
+        .host
+        .command(send_frame(&id, "wf-steer-1", InputMode::Steer))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "restart_required");
+}
+
+#[tokio::test]
+async fn a_start_in_flight_does_not_cross_the_fence() {
+    let (t, fail, _fail_type) = flaky_setup(FakeScript {
+        auto_finish: false,
+        start_ms: 300,
+        ..FakeScript::default()
+    })
+    .await;
+    let id = start_user_thread(&t, "wf-flight", Some("go")).await;
+    // While the engine starts, a write fails and fences the thread.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = t
+        .host
+        .command(send_frame(&id, "wf-flight-1", InputMode::Followup))
+        .await;
+    fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    eventually("late start shut down", || shut_down(&t, &id)).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(turns_of(&t, &id), 0, "no run after the fence");
+}
+
+#[tokio::test]
+async fn a_session_signin_on_an_idle_thread_closes_after_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = start_user_thread(&t, "wf-idle-signin", Some("go")).await;
+            eventually("running", || running(&t, &id)).await;
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    turn_id: None,
+                    key: None,
+                    url: None,
+                    message: "Sign in".into(),
+                },
+            );
+            eventually("sign-in open", || {
+                t.host.store().fold(&id).unwrap().open_requests.len() == 1
+            })
+            .await;
+            t.fake.finish_turn(&id, "done");
+            eventually("idle", || count(&t, &id, "run.finished") == 1).await;
+            id
+        })
+    });
+    // The next process: the thread is idle (nothing queued), its stale sign-in still closes.
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    eventually("stale sign-in closed", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_failed_log_write_fences_the_thread() {
     let dir = tempfile::tempdir().unwrap();
@@ -3953,6 +4341,7 @@ async fn a_failed_log_write_fences_the_thread() {
     let store = FlakyStore {
         inner,
         fail: fail.clone(),
+        fail_type: Arc::new(std::sync::Mutex::new(None)),
     };
     let stall = StallRecorder::open(&path).unwrap();
     let host = Host::open(
@@ -4068,6 +4457,7 @@ async fn a_fenced_thread_drops_its_unfinished_streams() {
     let store = FlakyStore {
         inner,
         fail: fail.clone(),
+        fail_type: Arc::new(std::sync::Mutex::new(None)),
     };
     let stall = StallRecorder::open(&path).unwrap();
     let host = Host::open(
