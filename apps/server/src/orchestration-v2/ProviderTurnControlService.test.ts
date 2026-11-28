@@ -223,6 +223,7 @@ it.effect(
       const layerProjection = Layer.succeed(
         ProjectionStore.ProjectionStoreV2,
         ProjectionStore.ProjectionStoreV2.of({
+          listMcpThreadPage: () => Effect.die("unused listMcpThreadPage"),
           apply: () => Effect.void,
           setCompletionNotification: () => Effect.die("unused notification setter"),
           recordNotificationCompletions: () => Effect.die("unused notification cursor"),

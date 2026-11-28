@@ -3153,18 +3153,44 @@ const make = Effect.gen(function* () {
       const listFailure = (error: unknown) =>
         failure("orchestration_error", `Unable to list threads: ${errorMessage(error)}`);
       const edges = yield* threadManagement.listLaunchEdges().pipe(Effect.mapError(listFailure));
-      const projectThreads = View.hasLineageFilter(lineage)
-        ? (yield* readShells(
-            edges.flatMap((edge) =>
-              (projectId === undefined || edge.projectId === projectId) &&
-              View.matchesLineage(edge, lineage)
-                ? [edge.id]
-                : [],
-            ),
-          )).filter((thread) => input.includeSubagents !== false || View.listedByDefault(thread))
-        : yield* threadManagement
-            .listProjectThreads({ projectId, includeSubagents: input.includeSubagents !== false })
-            .pipe(Effect.mapError(listFailure));
+      const cursor = input.cursor ?? 0;
+      const limit = input.limit ?? DEFAULT_THREAD_LIST_LIMIT;
+      const lineageIds = View.hasLineageFilter(lineage)
+        ? edges.flatMap((edge) =>
+            (projectId === undefined || edge.projectId === projectId) &&
+            View.matchesLineage(edge, lineage)
+              ? [edge.id]
+              : [],
+          )
+        : undefined;
+      const paged =
+        (input.statuses === undefined || input.statuses.length === 0) &&
+        input.snoozed === undefined &&
+        input.titleContains === undefined
+          ? yield* threadManagement
+              .listMcpThreadPage({
+                projectId,
+                includeSubagents: input.includeSubagents !== false,
+                settled: input.settled,
+                threadIds: lineageIds,
+                offset: cursor,
+                limit,
+              })
+              .pipe(Effect.mapError(listFailure))
+          : null;
+      const projectThreads =
+        paged !== null
+          ? paged.threads
+          : View.hasLineageFilter(lineage)
+            ? (yield* readShells(lineageIds ?? [])).filter(
+                (thread) => input.includeSubagents !== false || View.listedByDefault(thread),
+              )
+            : yield* threadManagement
+                .listProjectThreads({
+                  projectId,
+                  includeSubagents: input.includeSubagents !== false,
+                })
+                .pipe(Effect.mapError(listFailure));
       const nowMs = yield* Clock.currentTimeMillis;
       // An empty list is no filter: clients that fill every optional field send `[]`.
       const statuses =
@@ -3185,10 +3211,9 @@ const make = Effect.gen(function* () {
           (thread) =>
             titleContains === undefined || thread.title.toLocaleLowerCase().includes(titleContains),
         );
-      const cursor = input.cursor ?? 0;
-      const limit = input.limit ?? DEFAULT_THREAD_LIST_LIMIT;
-      const page = filtered.slice(cursor, cursor + limit);
-      const nextCursor = cursor + page.length < filtered.length ? cursor + page.length : null;
+      const page = paged === null ? filtered.slice(cursor, cursor + limit) : filtered;
+      const total = paged?.total ?? filtered.length;
+      const nextCursor = cursor + page.length < total ? cursor + page.length : null;
       // Fold states need only the shells of what is folded under this page.
       const graph = launchGraph(edges);
       const shells = new Map(projectThreads.map((thread) => [thread.id, thread] as const));
@@ -3210,7 +3235,7 @@ const make = Effect.gen(function* () {
           ),
         ),
         nextCursor,
-        total: filtered.length,
+        total,
       } satisfies OrchestratorMcpThreadListResult;
     }),
     readThread: Effect.fn("OrchestratorMcpService.readThread")(function* (scope, input) {

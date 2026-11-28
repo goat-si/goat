@@ -236,6 +236,7 @@ export interface ThreadManagementServiceShape {
     readonly threadId: ThreadId;
   }) => Effect.Effect<OrchestrationV2ThreadProjection, ThreadManagementError>;
   readonly getShellSnapshot: Orchestrator.OrchestratorV2["Service"]["getShellSnapshot"];
+  readonly listMcpThreadPage: Orchestrator.OrchestratorV2["Service"]["listMcpThreadPage"];
   readonly getAgentAwarenessSnapshot: Orchestrator.OrchestratorV2["Service"]["getAgentAwarenessSnapshot"];
   readonly listActiveSubagentThreadIds: Orchestrator.OrchestratorV2["Service"]["listActiveSubagentThreadIds"];
   readonly listLaunchEdges: Orchestrator.OrchestratorV2["Service"]["listLaunchEdges"];
@@ -2029,6 +2030,7 @@ const make = Effect.gen(function* () {
     getProjectThreadRecords,
     getProjectThread,
     getShellSnapshot: orchestrator.getShellSnapshot,
+    listMcpThreadPage: orchestrator.listMcpThreadPage,
     getAgentAwarenessSnapshot: orchestrator.getAgentAwarenessSnapshot,
     listActiveSubagentThreadIds: orchestrator.listActiveSubagentThreadIds,
     listLaunchEdges: orchestrator.listLaunchEdges,

@@ -568,6 +568,12 @@ export interface OrchestratorV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>;
+  readonly listMcpThreadPage: (
+    input: Parameters<ProjectionStoreV2["Service"]["listMcpThreadPage"]>[0],
+  ) => Effect.Effect<
+    Effect.Success<ReturnType<ProjectionStoreV2["Service"]["listMcpThreadPage"]>>,
+    OrchestratorV2Error
+  >;
   readonly listActiveSubagentThreadIds: (
     page?: Parameters<ProjectionStoreV2["Service"]["listActiveSubagentThreadIds"]>[0],
   ) => Effect.Effect<ReadonlyArray<ThreadId>, OrchestratorV2Error>;
@@ -13297,6 +13303,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ),
     getShellSnapshot: Effect.fn("OrchestratorV2.getShellSnapshot")(function (options) {
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
+    }),
+    listMcpThreadPage: Effect.fn("OrchestratorV2.listMcpThreadPage")(function (input) {
+      return projectionStore.listMcpThreadPage(input).pipe(Effect.mapError(shellProjectionError));
     }),
     listActiveSubagentThreadIds: Effect.fn("OrchestratorV2.listActiveSubagentThreadIds")(
       function (page) {

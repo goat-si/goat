@@ -95,6 +95,27 @@ const pending = (kind: string) =>
 
 /** The store's lineage rows and its shell reads by id, over a fixed set of shells. */
 const shellReads = (shells: ReadonlyArray<OrchestrationV2ThreadShell>) => ({
+  listMcpThreadPage: (input: {
+    projectId?: ProjectId | undefined;
+    threadIds?: ReadonlyArray<ThreadId> | undefined;
+    settled?: boolean | undefined;
+    includeSubagents: boolean;
+    offset: number;
+    limit: number;
+  }) => {
+    const matches = shells.filter(
+      (shell) =>
+        (input.projectId === undefined || shell.projectId === input.projectId) &&
+        (input.threadIds === undefined || input.threadIds.includes(shell.id)) &&
+        (input.settled === undefined || (shell.settledOverride === "settled") === input.settled) &&
+        (input.includeSubagents ||
+          (shell.lineage.relationshipToParent !== "subagent" && shell.sideChatOf == null)),
+    );
+    return Effect.succeed({
+      total: matches.length,
+      threads: matches.slice(input.offset, input.offset + input.limit),
+    });
+  },
   listLaunchEdges: () =>
     Effect.succeed(
       shells.map((shell) => ({

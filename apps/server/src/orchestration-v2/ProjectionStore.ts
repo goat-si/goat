@@ -169,6 +169,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as McpThreadPage from "./ProjectionMcpThreadPage.ts";
 import { mapShellChunks, partitionShells, reduceShellChunks } from "./shellChunks.ts";
 import type * as Statement from "effect/sql/Statement";
 
@@ -693,6 +694,9 @@ export interface ProjectionStoreV2Shape
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<ShellSnapshotRead, ProjectionStoreV2Error>;
+  readonly listMcpThreadPage: (
+    input: McpThreadPage.McpThreadPageInput,
+  ) => Effect.Effect<McpThreadPage.McpThreadPage, ProjectionStoreV2Error>;
   readonly listActiveSubagentThreadIds: (
     page?: SubagentPage,
   ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
@@ -7465,6 +7469,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       ),
       getShellSnapshot: readOnReader(getShellSnapshot),
+      listMcpThreadPage: readOnReader((input) =>
+        McpThreadPage.selectPage(sql, readShellSnapshot, input).pipe(
+          Effect.mapError(shellSnapshotReadError),
+        ),
+      ),
       getAgentAwarenessSnapshot: readOnReader(
         Effect.fn("ProjectionStore.getAgentAwarenessSnapshot")((threadId) =>
           sql
@@ -7816,6 +7825,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
       }),
       readShellSnapshot: (options) =>
         service.getShellSnapshot(options).pipe(Effect.map(Effect.succeed)),
+      listMcpThreadPage: (input) =>
+        service
+          .getShellSnapshot({ location: "active" })
+          .pipe(Effect.map((snapshot) => McpThreadPage.memoryPage(snapshot, input))),
       getThreadShell: Effect.fn("ProjectionStore.getThreadShell")(function* (threadId) {
         const existing = (yield* Ref.get(replayState)).projections;
         if (!existing.has(threadId)) {
