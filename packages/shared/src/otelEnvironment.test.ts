@@ -454,6 +454,19 @@ describe("isCiEnvironment", () => {
 });
 
 describe("isRelayTracingEnabled", () => {
+  it("honors DO_NOT_TRACK even with explicit consent", () => {
+    for (const value of ["1", "true", "yes", "on"]) {
+      assert.isFalse(
+        OtelEnvironment.isRelayTracingEnabled({
+          GOAT_TELEMETRY_ENABLED: "true",
+          DO_NOT_TRACK: value,
+        }),
+      );
+    }
+    assert.isTrue(
+      OtelEnvironment.isRelayTracingEnabled({ GOAT_TELEMETRY_ENABLED: "true", DO_NOT_TRACK: "0" }),
+    );
+  });
   it("stays off until GOAT_TELEMETRY_ENABLED=true opts in, then honors the SDK kill switches", () => {
     assert.isFalse(OtelEnvironment.isRelayTracingEnabled({}));
     const optedIn = { GOAT_TELEMETRY_ENABLED: "true" };

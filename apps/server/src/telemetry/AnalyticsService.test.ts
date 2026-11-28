@@ -532,7 +532,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
       assert.deepEqual(bodies, []);
     }),
   );
-  it.effect("waits for desktop shell consent and honors a late telemetry opt-out", () =>
+  it.effect("waits for desktop shell consent and honors DO_NOT_TRACK", () =>
     Effect.gen(function* () {
       const env: NodeJS.ProcessEnv = { GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1" };
       const batches = yield* sendFor(
@@ -542,11 +542,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           const analytics = yield* AnalyticsService.AnalyticsService;
           yield* analytics.record("test.before-discovery");
           yield* analytics.flush;
-          env.GOAT_TELEMETRY_ENABLED = "false";
+          env.DO_NOT_TRACK = "1";
           delete env.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING;
           yield* analytics.record("test.opted-out");
           yield* analytics.flush;
-          env.GOAT_TELEMETRY_ENABLED = "true";
+          env.DO_NOT_TRACK = "0";
           yield* analytics.record("test.allowed");
           yield* analytics.flush;
         }),

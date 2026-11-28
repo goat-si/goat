@@ -340,6 +340,9 @@ export const isCiEnvironment = (env: Readonly<Record<string, string | undefined>
     return value !== undefined && value !== "" && value !== "false" && value !== "0";
   });
 
+export const isDoNotTrackSet = (env: Readonly<Record<string, string | undefined>>) =>
+  GOAT_TRUE.includes(env.DO_NOT_TRACK?.trim().toLowerCase() ?? "");
+
 /** GOAT Connect relay spans leave the machine, so they need an explicit opt-in. */
 export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
   Config.all({
@@ -350,6 +353,7 @@ export const isRelayTracingEnabled = (env: Readonly<Record<string, string | unde
     Effect.map(
       ({ telemetry, legacyTelemetry, goat, spec }) =>
         telemetry.value === true &&
+        !isDoNotTrackSet(env) &&
         legacyTelemetry.value !== false &&
         !(goat.value ?? spec.value ?? false),
     ),

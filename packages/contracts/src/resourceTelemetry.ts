@@ -333,6 +333,7 @@ export const ShellEnvironmentPatch = Schema.Struct({
   SSL_CERT_DIR: Schema.optionalKey(Schema.NullOr(Schema.String)),
   NODE_EXTRA_CA_CERTS: Schema.optionalKey(Schema.NullOr(Schema.String)),
   GOAT_RELEASE_BASE_URL: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  DO_NOT_TRACK: Schema.optionalKey(Schema.NullOr(Schema.String)),
   GOAT_TELEMETRY_ENABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
   T3CODE_TELEMETRY_ENABLED: Schema.optionalKey(Schema.NullOr(Schema.String)), // goat-rename: legacy
   GOAT_OTEL_SDK_DISABLED: Schema.optionalKey(Schema.NullOr(Schema.String)),
