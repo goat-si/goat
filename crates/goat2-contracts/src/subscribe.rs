@@ -111,6 +111,9 @@ pub enum ClientFrame {
         #[ts(optional)]
         expected_revision: Option<String>,
     },
+    /// Records the person's read position: the host keeps `lastReadSeq` per thread in
+    /// `~/.goat2/ui-state.json` (batched writes), never in the thread log. Cards then derive
+    /// `unread` from it.
     MarkRead {
         req_id: String,
         client_request_id: String,
