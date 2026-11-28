@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_contracts::{
-    EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities, ProviderProbeResult,
-    RequestKind, TurnItem,
+    ChatAttachment, EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities,
+    ProviderProbeResult, RequestKind, ThreadId, TurnItem,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -105,7 +105,13 @@ pub struct HelperFactory {
     engine: HelperEngine,
     driver: EngineDriver,
     launch: HelperLaunch,
+    attachments: Option<AttachmentResolver>,
 }
+
+/// Finds the saved file of an attachment; the host knows the thread folder (same shape as lane
+/// B's `goat2-engine-codex` resolver, v1 `resolveAttachmentPath`). `None` = not found.
+pub type AttachmentResolver =
+    Arc<dyn Fn(&ThreadId, &ChatAttachment) -> Option<PathBuf> + Send + Sync>;
 
 impl HelperFactory {
     /// A factory for a real engine; `None` when the helper does not run this driver.
@@ -115,6 +121,7 @@ impl HelperFactory {
             engine,
             driver,
             launch,
+            attachments: None,
         })
     }
 
@@ -124,7 +131,14 @@ impl HelperFactory {
             engine: HelperEngine::Fake,
             driver,
             launch,
+            attachments: None,
         }
+    }
+
+    /// Resolve attachment files so the helper gets an absolute `path` for each one it can find.
+    pub fn with_attachment_resolver(mut self, resolver: AttachmentResolver) -> Self {
+        self.attachments = Some(resolver);
+        self
     }
 
     /// Start a helper process with its stdio connected.
@@ -220,6 +234,8 @@ impl EngineFactory for HelperFactory {
         };
         tokio::spawn(translator.run(inbound, events_tx));
         let session = HelperSession {
+            thread_id: spec.thread_id.clone(),
+            attachments: self.attachments.clone(),
             client,
             process: tokio::sync::Mutex::new(process),
             pgid,
@@ -344,6 +360,8 @@ impl Client {
 }
 
 struct HelperSession {
+    thread_id: ThreadId,
+    attachments: Option<AttachmentResolver>,
     client: Client,
     process: tokio::sync::Mutex<ChildProcess>,
     pgid: u32,
@@ -361,15 +379,35 @@ impl HelperSession {
     }
 }
 
-fn inputs_json(inputs: &[EngineInput]) -> Value {
+/// Inputs as the helper reads them: each attachment gains `path` (absolute, or null when the
+/// file cannot be found).
+fn inputs_json(
+    inputs: &[EngineInput],
+    thread: &ThreadId,
+    resolver: Option<&AttachmentResolver>,
+) -> Value {
     Value::Array(
         inputs
             .iter()
             .map(|input| {
+                let attachments: Vec<Value> = input
+                    .attachments
+                    .iter()
+                    .map(|attachment| {
+                        let mut value = serde_json::to_value(attachment).unwrap_or(Value::Null);
+                        let path = resolver
+                            .and_then(|resolve| resolve(thread, attachment))
+                            .map(|path| path.to_string_lossy().into_owned());
+                        if let Value::Object(map) = &mut value {
+                            map.insert("path".into(), json!(path));
+                        }
+                        value
+                    })
+                    .collect();
                 json!({
                     "inputId": input.input_id,
                     "text": input.text,
-                    "attachments": input.attachments,
+                    "attachments": attachments,
                 })
             })
             .collect(),
@@ -411,7 +449,7 @@ impl EngineSession for HelperSession {
         inputs: Vec<EngineInput>,
         settings: &TurnSettings,
     ) -> TurnStartResult {
-        let params = json!({ "inputs": inputs_json(&inputs), "settings": settings_json(settings) });
+        let params = json!({ "inputs": inputs_json(&inputs, &self.thread_id, self.attachments.as_ref()), "settings": settings_json(settings) });
         match self.client.call("turn.start", params, CALL_TIMEOUT).await {
             Ok(result) => match status_reason(&result) {
                 (status, _) if status == "accepted" => {
@@ -441,7 +479,7 @@ impl EngineSession for HelperSession {
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
-        let params = json!({ "turnId": turn_id, "inputs": inputs_json(&inputs) });
+        let params = json!({ "turnId": turn_id, "inputs": inputs_json(&inputs, &self.thread_id, self.attachments.as_ref()) });
         match self.client.call("turn.steer", params, CALL_TIMEOUT).await {
             Ok(result) => match status_reason(&result) {
                 (status, _) if status == "accepted" => SteerResult::Accepted,

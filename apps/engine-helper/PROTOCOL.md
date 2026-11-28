@@ -32,6 +32,9 @@ mapped to EngineError on the Rust side.
 |---|---|---|
 | initialize | {protocol: 1, engine: cursor/opencode/muse/fake, threadId, cwd, resume: string or null, modelSelection, runtimeMode, mcp: {url, bearerToken}, instructions: {appendSystemPrompt?, firstMessagePreamble?} or null, launch: {binary?, args?, env?} or null} | {engineRef} (the engine's own session id, written to the card) |
 | turn.start | {inputs: [{inputId, text, attachments}], settings: {modelSelection, runtimeMode}} | TurnStartResult |
+
+Each attachment is a goat2-contracts ChatAttachment plus path: the absolute path of its saved file
+(resolved by the host's AttachmentResolver), or null when the host could not find it.
 | turn.steer | {turnId, inputs} | SteerResult |
 | turn.interrupt | {turnId} | {} |
 | request.answer | {key, answer: {outcome, text?, answers?}} | {} |
