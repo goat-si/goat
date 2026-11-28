@@ -932,6 +932,20 @@ pub struct AcpSession {
 }
 
 impl AcpSession {
+    /// What `initialize` reported.
+    pub fn initialize_info(&self) -> InitializeInfo {
+        self.shared.init.get().cloned().unwrap_or_default()
+    }
+
+    /// The session setup with the latest config options and modes.
+    pub fn session_setup(&self) -> SessionSetup {
+        let state = self.shared.state.lock().expect("state");
+        let mut setup = state.setup.clone();
+        setup.config_options = state.config_options.clone();
+        setup.modes = state.modes.clone();
+        setup
+    }
+
     /// The capabilities negotiated with the started agent (v1 `negotiatedCapabilities`).
     pub fn negotiated_capabilities(&self) -> ProviderCapabilities {
         let init = self.shared.init.get().cloned().unwrap_or_default();
@@ -1228,9 +1242,32 @@ fn handshake_error(step: &str, error: agent_client_protocol::Error, stderr: &str
     }
 }
 
+/// A started session with its concrete controller (probes read the negotiated state from it).
+pub struct StartedAcp {
+    pub session: AcpSession,
+    pub events: mpsc::UnboundedReceiver<EngineEvent>,
+    pub engine_ref: EngineRef,
+}
+
 #[async_trait]
 impl EngineFactory for AcpEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
+        let started = self.start_acp(spec).await?;
+        Ok(EngineHandle {
+            session: Box::new(started.session),
+            events: started.events,
+            engine_ref: started.engine_ref,
+        })
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.flavor.capabilities()
+    }
+}
+
+impl AcpEngineFactory {
+    /// [EngineFactory::start] returning the concrete [AcpSession].
+    pub async fn start_acp(&self, spec: SessionSpec) -> Result<StartedAcp, EngineError> {
         let flavor = Arc::clone(&self.flavor);
         let launch = launch_for(flavor.as_ref(), &spec)?;
         let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -1401,10 +1438,10 @@ impl EngineFactory for AcpEngineFactory {
         let _ = shared.conn.set(conn);
 
         match self.handshake(&shared, &spec).await {
-            Ok(engine_ref) => Ok(EngineHandle {
-                session: Box::new(AcpSession {
+            Ok(engine_ref) => Ok(StartedAcp {
+                session: AcpSession {
                     shared: Arc::clone(&shared),
-                }),
+                },
                 events: events_rx,
                 engine_ref,
             }),
@@ -1415,12 +1452,6 @@ impl EngineFactory for AcpEngineFactory {
         }
     }
 
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.flavor.capabilities()
-    }
-}
-
-impl AcpEngineFactory {
     async fn handshake(
         &self,
         shared: &Arc<Shared>,

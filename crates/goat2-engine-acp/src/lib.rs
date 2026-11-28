@@ -11,7 +11,9 @@ pub mod policy;
 pub mod process;
 pub mod wire;
 
-pub use engine::{AcpEngineFactory, AcpSession, AcpTimeouts, AttachmentResolver};
+pub use engine::{
+    AcpEngineFactory, AcpSession, AcpTimeouts, AttachmentResolver, StartedAcp, prompt_id_of,
+};
 pub use flavor::{
     AcpFlavor, AuthPolicy, ClientCaps, FlavorEvent, LaunchCommand, ModelWrite, ResumeMethod,
     StdoutLine,
