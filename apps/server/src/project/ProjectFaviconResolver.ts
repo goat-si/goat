@@ -1,4 +1,4 @@
-import { safeDecodeURIComponent } from "@t3tools/shared/markdownLinks";
+import { safeDecodeURIComponent } from "@goat/shared/markdownLinks";
 import { characterEntities } from "character-entities";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -161,7 +161,9 @@ function decodeHtmlHref(href: string): string {
     /&(?:([a-z][a-z\d]*);|#(?:(\d+)|x([a-f\d]+));?)/gi,
     (reference, name: string | undefined, decimal: string | undefined, hex: string | undefined) => {
       if (name !== undefined) {
-        return Object.hasOwn(characterEntities, name) ? characterEntities[name]! : reference;
+        return Object.hasOwn(characterEntities, name)
+          ? (characterEntities[name] ?? reference)
+          : reference;
       }
       const codePoint = hex === undefined ? Number(decimal) : Number.parseInt(hex, 16);
       if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
