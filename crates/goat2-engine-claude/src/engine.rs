@@ -628,18 +628,41 @@ impl Inner {
                 "headers": {"Authorization": format!("Bearer {}", self.mcp_token)},
                 "timeout": self.options.mcp_tool_timeout_ms,
             }});
-            // v1 logs the failed server names and carries on; only the deadline fails the open.
-            if let Err(error) = self
+            // v1 (ClaudeAgentSdkQueryRunner.ts:609-625): servers Claude could not attach are
+            // logged by name only, as errors can echo headers, and the session carries on; the
+            // deadline fails the open. A Claude that is gone fails it too.
+            let failed: Vec<String> = match self
                 .control(
                     json!({"subtype": "mcp_set_servers", "servers": servers}),
                     self.options.mcp_registration_timeout,
                 )
                 .await
-                && error.starts_with("Control request timeout")
             {
-                return Err(format!(
-                    "Claude did not register the GOAT MCP server: {error}"
-                ));
+                Ok(response) => response
+                    .get("errors")
+                    .and_then(Value::as_object)
+                    .map(|errors| errors.keys().cloned().collect())
+                    .unwrap_or_default(),
+                Err(error) if error.starts_with("Control request timeout") => {
+                    return Err(format!(
+                        "Claude did not register the GOAT MCP server: {error}"
+                    ));
+                }
+                Err(_)
+                    if self.state.lock().map(|s| s.exited).unwrap_or(true)
+                        || self.writer.lock().map(|w| w.is_none()).unwrap_or(true) =>
+                {
+                    return Err("Claude exited while registering the GOAT MCP server".into());
+                }
+                // Claude refused the request: every server counts as unavailable.
+                Err(_) => vec!["goat".to_string()],
+            };
+            if !failed.is_empty() {
+                tracing::warn!(
+                    thread_id = ?self.thread_id,
+                    servers = ?failed,
+                    "claude-mcp-servers-unavailable"
+                );
             }
         }
         Ok(())
@@ -2694,6 +2717,9 @@ impl EngineSession for ClaudeSession {
 
     async fn set_config(&self, settings: &TurnSettings) -> Result<(), EngineError> {
         let inner = &self.inner;
+        // One configuration change at a time, never beside a turn start's settings or reopen, so
+        // each change acts on the mode the previous one left.
+        let _gate = inner.stop_gate.lock().await;
         let model = CompiledModel::compile(&settings.model_selection);
         let (current_model, current_mode, pinned) = {
             let state = inner
