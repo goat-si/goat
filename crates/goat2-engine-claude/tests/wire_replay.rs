@@ -1349,3 +1349,26 @@ async fn a_background_command_blocks_a_reopen_until_it_finishes() {
     assert_eq!(run.starts().len(), 2);
     handle.session.shutdown().await;
 }
+
+/// Final review 3 finding 1: a `set_config` that changes the model and switches to full access
+/// is refused as a whole; no `set_model` reaches Claude before the refusal.
+#[tokio::test]
+async fn set_config_refuses_before_changing_anything() {
+    let run = Run::new("wire/background_subagent_blocks_reopen.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let result = handle
+        .session
+        .set_config(&settings("claude-opus-5-5", RuntimeMode::FullAccess))
+        .await;
+    assert!(
+        matches!(result, Err(goat2_engine_api::EngineError::Unsupported(_))),
+        "{result:?}"
+    );
+    handle.session.shutdown().await;
+    assert!(
+        !run.stdin_frames()
+            .iter()
+            .any(|f| f["request"]["subtype"] == "set_model"),
+        "set_model was sent before the refusal"
+    );
+}
