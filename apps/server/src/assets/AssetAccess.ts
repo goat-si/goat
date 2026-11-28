@@ -631,7 +631,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             ? { mimeType: videoMimeType }
             : inlineAudioMimeType !== null
               ? { mimeType: inlineAudioMimeType }
-              : input.resource.mimeType !== undefined
+              : isGenericFile && input.resource.mimeType !== undefined
                 ? { mimeType: input.resource.mimeType }
                 : {}),
         ...(input.resource.renderIntent === "mcp-app" && inlinePreviewMimeType === "text/html"
