@@ -16,6 +16,7 @@ name = "goat2-host"
 path = "src/main.rs"
 
 [dependencies]
+sha2 = "0.10"
 goat2-contracts = { path = "../goat2-contracts" }
 goat2-engine-api = { path = "../goat2-engine-api" }
 goat2-engine-claude = { path = "../goat2-engine-claude" }

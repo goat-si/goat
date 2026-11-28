@@ -132,6 +132,14 @@ fn args_of(frame: &Command) -> Value {
     value
 }
 
+/// SHA-256 of a command's arguments, for the dedupe of a frame that must not be kept.
+fn digest_of(args: &Value) -> Value {
+    use sha2::Digest;
+    let bytes = serde_json::to_vec(args).unwrap_or_default();
+    let hash = sha2::Sha256::digest(&bytes);
+    Value::String(hash.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Run one command with the dedupe rule.
 pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
     let Some(key) = frame.client_request_id().map(str::to_owned) else {
@@ -143,15 +151,14 @@ pub(crate) async fn handle(host: &Host, frame: Command) -> CommandReply {
             "clientRequestId is empty",
         ));
     }
-    // Do not retain secret-bearing auth responses in the generic idempotency cache.
-    if matches!(&frame, Command::ProviderAuthRespond { .. }) {
-        return Err(command_error(
-            Reason::NotAvailable,
-            "provider_auth_respond is not available in this host build yet",
-        ));
-    }
     let _guard = host.inner.command_lock.lock().await;
-    let args = args_of(&frame);
+    // A sign-in answer carries secrets (an API key, terminal input): the dedupe cache keeps
+    // only a digest of its arguments, enough to tell a retry from a different answer.
+    let args = if matches!(&frame, Command::ProviderAuthRespond { .. }) {
+        digest_of(&args_of(&frame))
+    } else {
+        args_of(&frame)
+    };
     if let Some(entry) = host.inner.dedupe.lock().expect("dedupe").get(&key).cloned() {
         if entry.args.as_ref().is_some_and(|a| a != &args) {
             return Err(command_error(
@@ -537,6 +544,30 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 .inner
                 .providers
                 .auth_logout(host, instance_id.as_str())
+                .await
+                .map_err(provider_refusal)?;
+            Ok(CommandValue {
+                auth_state: Some(state),
+                ..Default::default()
+            })
+        }
+        Command::ProviderAuthRespond {
+            instance_id,
+            flow_id,
+            interaction_id,
+            response,
+            ..
+        } => {
+            let state = host
+                .inner
+                .providers
+                .auth_respond(
+                    host,
+                    instance_id.as_str(),
+                    &flow_id,
+                    &interaction_id,
+                    response,
+                )
                 .await
                 .map_err(provider_refusal)?;
             Ok(CommandValue {

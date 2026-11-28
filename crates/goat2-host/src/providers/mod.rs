@@ -348,6 +348,31 @@ impl Providers {
         Ok(state)
     }
 
+    /// `provider_auth_respond`: answer what the instance's running flow waits for. The
+    /// response (an API key, terminal input) goes straight to the driver and is dropped: never
+    /// logged or stored. An answer for an older flow never replaces the running one's state.
+    pub async fn auth_respond(
+        &self,
+        host: &Host,
+        instance_id: &str,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<ProviderAuthState, ProviderRefusal> {
+        let (instance, factory) = self.lookup(instance_id)?;
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
+        let state = clean_auth(
+            instance_id,
+            bounded(factory.auth_respond(&target, flow_id, interaction_id, response)).await?,
+        );
+        self.record_auth_if(host, instance_id, state.clone(), |current| {
+            current.is_none_or(|c| c.flow_id.as_deref() == Some(flow_id))
+        })?;
+        Ok(state)
+    }
+
     pub async fn auth_logout(
         &self,
         host: &Host,
