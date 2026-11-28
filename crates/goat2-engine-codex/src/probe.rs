@@ -30,7 +30,7 @@ use tokio::time::{Instant, timeout_at};
 use crate::engine::{
     CodexEngineOptions, base_launch, instance_layout, instance_options, materialize,
 };
-use crate::home_layout::HomeLayout;
+use crate::home_layout::{HomeLayout, Redactor};
 use crate::process::{ChildProcess, Launch};
 use crate::protocol::client::InitializeParams;
 use crate::protocol::methods;
@@ -58,7 +58,23 @@ const FORCE_KILL_AFTER: Duration = Duration::from_secs(2);
 
 /// [probe] with an explicit budget (tests).
 pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> ProviderProbeResult {
-    probe_layout(options, None, codex_home_setting(options), budget).await
+    probe_layout(
+        options,
+        None,
+        LoginHint::Home(codex_home_setting(options)),
+        budget,
+    )
+    .await
+}
+
+/// What the sign-in message names (v1 `accountProbeStatus` names the CODEX_HOME setting).
+enum LoginHint {
+    /// The shared home settings name, if any (v1 `homePath`).
+    Home(Option<String>),
+    /// An instance with its own private home: `codex login` in any other home would sign in
+    /// another account, and its path is never shown, so the message points at signing in this
+    /// instance.
+    Instance,
 }
 
 /// [probe] for one provider instance: its launch settings and its own Codex home, laid out first
@@ -77,13 +93,18 @@ pub async fn probe_instance_with(
     target: &ProviderTarget,
     budget: Duration,
 ) -> ProviderProbeResult {
+    // The shared home comes from the factory's own settings: an instance's environment
+    // cannot move it.
+    let layout = instance_layout(options, Some(target));
+    let redact = Redactor::for_layout(layout.as_ref());
     let options = instance_options(options, target.launch.as_ref());
-    let layout = instance_layout(&options, Some(target));
-    let hint = target
-        .shared_home
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .or_else(|| codex_home_setting(&options));
+    let hint = match &layout {
+        Some(HomeLayout::AuthOverlay { .. }) => LoginHint::Instance,
+        Some(HomeLayout::Direct { .. }) => {
+            LoginHint::Home(target.shared_home.as_ref().map(|p| p.display().to_string()))
+        }
+        None => LoginHint::Home(codex_home_setting(&options)),
+    };
     if let Some(layout) = &layout
         && let Err(message) = materialize(layout)
     {
@@ -97,13 +118,16 @@ pub async fn probe_instance_with(
             message,
         );
     }
-    probe_layout(&options, layout.as_ref(), hint, budget).await
+    let mut result = probe_layout(&options, layout.as_ref(), hint, budget).await;
+    // Codex's errors and stderr can name the private home.
+    result.message = result.message.map(|m| redact.apply(&m));
+    result
 }
 
 async fn probe_layout(
     options: &CodexEngineOptions,
     layout: Option<&HomeLayout>,
-    login_hint_home: Option<String>,
+    login_hint: LoginHint,
     budget: Duration,
 ) -> ProviderProbeResult {
     let checked_at = rfc3339_now();
@@ -188,7 +212,7 @@ async fn probe_layout(
             )
             .await
         }
-        Ok(Ok(snapshot)) => from_snapshot(snapshot, login_hint_home, checked_at, binary_path),
+        Ok(Ok(snapshot)) => from_snapshot(snapshot, login_hint, checked_at, binary_path),
     }
 }
 
@@ -678,12 +702,12 @@ fn cache_fetched_at_ms(path: &Path) -> Option<i64> {
 
 fn from_snapshot(
     snapshot: Snapshot,
-    login_hint_home: Option<String>,
+    login_hint: LoginHint,
     checked_at: String,
     binary_path: Option<String>,
 ) -> ProviderProbeResult {
     let effective = snapshot.effective_base_url.as_deref();
-    let (status, mut auth, message) = account_status(&snapshot.account, effective, login_hint_home);
+    let (status, mut auth, message) = account_status(&snapshot.account, effective, login_hint);
     let config = snapshot.config.as_ref();
     auth.endpoint = codex_endpoint(config, effective);
     let models = snapshot.models.as_ref().map(|models| {
@@ -722,18 +746,19 @@ fn from_snapshot(
 fn account_status(
     account: &AccountResponse,
     effective_base_url: Option<&str>,
-    codex_home: Option<String>,
+    login_hint: LoginHint,
 ) -> (ServerProviderState, ServerProviderAuth, Option<String>) {
     if account.account.is_none()
         && account.requires_openai_auth
         && !routes_away_from_openai(effective_base_url)
     {
-        let message = match codex_home {
-            Some(home) => format!(
+        let message = match login_hint {
+            LoginHint::Instance => "Codex CLI is not authenticated for this provider instance. Sign in to this instance and try again.".into(),
+            LoginHint::Home(None) => "Codex CLI is not authenticated. Run `codex login` and try again.".into(),
+            LoginHint::Home(Some(home)) => format!(
                 "Codex CLI is not authenticated. Run `codex login` with CODEX_HOME set to {} and try again.",
                 serde_json::to_string(&home).unwrap_or(home)
             ),
-            None => "Codex CLI is not authenticated. Run `codex login` and try again.".into(),
         };
         return (
             ServerProviderState::Error,
@@ -1837,7 +1862,7 @@ mod tests {
                 json!({"account": {"type": "chatgpt", "email": e, "planType": "pro"}, "requiresOpenaiAuth": true}),
             )
             .unwrap();
-            account_status(&a, None, None).1.email
+            account_status(&a, None, LoginHint::Home(None)).1.email
         };
         assert_eq!(email(json!("")), None);
         assert_eq!(email(json!("a@b.c")).as_deref(), Some("a@b.c"));

@@ -842,3 +842,108 @@ async fn an_instance_home_that_cannot_be_laid_out_fails_without_naming_it() {
     );
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Review r1: an overlay instance is never told to run `codex login` in another home (that would
+/// sign in another account), and Codex's error text naming the private home is redacted.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_probe_redacts_its_home_and_asks_to_sign_in_this_instance() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("redact");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let target = |record: &std::path::Path, name: &str| ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex(name, record)),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    // No login: the instance's own sign-in, no path, no `codex login` hint.
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": null, "requiresOpenaiAuth": true}}),
+    ));
+    let p = factory(e)
+        .probe_instance(&target(&root.join("r1"), "redact1"))
+        .await
+        .unwrap();
+    assert_eq!(p.auth.status, ServerProviderAuthStatus::Unauthenticated);
+    assert_eq!(
+        p.message.as_deref(),
+        Some(
+            "Codex CLI is not authenticated for this provider instance. Sign in to this instance and try again."
+        )
+    );
+    // An RPC error naming the private home.
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(json!({"id": 2, "error": {"code": -32603,
+        "message": format!("cannot read {}/auth.json", instance.display())}})));
+    let p = factory(e)
+        .probe_instance(&target(&root.join("r2"), "redact2"))
+        .await
+        .unwrap();
+    let message = p.message.unwrap();
+    assert!(message.contains("<instance home>/auth.json"), "{message}");
+    assert!(!message.contains(instance.to_str().unwrap()), "{message}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Review r1: the shared home comes from the factory's settings; an instance's own CODEX_HOME
+/// cannot move it (v1 resolves the shared home from settings, CodexHomeLayout.ts:49).
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_environment_cannot_move_the_shared_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("shared-env");
+    let shared = root.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("config.toml"), "").unwrap();
+    std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let record = root.join("record");
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))]});
+    let mut f = factory(api_key_catalog(page));
+    f.options
+        .env_set
+        .push(("CODEX_HOME".into(), shared.clone().into_os_string()));
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("shared-env", &record)),
+            args: Vec::new(),
+            env: [(
+                "CODEX_HOME".to_string(),
+                root.join("elsewhere").display().to_string(),
+            )]
+            .into(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: None,
+    };
+    let p = f.probe_instance(&target).await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(
+        std::fs::read_link(instance.join("config.toml")).unwrap(),
+        shared.join("config.toml")
+    );
+    let first = std::fs::read_to_string(&record).unwrap();
+    assert_eq!(
+        first.lines().next().unwrap(),
+        instance.display().to_string()
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

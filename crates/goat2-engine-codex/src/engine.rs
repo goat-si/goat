@@ -28,7 +28,7 @@ use crate::contract::{
     EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderRequestKind, RequestId,
     RequestKind, RequestOutcome, RuntimeMode, ThreadId,
 };
-use crate::home_layout::{self, HomeLayout};
+use crate::home_layout::{self, HomeLayout, Redactor};
 use crate::items::{self, ItemContext};
 use crate::process::{ChildProcess, Launch, group_rss_bytes_of};
 use crate::protocol::client::{
@@ -222,28 +222,42 @@ pub(crate) fn instance_layout(
 /// v1 materializes the instance's home before it starts or probes it (CodexAdapterV2.ts:598-608,
 /// CodexDriver.ts:310); the message names no path (home paths are never shown or logged).
 pub(crate) fn materialize(layout: &HomeLayout) -> Result<(), String> {
-    layout.materialize().map(|_| ()).map_err(|e| {
-        format!(
-            "Failed to materialize the Codex shadow home: {}.",
-            e.summary()
-        )
-    })
+    layout
+        .materialize()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to materialize the Codex shadow home: {e}."))
 }
 
-/// The launch for one session: the instance's options and home ([instance_options],
-/// [instance_layout]) through [base_launch].
-fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Result<Launch, EngineError> {
-    let options = instance_options(options, spec.launch());
-    let layout = instance_layout(&options, spec.instance.as_ref());
+/// The launch for one session: the instance's home ([instance_layout], from the factory's own
+/// settings so an instance's environment cannot move the shared home) and options
+/// ([instance_options]) through [base_launch], with the redactor for its private home.
+fn launch_for(
+    options: &CodexEngineOptions,
+    spec: &SessionSpec,
+) -> Result<(Launch, Redactor), EngineError> {
+    let layout = instance_layout(options, spec.instance.as_ref());
+    let redact = Redactor::for_layout(layout.as_ref());
     if let Some(layout) = &layout {
         materialize(layout).map_err(EngineError::StartFailed)?;
     }
-    Ok(base_launch(
+    let options = instance_options(options, spec.launch());
+    let launch = base_launch(
         &options,
         &options.program,
         PathBuf::from(&spec.engine.cwd),
         layout.as_ref(),
-    ))
+    );
+    Ok((launch, redact))
+}
+
+/// [EngineError] with an instance's private home replaced.
+fn redact_error(redact: &Redactor, error: EngineError) -> EngineError {
+    match error {
+        EngineError::Unavailable(m) => EngineError::Unavailable(redact.apply(&m)),
+        EngineError::StartFailed(m) => EngineError::StartFailed(redact.apply(&m)),
+        EngineError::Transport(m) => EngineError::Transport(redact.apply(&m)),
+        EngineError::Unsupported(m) => EngineError::Unsupported(redact.apply(&m)),
+    }
 }
 
 /// GOAT's instructions go into Codex's developer instructions (its system slot) on thread/start
@@ -269,7 +283,18 @@ async fn start_session(
     options: CodexEngineOptions,
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
-    let launch = launch_for(&options, &spec)?;
+    let (launch, redact) = launch_for(&options, &spec)?;
+    start_launched(options, spec, launch, redact.clone())
+        .await
+        .map_err(|e| redact_error(&redact, e))
+}
+
+async fn start_launched(
+    options: CodexEngineOptions,
+    spec: SessionSpec,
+    launch: Launch,
+    redact: Redactor,
+) -> Result<EngineHandle, EngineError> {
     let mut child = ChildProcess::spawn(&launch).map_err(|error| {
         EngineError::StartFailed(format!("spawn {}: {error}", launch.program.display()))
     })?;
@@ -302,6 +327,7 @@ async fn start_session(
     let (events, event_rx) = mpsc::unbounded_channel();
     let (internal, internal_rx) = mpsc::unbounded_channel();
     let actor = Actor {
+        redact: redact.clone(),
         options,
         spec_thread: spec.thread_id.clone(),
         cwd: spec.engine.cwd.clone(),
@@ -342,7 +368,11 @@ async fn start_session(
     actor.arm_idle();
     tokio::spawn(actor.run());
     Ok(EngineHandle {
-        session: Box::new(CodexSession { commands, pgid }),
+        session: Box::new(CodexSession {
+            commands,
+            pgid,
+            redact,
+        }),
         events: event_rx,
         engine_ref: EngineRef {
             driver: EngineDriver::Codex,
@@ -432,6 +462,34 @@ enum Command {
 pub struct CodexSession {
     commands: mpsc::UnboundedSender<Command>,
     pgid: u32,
+    /// The instance's private home never leaves in a reason or error.
+    redact: Redactor,
+}
+
+impl CodexSession {
+    fn redact_start(&self, result: TurnStartResult) -> TurnStartResult {
+        let r = |reason: String| self.redact.apply(&reason);
+        match result {
+            TurnStartResult::Accepted { turn_id } => TurnStartResult::Accepted { turn_id },
+            TurnStartResult::RefusedUnowned { reason } => {
+                TurnStartResult::RefusedUnowned { reason: r(reason) }
+            }
+            TurnStartResult::Declined { reason } => TurnStartResult::Declined { reason: r(reason) },
+            TurnStartResult::Unknown { reason } => TurnStartResult::Unknown { reason: r(reason) },
+        }
+    }
+
+    fn redact_steer(&self, result: SteerResult) -> SteerResult {
+        let r = |reason: String| self.redact.apply(&reason);
+        match result {
+            SteerResult::Accepted => SteerResult::Accepted,
+            SteerResult::Declined { reason } => SteerResult::Declined { reason: r(reason) },
+            SteerResult::RefusedUnowned { reason } => {
+                SteerResult::RefusedUnowned { reason: r(reason) }
+            }
+            SteerResult::Unknown { reason } => SteerResult::Unknown { reason: r(reason) },
+        }
+    }
 }
 
 #[async_trait]
@@ -452,9 +510,9 @@ impl EngineSession for CodexSession {
                 reason: "the Codex process has ended".into(),
             };
         }
-        answer.await.unwrap_or(TurnStartResult::Unknown {
+        self.redact_start(answer.await.unwrap_or(TurnStartResult::Unknown {
             reason: "the Codex driver stopped before answering".into(),
-        })
+        }))
     }
 
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
@@ -469,9 +527,9 @@ impl EngineSession for CodexSession {
                 reason: "the Codex process has ended".into(),
             };
         }
-        answer.await.unwrap_or(SteerResult::Unknown {
+        self.redact_steer(answer.await.unwrap_or(SteerResult::Unknown {
             reason: "the Codex driver stopped before answering".into(),
-        })
+        }))
     }
 
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
@@ -486,7 +544,10 @@ impl EngineSession for CodexSession {
         {
             return Ok(());
         }
-        answer.await.unwrap_or(Ok(()))
+        answer
+            .await
+            .unwrap_or(Ok(()))
+            .map_err(|e| redact_error(&self.redact, e))
     }
 
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
@@ -501,6 +562,7 @@ impl EngineSession for CodexSession {
         result
             .await
             .unwrap_or_else(|_| Err(EngineError::Transport("the Codex driver stopped".into())))
+            .map_err(|e| redact_error(&self.redact, e))
     }
 
     /// Codex takes the model and runtime mode with every turn/start (v1 CodexTurnStartParams), so
@@ -610,6 +672,8 @@ struct Pending {
 const SETTLED_RING: usize = 64;
 
 struct Actor {
+    /// The instance's private home never leaves in an event reason.
+    redact: Redactor,
     options: CodexEngineOptions,
     spec_thread: ThreadId,
     cwd: String,
@@ -745,7 +809,35 @@ impl Actor {
         deadline
     }
 
+    /// Exit and failure reasons can carry Codex's stderr or error text: the instance's private
+    /// home is replaced in them.
     fn emit(&self, event: EngineEvent) {
+        let event = match event {
+            EngineEvent::Exited { reason } => EngineEvent::Exited {
+                reason: self.redact.apply(&reason),
+            },
+            EngineEvent::TurnFinished {
+                turn_id,
+                outcome: TurnOutcome::Failed { reason },
+            } => EngineEvent::TurnFinished {
+                turn_id,
+                outcome: TurnOutcome::Failed {
+                    reason: self.redact.apply(&reason),
+                },
+            },
+            EngineEvent::AuthRequired {
+                key,
+                turn_id,
+                url,
+                message,
+            } => EngineEvent::AuthRequired {
+                key,
+                turn_id,
+                url,
+                message: self.redact.apply(&message),
+            },
+            other => other,
+        };
         let _ = self.events.send(event);
     }
 

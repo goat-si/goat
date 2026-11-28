@@ -92,10 +92,7 @@ fn an_instance_overlay_shares_everything_but_the_account_files() {
     let layout = overlay(dir.path());
     let instance = dir.path().join("instance");
     assert_eq!(layout.codex_home(), Some(instance.as_path()));
-    assert_eq!(
-        layout.materialize().unwrap().kept_local_thread_writer_locks,
-        None
-    );
+    assert!(!layout.materialize().unwrap().kept_local_thread_writer_locks);
 
     for name in [
         "config.toml",
@@ -189,16 +186,10 @@ fn a_live_local_thread_lock_is_kept_until_a_later_setup() {
     fs::create_dir_all(instance.join("thread-writer-locks")).unwrap();
     fs::write(instance.join("thread-writer-locks/t1.lock"), "").unwrap();
     let layout = overlay(dir.path());
-    assert_eq!(
-        layout.materialize().unwrap().kept_local_thread_writer_locks,
-        Some(instance.join("thread-writer-locks"))
-    );
+    assert!(layout.materialize().unwrap().kept_local_thread_writer_locks);
     assert!(instance.join("thread-writer-locks/t1.lock").exists());
     fs::remove_file(instance.join("thread-writer-locks/t1.lock")).unwrap();
-    assert_eq!(
-        layout.materialize().unwrap().kept_local_thread_writer_locks,
-        None
-    );
+    assert!(!layout.materialize().unwrap().kept_local_thread_writer_locks);
     assert!(link_target(&instance.join("thread-writer-locks")).is_some());
 }
 
@@ -266,4 +257,21 @@ fn an_overlay_points_bundled_plugins_at_its_own_tmp() {
             )
         ]
     );
+}
+
+#[test]
+fn layouts_and_their_errors_never_print_paths() {
+    let dir = tempdir();
+    let layout = overlay(dir.path());
+    let shown = format!("{layout:?}");
+    assert!(!shown.contains(dir.path().to_str().unwrap()), "{shown}");
+    fs::create_dir_all(dir.path().join("shared")).unwrap();
+    fs::write(dir.path().join("shared/config.toml"), "").unwrap();
+    fs::create_dir_all(dir.path().join("instance")).unwrap();
+    fs::write(dir.path().join("instance/config.toml"), "").unwrap();
+    let error = layout.materialize().unwrap_err();
+    for shown in [error.to_string(), format!("{error:?}")] {
+        assert!(!shown.contains(dir.path().to_str().unwrap()), "{shown}");
+        assert!(shown.contains("config.toml"), "{shown}");
+    }
 }

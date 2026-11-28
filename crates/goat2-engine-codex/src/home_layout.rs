@@ -12,8 +12,8 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-/// v1 `CodexHomeLayout`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// v1 `CodexHomeLayout`. Its Debug shows no paths (home paths are never logged or shown).
+#[derive(Clone, PartialEq, Eq)]
 pub enum HomeLayout {
     /// The shared home itself. `effective` is set only when settings named the shared home
     /// (then CODEX_HOME is set to it); `None` leaves Codex's own default.
@@ -23,6 +23,23 @@ pub enum HomeLayout {
     },
     /// A private overlay over the shared home.
     AuthOverlay { shared: PathBuf, effective: PathBuf },
+}
+
+impl std::fmt::Debug for HomeLayout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HomeLayout::Direct { effective, .. } => f
+                .debug_struct("Direct")
+                .field("shared", &"<set>")
+                .field("effective", &effective.as_ref().map(|_| "<set>"))
+                .finish(),
+            HomeLayout::AuthOverlay { .. } => f
+                .debug_struct("AuthOverlay")
+                .field("shared", &"<set>")
+                .field("effective", &"<set>")
+                .finish(),
+        }
+    }
 }
 
 /// v1 `KNOWN_SHARED_DIRECTORIES`: created in the shared home and always linked.
@@ -53,10 +70,11 @@ const REPLACEABLE_SHARED_RUNTIME_ENTRIES: [&str; 3] = [
 /// v1 `BUNDLED_MARKETPLACE`: Codex accepts bundled plugins only from under CODEX_HOME.
 const BUNDLED_MARKETPLACE: &str = "openai-bundled";
 
-/// v1 `CodexShadowHomeError` (same messages).
-#[derive(Debug, thiserror::Error)]
+/// v1 `CodexShadowHomeError`. The paths are kept for callers, but neither Display nor Debug
+/// shows them (home paths are never logged or shown; v1's messages name them).
+#[derive(thiserror::Error)]
 pub enum HomeLayoutError {
-    #[error("Codex shadow home filesystem operation '{operation}' failed for '{}'{}: {source}", path.display(), target.as_ref().map(|t| format!(" -> '{}'", t.display())).unwrap_or_default())]
+    #[error("filesystem operation '{operation}' failed ({})", source.kind())]
     FileSystem {
         operation: &'static str,
         path: PathBuf,
@@ -64,39 +82,19 @@ pub enum HomeLayoutError {
         #[source]
         source: io::Error,
     },
-    #[error("Codex shadow home path '{}' must be different from the shared home path '{}'.", effective.display(), shared.display())]
+    #[error("the instance home must differ from the shared home")]
     PathConflict { shared: PathBuf, effective: PathBuf },
-    #[error("Cannot create Codex shadow home entry '{entry}' because '{}' already exists and is not a symlink.", link.display())]
+    #[error("'{entry}' already exists in the instance home and is not a symlink")]
     EntryConflict { entry: String, link: PathBuf },
-    #[error("Codex shadow home private entry '{entry}' at '{}' must be a real file, not a symlink.", path.display())]
+    #[error("the private entry '{entry}' must be a real file, not a symlink")]
     PrivateEntrySymlink { entry: String, path: PathBuf },
-    #[error("Codex shadow homes need symlinks, which this platform build does not support yet.")]
+    #[error("symlinks are not supported on this platform yet")]
     Unsupported,
 }
 
-impl HomeLayoutError {
-    /// The error without its paths (home paths are never shown or logged).
-    pub fn summary(&self) -> String {
-        match self {
-            HomeLayoutError::FileSystem {
-                operation, source, ..
-            } => format!(
-                "filesystem operation '{operation}' failed ({})",
-                source.kind()
-            ),
-            HomeLayoutError::PathConflict { .. } => {
-                "the instance home must differ from the shared home".into()
-            }
-            HomeLayoutError::EntryConflict { entry, .. } => {
-                format!("'{entry}' already exists in the instance home and is not a symlink")
-            }
-            HomeLayoutError::PrivateEntrySymlink { entry, .. } => {
-                format!("the private entry '{entry}' must be a real file, not a symlink")
-            }
-            HomeLayoutError::Unsupported => {
-                "symlinks are not supported on this platform yet".into()
-            }
-        }
+impl std::fmt::Debug for HomeLayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HomeLayoutError({self})")
     }
 }
 
@@ -105,7 +103,7 @@ impl HomeLayoutError {
 pub struct Materialized {
     /// v1: a local `thread-writer-locks` that still holds a lock may guard a live writer; it is kept
     /// and shared on a later setup.
-    pub kept_local_thread_writer_locks: Option<PathBuf>,
+    pub kept_local_thread_writer_locks: bool,
 }
 
 /// v1 `resolveCodexHomeLayout` with the host's resolved paths: `shared_home` is the shared home settings
@@ -234,8 +232,8 @@ fn materialize_overlay(shared: &Path, effective: &Path) -> Result<Materialized, 
     }
     let mut out = Materialized::default();
     for name in &entries {
-        if let Some(kept) = ensure_symlink(shared, effective, name)? {
-            out.kept_local_thread_writer_locks = Some(kept);
+        if ensure_symlink(shared, effective, name)? {
+            out.kept_local_thread_writer_locks = true;
         }
     }
     let auth = effective.join("auth.json");
@@ -278,13 +276,9 @@ fn link_state(path: &Path) -> Result<LinkState, HomeLayoutError> {
     }
 }
 
-/// v1 `ensureSymlink`. Returns the kept local thread-writer-locks folder, if one was kept.
+/// v1 `ensureSymlink`. Returns whether a local thread-writer-locks folder was kept.
 #[cfg(unix)]
-fn ensure_symlink(
-    shared: &Path,
-    effective: &Path,
-    name: &str,
-) -> Result<Option<PathBuf>, HomeLayoutError> {
+fn ensure_symlink(shared: &Path, effective: &Path, name: &str) -> Result<bool, HomeLayoutError> {
     let target = shared.join(name);
     let link = effective.join(name);
     let create = || {
@@ -320,18 +314,23 @@ fn ensure_symlink(
             if name == "thread-writer-locks" {
                 // Codex deletes a thread lock on release, so one that is left may still guard a
                 // live writer: keep the local folder until a later setup finds none.
-                let live = std::fs::read_dir(&link)
-                    .map_err(|source| HomeLayoutError::FileSystem {
-                        operation: "readDirectory",
-                        path: link.clone(),
-                        target: None,
-                        source,
-                    })?
-                    .filter_map(Result::ok)
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .any(|n| n.ends_with(".lock") && n != ".coordination.lock");
+                let read_error = |source: io::Error| HomeLayoutError::FileSystem {
+                    operation: "readDirectory",
+                    path: link.clone(),
+                    target: None,
+                    source,
+                };
+                // v1 fails on a directory it cannot read; so does an entry it cannot read.
+                let mut live = false;
+                for entry in std::fs::read_dir(&link).map_err(read_error)? {
+                    let name = entry.map_err(read_error)?.file_name();
+                    let name = name.to_string_lossy();
+                    if name.ends_with(".lock") && name != ".coordination.lock" {
+                        live = true;
+                    }
+                }
                 if live {
-                    return Ok(Some(link));
+                    return Ok(true);
                 }
             }
             remove(true)?;
@@ -345,7 +344,39 @@ fn ensure_symlink(
             }
         }
     }
-    Ok(None)
+    Ok(false)
+}
+
+/// Replaces an instance's private home in outward text (errors, Codex's stderr, RPC messages,
+/// probe messages): home paths are never logged or shown. Both the path as given and its
+/// canonical form are replaced.
+#[derive(Clone, Default)]
+pub struct Redactor {
+    needles: Vec<String>,
+}
+
+impl Redactor {
+    /// For an instance overlay; nothing to redact for the shared home.
+    pub fn for_layout(layout: Option<&HomeLayout>) -> Self {
+        let Some(HomeLayout::AuthOverlay { effective, .. }) = layout else {
+            return Self::default();
+        };
+        let mut needles = vec![effective.display().to_string()];
+        if let Ok(canonical) = effective.canonicalize() {
+            needles.push(canonical.display().to_string());
+        }
+        needles.retain(|n| !n.is_empty());
+        needles.sort_by_key(|n| std::cmp::Reverse(n.len()));
+        needles.dedup();
+        Self { needles }
+    }
+
+    /// `text` with the private home replaced by "<instance home>".
+    pub fn apply(&self, text: &str) -> String {
+        self.needles.iter().fold(text.to_string(), |t, n| {
+            t.replace(n.as_str(), "<instance home>")
+        })
+    }
 }
 
 /// v1 `path.resolve`: absolute against the working directory, with `.` and `..` folded

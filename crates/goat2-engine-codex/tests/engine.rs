@@ -1623,3 +1623,36 @@ async fn a_session_whose_home_cannot_be_laid_out_does_not_start() {
     assert!(!error.contains(root.to_str().unwrap()), "{error}");
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Review r1: Codex's stderr naming the private home is redacted in the start error.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_instance_start_redacts_its_home_from_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = instance_root("stderr");
+    let wrapper = root.join("codex");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\necho \"cannot open $CODEX_HOME/auth.json\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let t = load("codex-0.167.0/basic.json");
+    let mut o = options(&t);
+    o.program = wrapper;
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.instance = Some(instance_target(
+        &root.join("instance"),
+        &root.join("shared"),
+    ));
+    let error = match CodexEngineFactory::new(o).start(s).await {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("started"),
+    };
+    assert!(error.contains("<instance home>/auth.json"), "{error}");
+    assert!(
+        !error.contains(root.join("instance").to_str().unwrap()),
+        "{error}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
