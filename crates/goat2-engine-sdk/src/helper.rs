@@ -1,0 +1,636 @@
+//! Driver over `apps/engine-helper`: one Node helper process per thread (own process group,
+//! `nice` +10), spoken to with the JSONL shape in `apps/engine-helper/PROTOCOL.md`.
+
+use std::collections::VecDeque;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use async_trait::async_trait;
+use goat2_contracts::{
+    EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities, RequestKind, TurnItem,
+};
+use goat2_engine_api::{
+    EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
+    RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
+};
+use serde_json::{Map, Value, json};
+use tokio::sync::mpsc;
+
+use crate::jsonl::{CallError, Connection, Dialect, Inbound, RemoteError};
+use crate::process::{ChildProcess, Launch, group_rss_bytes_of};
+
+const PROTOCOL_VERSION: u64 = 1;
+/// Starting an engine can include starting its own server (OpenCode) or loading a large SDK.
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(90);
+const CALL_TIMEOUT: Duration = Duration::from_secs(60);
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const LOG_TAIL_LINES: usize = 200;
+
+/// The engines the helper runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HelperEngine {
+    Cursor,
+    Opencode,
+    Muse,
+    /// The scripted test engine (`apps/engine-helper/src/engines/fake.ts`).
+    Fake,
+}
+
+impl HelperEngine {
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Cursor => "cursor",
+            Self::Opencode => "opencode",
+            Self::Muse => "muse",
+            Self::Fake => "fake",
+        }
+    }
+
+    /// The helper engine for a driver kind, if the helper runs it.
+    pub fn for_driver(driver: &EngineDriver) -> Option<Self> {
+        match driver {
+            EngineDriver::Cursor => Some(Self::Cursor),
+            EngineDriver::Opencode => Some(Self::Opencode),
+            EngineDriver::Muse => Some(Self::Muse),
+            _ => None,
+        }
+    }
+}
+
+/// How to start the helper: a Node binary and the helper's entry file.
+#[derive(Debug, Clone)]
+pub struct HelperLaunch {
+    pub node: PathBuf,
+    pub entry: PathBuf,
+    /// Extra variables for the helper process (test fakes, `NODE_OPTIONS`).
+    pub env: Vec<(OsString, OsString)>,
+}
+
+impl HelperLaunch {
+    pub fn new(node: impl Into<PathBuf>, entry: impl Into<PathBuf>) -> Self {
+        Self {
+            node: node.into(),
+            entry: entry.into(),
+            env: Vec::new(),
+        }
+    }
+
+    /// `GOAT2_ENGINE_HELPER_ENTRY` (required) and `GOAT2_ENGINE_HELPER_NODE` (default `node`),
+    /// as lane G's app bundle sets them.
+    pub fn from_env() -> Option<Self> {
+        let entry = std::env::var_os("GOAT2_ENGINE_HELPER_ENTRY")?;
+        let node = std::env::var_os("GOAT2_ENGINE_HELPER_NODE").unwrap_or_else(|| "node".into());
+        Some(Self::new(node, entry))
+    }
+
+    pub fn with_env(mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.env.push((name.into(), value.into()));
+        self
+    }
+}
+
+/// [EngineFactory] for one helper engine.
+pub struct HelperFactory {
+    engine: HelperEngine,
+    driver: EngineDriver,
+    launch: HelperLaunch,
+}
+
+impl HelperFactory {
+    /// A factory for a real engine; `None` when the helper does not run this driver.
+    pub fn new(driver: EngineDriver, launch: HelperLaunch) -> Option<Self> {
+        let engine = HelperEngine::for_driver(&driver)?;
+        Some(Self {
+            engine,
+            driver,
+            launch,
+        })
+    }
+
+    /// The scripted fake engine, reporting as `driver` (tests).
+    pub fn fake(driver: EngineDriver, launch: HelperLaunch) -> Self {
+        Self {
+            engine: HelperEngine::Fake,
+            driver,
+            launch,
+        }
+    }
+
+    fn initialize_params(&self, spec: &SessionSpec) -> Value {
+        let resume = spec
+            .resume
+            .as_ref()
+            .filter(|reference| reference.driver == self.driver)
+            .map(|reference| reference.id.clone());
+        let instructions = spec.instructions.as_ref().map(|instructions| {
+            json!({
+                "appendSystemPrompt": instructions.append_system_prompt,
+                "firstMessagePreamble": instructions.first_message_preamble,
+            })
+        });
+        let launch = spec.launch.as_ref().map(|launch| {
+            json!({
+                "binary": launch.binary.as_ref().map(|path| path.to_string_lossy().into_owned()),
+                "args": launch.args,
+                "env": launch.env,
+            })
+        });
+        json!({
+            "protocol": PROTOCOL_VERSION,
+            "engine": self.engine.wire_name(),
+            "threadId": spec.thread_id,
+            "cwd": spec.engine.cwd,
+            "resume": resume,
+            "modelSelection": spec.engine.model_selection,
+            "runtimeMode": spec.engine.runtime_mode,
+            "mcp": { "url": spec.mcp.url, "bearerToken": spec.mcp.bearer_token },
+            "instructions": instructions,
+            "launch": launch,
+        })
+    }
+}
+
+#[async_trait]
+impl EngineFactory for HelperFactory {
+    async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
+        let mut launch = Launch::new(&self.launch.node)
+            .arg(&self.launch.entry)
+            .without_host_identity();
+        launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
+        launch.env_set.extend(self.launch.env.iter().cloned());
+        let mut process = ChildProcess::spawn(&launch).map_err(|error| {
+            EngineError::Unavailable(format!(
+                "engine helper could not start ({}): {error}",
+                self.launch.node.display()
+            ))
+        })?;
+        let (Some(stdin), Some(stdout)) = (process.take_stdin(), process.take_stdout()) else {
+            process.kill_group();
+            return Err(EngineError::StartFailed(
+                "engine helper has no stdio".into(),
+            ));
+        };
+        let pgid = process.pid();
+        let (connection, inbound) = Connection::start(stdin, stdout, HelperDialect);
+        let client = Client {
+            connection,
+            next_id: AtomicU64::new(1),
+        };
+        let params = self.initialize_params(&spec);
+        let engine_ref = match client.call("initialize", params, INITIALIZE_TIMEOUT).await {
+            Ok(result) => match result.get("engineRef").and_then(Value::as_str) {
+                Some(id) if !id.is_empty() => id.to_string(),
+                _ => {
+                    process.shutdown().await;
+                    return Err(EngineError::StartFailed(
+                        "engine helper answered initialize without engineRef".into(),
+                    ));
+                }
+            },
+            Err(error) => {
+                let tail = process.stderr_tail();
+                process.shutdown().await;
+                return Err(start_error(error, &tail));
+            }
+        };
+        let (events_tx, events) = mpsc::unbounded_channel();
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let translator = Translator {
+            thread_id: spec.thread_id.clone(),
+            engine_ref: engine_ref.clone(),
+            ordinal: AtomicU32::new(0),
+            logs: Arc::clone(&logs),
+        };
+        tokio::spawn(translator.run(inbound, events_tx));
+        let session = HelperSession {
+            client,
+            process: tokio::sync::Mutex::new(process),
+            pgid,
+            logs,
+        };
+        Ok(EngineHandle {
+            session: Box::new(session),
+            events,
+            engine_ref: EngineRef {
+                driver: self.driver.clone(),
+                id: engine_ref,
+            },
+        })
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        crate::capabilities::for_driver(&self.driver)
+            .or_else(|| crate::capabilities::for_driver(&EngineDriver::Cursor))
+            .expect("cursor capabilities exist")
+    }
+}
+
+fn start_error(error: CallError, stderr_tail: &str) -> EngineError {
+    match error {
+        CallError::Remote(RemoteError { code, message }) => match code.as_deref() {
+            Some("unavailable") => EngineError::Unavailable(message),
+            _ => EngineError::StartFailed(message),
+        },
+        CallError::Transport(reason) => {
+            // The helper died before answering: usually Node missing a module or a bad entry path.
+            // Only the last line is kept; stderr can carry prompts or tokens.
+            let last = stderr_tail
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .map(|line| line.chars().take(300).collect::<String>())
+                .unwrap_or_default();
+            EngineError::StartFailed(if last.is_empty() {
+                reason
+            } else {
+                format!("{reason}: {last}")
+            })
+        }
+        CallError::Timeout(after) => {
+            EngineError::StartFailed(format!("engine did not start within {after:?}"))
+        }
+    }
+}
+
+/// Helper responses: `{id: number, result}` or `{id: number, error: {code, message}}`.
+struct HelperDialect;
+
+impl Dialect for HelperDialect {
+    fn response(&self, record: &Value) -> Option<(String, Result<Value, RemoteError>)> {
+        let id = record.get("id")?.as_u64()?;
+        if let Some(result) = record.get("result") {
+            return Some((id.to_string(), Ok(result.clone())));
+        }
+        let error = record.get("error")?;
+        Some((
+            id.to_string(),
+            Err(RemoteError {
+                code: error
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("engine helper error")
+                    .to_string(),
+            }),
+        ))
+    }
+}
+
+struct Client {
+    connection: Arc<Connection>,
+    next_id: AtomicU64,
+}
+
+impl Client {
+    async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, CallError> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let frame = json!({ "id": id, "method": method, "params": params });
+        self.connection.call(id.to_string(), &frame, timeout).await
+    }
+}
+
+struct HelperSession {
+    client: Client,
+    process: tokio::sync::Mutex<ChildProcess>,
+    pgid: u32,
+    logs: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl HelperSession {
+    /// The helper's recent `log` lines (diagnostics only).
+    #[allow(dead_code)]
+    fn recent_logs(&self) -> Vec<String> {
+        self.logs
+            .lock()
+            .map(|logs| logs.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+fn inputs_json(inputs: &[EngineInput]) -> Value {
+    Value::Array(
+        inputs
+            .iter()
+            .map(|input| {
+                json!({
+                    "inputId": input.input_id,
+                    "text": input.text,
+                    "attachments": input.attachments,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn settings_json(settings: &TurnSettings) -> Value {
+    json!({
+        "modelSelection": settings.model_selection,
+        "runtimeMode": settings.runtime_mode,
+    })
+}
+
+fn status_reason(result: &Value) -> (String, String) {
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let reason = result
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    (status, reason)
+}
+
+fn transport_error(error: CallError) -> EngineError {
+    match error {
+        CallError::Remote(remote) => EngineError::Transport(remote.message),
+        other => EngineError::Transport(other.to_string()),
+    }
+}
+
+#[async_trait]
+impl EngineSession for HelperSession {
+    async fn start_turn(
+        &self,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let params = json!({ "inputs": inputs_json(&inputs), "settings": settings_json(settings) });
+        match self.client.call("turn.start", params, CALL_TIMEOUT).await {
+            Ok(result) => match status_reason(&result) {
+                (status, _) if status == "accepted" => {
+                    match result.get("turnId").and_then(Value::as_str) {
+                        Some(turn_id) => TurnStartResult::Accepted {
+                            turn_id: turn_id.to_string(),
+                        },
+                        None => TurnStartResult::Unknown {
+                            reason: "engine accepted the turn without a turn id".into(),
+                        },
+                    }
+                }
+                (status, reason) if status == "declined" => TurnStartResult::Declined { reason },
+                (status, reason) if status == "refused_unowned" => {
+                    TurnStartResult::RefusedUnowned { reason }
+                }
+                (_, reason) => TurnStartResult::Unknown { reason },
+            },
+            // A request the helper rejected outright never reached the engine.
+            Err(CallError::Remote(remote)) => TurnStartResult::Declined {
+                reason: remote.message,
+            },
+            Err(error) => TurnStartResult::Unknown {
+                reason: error.to_string(),
+            },
+        }
+    }
+
+    async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
+        let params = json!({ "turnId": turn_id, "inputs": inputs_json(&inputs) });
+        match self.client.call("turn.steer", params, CALL_TIMEOUT).await {
+            Ok(result) => match status_reason(&result) {
+                (status, _) if status == "accepted" => SteerResult::Accepted,
+                (status, reason) if status == "declined" => SteerResult::Declined { reason },
+                (status, reason) if status == "refused_unowned" => {
+                    SteerResult::RefusedUnowned { reason }
+                }
+                (_, reason) => SteerResult::Unknown { reason },
+            },
+            Err(CallError::Remote(remote)) => SteerResult::Declined {
+                reason: remote.message,
+            },
+            Err(error) => SteerResult::Unknown {
+                reason: error.to_string(),
+            },
+        }
+    }
+
+    async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
+        self.client
+            .call("turn.interrupt", json!({ "turnId": turn_id }), CALL_TIMEOUT)
+            .await
+            .map(|_| ())
+            .map_err(transport_error)
+    }
+
+    async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
+        let mut body = Map::new();
+        body.insert(
+            "outcome".into(),
+            serde_json::to_value(answer.outcome).unwrap_or(Value::Null),
+        );
+        if let Some(text) = answer.text {
+            body.insert("text".into(), Value::String(text));
+        }
+        if let Some(answers) = answer.answers {
+            body.insert("answers".into(), Value::Object(answers));
+        }
+        self.client
+            .call(
+                "request.answer",
+                json!({ "key": key, "answer": Value::Object(body) }),
+                CALL_TIMEOUT,
+            )
+            .await
+            .map(|_| ())
+            .map_err(transport_error)
+    }
+
+    fn group_rss_bytes(&self) -> Option<u64> {
+        group_rss_bytes_of(self.pgid).ok()
+    }
+
+    fn process_group_id(&self) -> Option<i32> {
+        i32::try_from(self.pgid).ok()
+    }
+
+    async fn shutdown(&self) {
+        let _ = self
+            .client
+            .call("shutdown", json!({}), SHUTDOWN_TIMEOUT)
+            .await;
+        self.client.connection.close_input().await;
+        self.process.lock().await.shutdown().await;
+    }
+}
+
+/// Turns helper `event` lines into [EngineEvent]s and fills the TurnItem fields only the host
+/// side knows.
+struct Translator {
+    thread_id: goat2_contracts::ThreadId,
+    engine_ref: String,
+    ordinal: AtomicU32,
+    logs: Arc<Mutex<VecDeque<String>>>,
+}
+
+impl Translator {
+    async fn run(
+        self,
+        mut inbound: mpsc::UnboundedReceiver<Inbound>,
+        events: mpsc::UnboundedSender<EngineEvent>,
+    ) {
+        let mut exited = false;
+        while let Some(message) = inbound.recv().await {
+            match message {
+                Inbound::Record(record) => {
+                    if let Some(event) = record.get("event") {
+                        match self.translate(event) {
+                            Ok(event) => {
+                                exited |= matches!(event, EngineEvent::Exited { .. });
+                                let _ = events.send(event);
+                            }
+                            Err(problem) => self.remember(format!("dropped event: {problem}")),
+                        }
+                    } else if let Some(log) = record.get("log") {
+                        let level = log.get("level").and_then(Value::as_str).unwrap_or("info");
+                        let message = log.get("message").and_then(Value::as_str).unwrap_or("");
+                        self.remember(format!("{level}: {message}"));
+                    }
+                }
+                Inbound::Closed(reason) => {
+                    if !exited {
+                        let _ = events.send(EngineEvent::Exited { reason });
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    fn remember(&self, line: String) {
+        if let Ok(mut logs) = self.logs.lock() {
+            if logs.len() == LOG_TAIL_LINES {
+                logs.pop_front();
+            }
+            logs.push_back(line);
+        }
+    }
+
+    fn translate(&self, event: &Value) -> Result<EngineEvent, String> {
+        let text = |key: &str| -> Result<String, String> {
+            event
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or_else(|| format!("missing {key}"))
+        };
+        let optional_text = |key: &str| event.get(key).and_then(Value::as_str).map(str::to_string);
+        let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+        Ok(match kind {
+            "text_delta" => EngineEvent::TextDelta {
+                turn_id: text("turnId")?,
+                item_id: ItemId::from(text("itemId")?),
+                text: text("text")?,
+            },
+            "item_completed" => {
+                let turn_id = text("turnId")?;
+                let item = self.item(event.get("item").ok_or("missing item")?)?;
+                let locator = event
+                    .get("locator")
+                    .filter(|locator| !locator.is_null())
+                    .map(|locator| -> Result<EngineItemLocator, String> {
+                        Ok(EngineItemLocator {
+                            turn_id: locator
+                                .get("turnId")
+                                .and_then(Value::as_str)
+                                .ok_or("locator without turnId")?
+                                .to_string(),
+                            item_id: locator
+                                .get("itemId")
+                                .and_then(Value::as_str)
+                                .ok_or("locator without itemId")?
+                                .to_string(),
+                        })
+                    })
+                    .transpose()?;
+                EngineEvent::ItemCompleted {
+                    turn_id,
+                    item: Box::new(item),
+                    locator,
+                }
+            }
+            "request_opened" => {
+                let kind = match text("kind")?.as_str() {
+                    "approval" => RequestKind::Approval,
+                    "question" => RequestKind::Question,
+                    "signin" => RequestKind::Signin,
+                    other => return Err(format!("unknown request kind {other}")),
+                };
+                let item = match event.get("item").filter(|item| !item.is_null()) {
+                    Some(item) => Some(Box::new(self.item(item)?)),
+                    None => None,
+                };
+                EngineEvent::RequestOpened {
+                    turn_id: text("turnId")?,
+                    key: text("key")?,
+                    item_id: optional_text("itemId").map(ItemId::from),
+                    kind,
+                    summary: text("summary")?,
+                    item,
+                }
+            }
+            "request_closed" => EngineEvent::RequestClosed { key: text("key")? },
+            "auth_required" => EngineEvent::AuthRequired {
+                turn_id: optional_text("turnId"),
+                url: optional_text("url"),
+                message: text("message")?,
+            },
+            "subagent_update" => EngineEvent::SubagentUpdate {
+                turn_id: optional_text("turnId"),
+                subagent_id: text("subagentId")?,
+                status: serde_json::from_value(event.get("status").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| format!("bad subagent status: {error}"))?,
+                title: optional_text("title"),
+                progress: optional_text("progress"),
+            },
+            "turn_finished" => {
+                let outcome = event.get("outcome").ok_or("missing outcome")?;
+                let outcome = match outcome.get("type").and_then(Value::as_str) {
+                    Some("done") => TurnOutcome::Done,
+                    Some("interrupted") => TurnOutcome::Interrupted,
+                    Some("failed") => TurnOutcome::Failed {
+                        reason: outcome
+                            .get("reason")
+                            .and_then(Value::as_str)
+                            .unwrap_or("engine reported a failure")
+                            .to_string(),
+                    },
+                    other => return Err(format!("unknown outcome {other:?}")),
+                };
+                EngineEvent::TurnFinished {
+                    turn_id: text("turnId")?,
+                    outcome,
+                }
+            }
+            "exited" => EngineEvent::Exited {
+                reason: text("reason")?,
+            },
+            other => return Err(format!("unknown event type {other:?}")),
+        })
+    }
+
+    /// Fill `threadId`, `runId`, `ordinal`, `providerThreadId` and validate against TurnItem.
+    fn item(&self, raw: &Value) -> Result<TurnItem, String> {
+        let Value::Object(mut map) = raw.clone() else {
+            return Err("item is not an object".into());
+        };
+        let ordinal = self.ordinal.fetch_add(1, Ordering::Relaxed);
+        map.insert("threadId".into(), json!(self.thread_id));
+        map.insert("runId".into(), Value::Null);
+        map.insert("ordinal".into(), json!(ordinal));
+        map.insert("providerThreadId".into(), json!(self.engine_ref));
+        serde_json::from_value(Value::Object(map)).map_err(|error| format!("invalid item: {error}"))
+    }
+}

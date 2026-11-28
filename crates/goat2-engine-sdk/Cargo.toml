@@ -1,0 +1,20 @@
+[package]
+name = "goat2-engine-sdk"
+version = "0.0.0"
+description = "Drivers for SDK-only engines: Cursor, OpenCode and Muse through apps/engine-helper (Node), Pi and OmO over their --mode rpc JSONL."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+goat2-engine-api = { path = "../goat2-engine-api" }
+goat2-contracts = { path = "../goat2-contracts" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

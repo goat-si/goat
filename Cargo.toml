@@ -10,6 +10,7 @@ members = [
   "crates/goat2-engine-claude",
   "crates/goat2-parity",
   "crates/goat2-host",
+  "crates/goat2-engine-sdk",
 ]
 
 [workspace.package]
