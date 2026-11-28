@@ -502,7 +502,9 @@ async fn sign_in_failure_asks_for_login_then_recovers() {
     let turn = start_turn(&handle, &prompts[0], RuntimeMode::FullAccess).await;
     let events = until_finished(&mut handle).await;
     let auth = events.iter().find_map(|e| match e {
+        // Claude's sign-in is not answered through the engine: no key.
         EngineEvent::AuthRequired {
+            key: None,
             turn_id,
             url,
             message,

@@ -1852,7 +1852,10 @@ impl Inner {
                     .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
                     .map(|(_, v)| v.as_str()),
             );
+            // Claude's sign-in is not answered through the engine (the person runs
+            // `claude auth login`), so the request has no engine key.
             self.emit(EngineEvent::AuthRequired {
+                key: None,
                 turn_id: Some(turn_id.clone()),
                 url: None,
                 message: text.clone(),
