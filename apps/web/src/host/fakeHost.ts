@@ -3,6 +3,7 @@
 // (crates/goat2-contracts subscribe.rs) and implements the commands per structure/30_wire.md. It never
 // pretends an engine ran: a demo run answers that no engine is connected.
 import type { ConnectionState, Transport } from "./transport.ts";
+import type { FakeProviders } from "./fakeProviders.ts";
 import type {
   BotProfile, ClientFrame, CommandResult, CommandValue, HostFrame, LogLine, ThreadCard, TurnItem,
 } from "./wire.ts";
@@ -14,6 +15,8 @@ export interface FakeWorld {
   epoch: string;
   bots: BotProfile[];
   threads: Record<string, FakeThread>;
+  /** Provider scenes (fakeProviders.ts); without it the host serves an empty provider list and refuses provider commands. */
+  providers?: FakeProviders;
 }
 export interface FakeOptions {
   /** "never": the socket stays connecting (send-first scenes). */
@@ -38,12 +41,19 @@ export function item(threadId: string, runId: string, id: string, at: string, bo
   } as TurnItem;
 }
 
+/** The provider commands of docs/part2/provider-wire.md. */
+const PROVIDER_COMMANDS = new Set([
+  "refresh_providers", "provider_install_start", "provider_install_cancel", "provider_auth_start", "provider_auth_cancel",
+  "provider_auth_logout", "accept_acp_registry_url_auth", "search_acp_registry", "prepare_acp_registry_agent", "set_provider_instance",
+]);
+
 export class FakeHost implements Transport {
   state: ConnectionState = "connecting";
   private frameCbs = new Set<(f: HostFrame) => void>();
   private stateCbs = new Set<(s: ConnectionState) => void>();
   private cardSubs = new Set<string>();
   private threadSubs = new Map<string, string>(); // subId -> threadId
+  private providerSubs = new Map<string, () => void>(); // subId -> stop
   private results = new Map<string, { args: string; result: Omit<CommandResult, "reqId"> }>();
   private readonly opts: Required<FakeOptions>;
   private closed = false;
@@ -77,6 +87,13 @@ export class FakeHost implements Transport {
   send(frame: ClientFrame) {
     if (this.state !== "open") return;
     this.received.push(frame);
+    if ((frame as { type: string }).type === "subscribe_providers") {
+      const subId = (frame as unknown as { subId: string }).subId;
+      const emitList = (providers: unknown[]) => this.emit({ type: "providers", subId, providers } as unknown as HostFrame);
+      if (this.world.providers) this.providerSubs.set(subId, this.world.providers.onList(emitList));
+      else emitList([]);
+      return;
+    }
     switch (frame.type) {
       case "subscribe_cards": {
         this.cardSubs.add(frame.subId);
@@ -100,6 +117,8 @@ export class FakeHost implements Transport {
       case "unsubscribe":
         this.cardSubs.delete(frame.subId);
         this.threadSubs.delete(frame.subId);
+        this.providerSubs.get(frame.subId)?.();
+        this.providerSubs.delete(frame.subId);
         return;
       case "read_page": {
         const t = this.world.threads[frame.threadId];
@@ -142,6 +161,11 @@ export class FakeHost implements Transport {
 
   private run(frame: Extract<ClientFrame, { reqId: string; clientRequestId: string }>): Omit<CommandResult, "reqId"> {
     const now = this.opts.now();
+    if (PROVIDER_COMMANDS.has((frame as { type: string }).type)) {
+      const outcome = this.world.providers?.run(frame as unknown as { type: string } & Record<string, unknown>);
+      if (!outcome) return { type: "command_result", ok: false, error: { code: "unavailable", reason: "fake_host_unsupported", message: `The demo host does not serve ${frame.type}.`, retryable: false } };
+      return outcome.ok ? this.ok(outcome.value as CommandValue) : { type: "command_result", ok: false, error: outcome.error };
+    }
     switch (frame.type) {
       case "send_input": {
         const t = this.world.threads[frame.threadId];

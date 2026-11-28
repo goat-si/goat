@@ -131,9 +131,10 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
     const attach = () => {
       unsubscribe();
       unsubscribe = port
-        ? port.subscribe((entries) =>
-            get.setSelf<ReadonlyArray<ServerProviderType> | null>(entries.map(toServerProvider)),
-          )
+        ? port.subscribe((entries) => {
+            get.set(goat2SettingsAtom, withHostInstances(get.once(goat2SettingsAtom), entries));
+            get.setSelf<ReadonlyArray<ServerProviderType> | null>(entries.map(toServerProvider));
+          })
         : () => {};
     };
     const stop = onProviderPortChange(attach);
@@ -145,6 +146,38 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
     return null;
   },
 ).pipe(Atom.keepAlive, Atom.withLabel("goat2:providers"));
+
+/**
+ * v1's provider settings list rows from settings.providerInstances (plus each driver's default slot,
+ * ProviderSettingsPanel.tsx:763-830). On GOAT 2 the host owns the instances, so each entry is folded in: driver,
+ * enablement, display name and the ACP registry agent (v1 acpRegistry config.agentId) come from the host; other
+ * config fields set in this window stay. An enabled, unnamed default slot stays implicit, as in v1.
+ */
+export function withHostInstances(settings: ServerSettings, entries: ReadonlyArray<Goat2ProviderEntry>): ServerSettings {
+  const instances: Record<string, ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]> = {
+    ...settings.providerInstances,
+  };
+  let changed = false;
+  for (const entry of entries) {
+    const existing = instances[entry.instanceId];
+    if (!existing && entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId) continue;
+    const config = entry.acpAgentId
+      ? { ...((existing?.config as object | undefined) ?? {}), agentId: entry.acpAgentId }
+      : existing?.config;
+    const next = {
+      ...existing,
+      driver: entry.driver as ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]["driver"],
+      enabled: entry.enabled,
+      ...(entry.displayName ? { displayName: entry.displayName } : {}),
+      ...(config !== undefined ? { config } : {}),
+    };
+    if (JSON.stringify(next) !== JSON.stringify(existing)) {
+      instances[entry.instanceId] = next;
+      changed = true;
+    }
+  }
+  return changed ? { ...settings, providerInstances: instances as ServerSettings["providerInstances"] } : settings;
+}
 
 /** Server settings the provider screens read and write (favorites, provider instances). */
 export const goat2SettingsAtom: Atom.Writable<ServerSettings, ServerSettings> = Atom.make<ServerSettings>(
