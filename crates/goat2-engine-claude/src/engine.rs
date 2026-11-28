@@ -907,15 +907,8 @@ impl Inner {
                 self.on_user(state, message)
             }
             "result" => {
-                let awaiting_interrupt = matches!(
-                    (&state.interrupt_request, state.turn.as_ref()),
-                    (Some((_, stopping)), Some(turn)) if *stopping == turn.id
-                );
-                if awaiting_interrupt {
-                    if let Some(turn) = state.turn.as_mut() {
-                        turn.held_for_interrupt = Some(message.clone());
-                    }
-                } else {
+                let held = self.hold_for_interrupt(state, message);
+                if !held {
                     self.on_result(state, message)
                 }
             }
@@ -981,6 +974,7 @@ impl Inner {
                     });
                     if release
                         && let Some(result) = state.turn.as_mut().and_then(|t| t.held_result.take())
+                        && !self.hold_for_interrupt(state, &result)
                     {
                         self.finish(state, &result);
                     }
@@ -988,6 +982,19 @@ impl Inner {
             }
             _ => {}
         }
+    }
+
+    /// While an interrupt of the active turn waits for Claude's answer, a result (new, or one held
+    /// for a steer) waits for that answer too. True when it was held.
+    fn hold_for_interrupt(&self, state: &mut State, result: &Value) -> bool {
+        let awaiting = matches!(
+            (&state.interrupt_request, state.turn.as_ref()),
+            (Some((_, stopping)), Some(turn)) if *stopping == turn.id
+        );
+        if awaiting && let Some(turn) = state.turn.as_mut() {
+            turn.held_for_interrupt = Some(result.clone());
+        }
+        awaiting
     }
 
     fn steers_outstanding(turn: &Turn) -> bool {
@@ -2207,6 +2214,9 @@ impl EngineSession for ClaudeSession {
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
         let inner = Arc::clone(&self.inner);
         let _gate = inner.stop_gate.lock().await;
+        // The stop intent and its pending request are set together, so a result read meanwhile
+        // is either before both (a normal result) or after both (held for the answer).
+        let request_id = inner.request_id();
         {
             let Ok(mut state) = inner.state.lock() else {
                 return Err(EngineError::Transport("state poisoned".into()));
@@ -2219,15 +2229,12 @@ impl EngineSession for ClaudeSession {
                 // No such active turn: nothing to stop.
                 _ => return Ok(()),
             }
+            state.interrupt_request = Some((request_id.clone(), turn_id.to_string()));
         }
         let deadline = inner.options.interrupt_settle_timeout;
         let generation = inner.generation.load(Ordering::SeqCst);
         // v1 `interruptUnlessClosed`: the interrupt control (10 s; a timeout still closes), then
         // close. A refused interrupt while Claude is still running fails and keeps the turn.
-        let request_id = inner.request_id();
-        if let Ok(mut state) = inner.state.lock() {
-            state.interrupt_request = Some((request_id.clone(), turn_id.to_string()));
-        }
         let answer = inner
             .control_with_id(request_id, json!({"subtype": "interrupt"}), deadline)
             .await;
