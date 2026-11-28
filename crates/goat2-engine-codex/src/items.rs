@@ -73,7 +73,7 @@ pub fn web_search_patterns(query: &str, action: Option<&Value>) -> Vec<String> {
     let mut result = Vec::new();
     for value in values {
         let value = summary_line(value);
-        if !value.is_empty() && !result.contains(&value) {
+        if !value.is_empty() && !result.contains(&value) && result.len() < MAX_SUMMARY_ENTRIES {
             result.push(value);
         }
     }
@@ -83,20 +83,31 @@ pub fn web_search_patterns(query: &str, action: Option<&Value>) -> Vec<String> {
 /// Longest summary string a stored tool item keeps (characters).
 pub const SUMMARY_MAX_CHARS: usize = 200;
 
+/// Most entries a stored tool item keeps in a list (changed files, search patterns).
+pub const MAX_SUMMARY_ENTRIES: usize = 50;
+
 /// A tool call is stored as name, summary and engine locator only (docs/lanes/PART1.md fixed
 /// decisions; goat2-contracts ItemCompleted): every string that describes a call is cut to its
-/// first non-empty line and [SUMMARY_MAX_CHARS], with "…" when anything was dropped. The full
-/// text stays in Codex's own record, reachable through the locator.
+/// first non-empty line and at most [SUMMARY_MAX_CHARS] characters, the last being "…" when
+/// anything was dropped. The full text stays in Codex's own record, reachable through the
+/// locator.
 pub fn summary_line(text: &str) -> String {
     let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
     let Some(first) = lines.next() else {
         return String::new();
     };
     let more_lines = lines.next().is_some();
-    let mut out: String = first.chars().take(SUMMARY_MAX_CHARS).collect();
-    if more_lines || first.chars().count() > SUMMARY_MAX_CHARS {
-        out.push('…');
+    let too_long = first.chars().count() > SUMMARY_MAX_CHARS;
+    if !more_lines && !too_long {
+        return first.to_owned();
     }
+    let keep = if too_long {
+        SUMMARY_MAX_CHARS - 1
+    } else {
+        SUMMARY_MAX_CHARS.min(first.chars().count() + 1) - 1
+    };
+    let mut out: String = first.chars().take(keep).collect();
+    out.push('…');
     out
 }
 
@@ -227,6 +238,7 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
             status = item_status(s.as_deref());
             let details = changes
                 .iter()
+                .take(MAX_SUMMARY_ENTRIES)
                 .map(|change| {
                     let kind = change
                         .kind
@@ -246,20 +258,19 @@ fn project(item: &ThreadItem, ctx: &ItemContext<'_>, completed: bool) -> Option<
                             kind
                         }
                         .to_owned(),
-                        path: dest
-                            .filter(|_| kind == "update")
-                            .unwrap_or(&change.path)
-                            .to_owned(),
+                        path: summary_line(
+                            dest.filter(|_| kind == "update").unwrap_or(&change.path),
+                        ),
                         old_path: dest
                             .filter(|_| kind == "update")
-                            .map(|_| change.path.clone()),
+                            .map(|_| summary_line(&change.path)),
                         file_type: None,
                         mime_type: None,
                     }
                 })
                 .collect();
             TurnItemBody::FileChange {
-                file_name: first.path.clone(),
+                file_name: summary_line(&first.path),
                 additions: None,
                 deletions: None,
                 diff_str: None,

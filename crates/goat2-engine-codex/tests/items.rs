@@ -65,9 +65,9 @@ fn command_execution_keeps_a_bounded_one_line_summary() {
     let input = v["input"].as_str().unwrap();
     assert!(input.starts_with("python3 - <<'EOF' xxx"), "{input}");
     assert!(input.ends_with('…'));
-    assert_eq!(input.chars().count(), 201);
+    assert_eq!(input.chars().count(), 200);
     let query = v["commandActions"][0]["query"].as_str().unwrap();
-    assert_eq!(query.chars().count(), 201);
+    assert_eq!(query.chars().count(), 200);
     assert!(!v.to_string().contains("secret-value"));
 }
 #[test]
@@ -81,6 +81,45 @@ fn file_change() {
         json!({"operation":"move","path":"new","oldPath":"old"})
     );
     assert_eq!(v["patchOmitted"], true);
+}
+#[test]
+fn file_change_keeps_bounded_paths_and_entries() {
+    // Paths are summaries too: one line, at most 200 characters, at most 50 entries.
+    let long = format!("src/{}.rs", "d".repeat(1_000));
+    let mut changes = vec![
+        json!({"path": long, "kind": {"type": "add"}, "diff": "x"}),
+        json!({"path": "a.rs\nsecret-value", "kind": {"type": "update", "move_path": "b.rs\nsecret-value"}, "diff": "x"}),
+    ];
+    for n in 0..118 {
+        changes.push(json!({"path": format!("f{n}.rs"), "kind": {"type": "update"}, "diff": "x"}));
+    }
+    let v = project(json!({"type":"fileChange","id":"f","status":"completed","changes":changes}));
+    let file_name = v["fileName"].as_str().unwrap();
+    assert_eq!(file_name.chars().count(), 200);
+    assert!(file_name.ends_with('…'));
+    let listed = v["changes"].as_array().unwrap();
+    assert_eq!(listed.len(), 50);
+    assert_eq!(listed[0]["path"].as_str().unwrap().chars().count(), 200);
+    assert_eq!(
+        listed[1],
+        json!({"operation":"move","path":"b.rs…","oldPath":"a.rs…"})
+    );
+    assert!(!v.to_string().contains("secret-value"));
+}
+#[test]
+fn summary_line_never_exceeds_the_limit() {
+    use goat2_engine_codex::items::{SUMMARY_MAX_CHARS, summary_line};
+    assert_eq!(summary_line("  ls -la  "), "ls -la");
+    assert_eq!(summary_line("\n\n  first\nsecond"), "first…");
+    for len in [199, 200, 201, 5_000] {
+        let one = "é".repeat(len);
+        let s = summary_line(&one);
+        assert!(s.chars().count() <= SUMMARY_MAX_CHARS, "{len}");
+        assert_eq!(s.ends_with('…'), len > SUMMARY_MAX_CHARS, "{len}");
+        let two = summary_line(&format!("{one}\nmore"));
+        assert!(two.chars().count() <= SUMMARY_MAX_CHARS, "{len}");
+        assert!(two.ends_with('…'));
+    }
 }
 #[test]
 fn web_search() {
