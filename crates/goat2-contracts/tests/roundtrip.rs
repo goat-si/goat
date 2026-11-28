@@ -24,6 +24,12 @@ fn decode(root: &str, value: Value) -> Result<Value, String> {
         "card_file" => roundtrip::<CardFile>(value),
         "fold" => roundtrip::<Fold>(value),
         "bot_profile" => roundtrip::<BotProfile>(value),
+        "channel_attention_event" => roundtrip::<ChannelAttentionEvent>(value),
+        "decision_answer_input" => roundtrip::<DecisionAnswerInput>(value),
+        "decision_escalate_input" => roundtrip::<DecisionEscalateInput>(value),
+        "decision_item" => roundtrip::<DecisionItem>(value),
+        "decision_request_input" => roundtrip::<DecisionRequestInput>(value),
+        "provider_probe_result" => roundtrip::<ProviderProbeResult>(value),
         _ => panic!("unknown root {root}"),
     }
 }
@@ -47,6 +53,12 @@ fn schema(root: &str) -> Value {
         "card_file" => s!(CardFile),
         "fold" => s!(Fold),
         "bot_profile" => s!(BotProfile),
+        "channel_attention_event" => s!(ChannelAttentionEvent),
+        "decision_answer_input" => s!(DecisionAnswerInput),
+        "decision_escalate_input" => s!(DecisionEscalateInput),
+        "decision_item" => s!(DecisionItem),
+        "decision_request_input" => s!(DecisionRequestInput),
+        "provider_probe_result" => s!(ProviderProbeResult),
         _ => panic!("unknown root {root}"),
     }
 }
