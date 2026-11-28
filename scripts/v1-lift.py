@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lift GOAT v1 files into apps/web/src/v1/ byte-for-byte and inventory their imports (devlog 070, Revision A/A2).
 
-  scripts/v1-lift.py            copy the LIFT list (refuses to overwrite a changed lifted file), write the inventory,
+  scripts/v1-lift.py            copy the lift lists in scripts/v1-lift.d/*.txt (refuses to overwrite a changed lifted file), write the inventory,
                                 the alias map and the mirrored bridge re-export files
   scripts/v1-lift.py --check    fail if a lifted file differs from v1, or an import is unresolved / unclassified
 
@@ -18,31 +18,24 @@ OUT = os.path.join(ROOT, "apps/web/src/v1")
 SEAM = os.path.join(OUT, "seam")
 INVENTORY = os.path.join(ROOT, "devlog/_plan/261128_goat2-ui-paper/071_v1_inventory.md")
 
-LIFT = [
-    "apps/web/src/components/chat/WorkLog.tsx",
-    "apps/web/src/components/chat/TurnFoldLabel.tsx",
-    "apps/web/src/components/chat/TimelineWorkGroupRows.tsx",
-    "apps/web/src/components/chat/TimelineWorkGroupRows.logic.ts",
-    "apps/web/src/components/chat/TimelineWorkEntryRow.tsx",
-    "apps/web/src/components/chat/TimelineWorkEntryRow.logic.ts",
-    "apps/web/src/components/chat/TimelineRowParts.tsx",
-    "apps/web/src/components/chat/TimelineToolActivityIcon.tsx",
-    "apps/web/src/components/chat/selectionClick.ts",
-    "apps/web/src/components/chat/timelineRowContext.ts",
-    "apps/web/src/components/chat/MessagesTimeline.logic.ts",
-    "apps/web/src/components/ui/button.tsx",
-    "apps/web/src/components/ui/spinner.tsx",
-    "apps/web/src/components/ui/popover.tsx",
-    "apps/web/src/components/ui/scroll-area.tsx",
-    "apps/web/src/components/ui/tooltip.tsx",
-    "apps/web/src/lib/utils.ts",
-    "apps/web/src/index.css",
-]
-LIFT_DIRS = ["apps/web/src/components/solar"]
-LIFT_PKG = {  # package subpaths lifted as files (pure logic)
-    "@goat/client-runtime/work-log/presentation", "@goat/client-runtime/work-log/line-counts",
-    "@goat/client-runtime/work-log/scroll-anchor", "@goat/client-runtime/work-log/user-input",
-}
+LIFT_D = os.path.join(ROOT, "scripts/v1-lift.d")
+
+def read_lists():
+    """Lift lists live in scripts/v1-lift.d/*.txt, one file per owning lane (timeline.txt = lane F,
+    providers.txt = goat2_providers_ui). One v1 path per line; "dir:<path>" lifts a whole directory,
+    "pkg:@goat/<pkg>/<subpath>" lifts a package export; "#" starts a comment."""
+    files, dirs, pkgs = [], [], set()
+    for name in sorted(os.listdir(LIFT_D)):
+        if not name.endswith(".txt"): continue
+        for line in open(os.path.join(LIFT_D, name)):
+            line = line.split("#", 1)[0].strip()
+            if not line: continue
+            if line.startswith("dir:"): dirs.append(line[4:].strip())
+            elif line.startswith("pkg:"): pkgs.add(line[4:].strip())
+            else: files.append(line)
+    return files, dirs, pkgs
+
+LIFT, LIFT_DIRS, LIFT_PKG = read_lists()
 
 def mirror(p):
     """v1 apps/web/src/<X> -> <X>; v1 packages/... -> packages/... (layout shared with goat2_providers_ui)."""

@@ -1,0 +1,24 @@
+# lane F (goat2_ui): timeline, work log, queue, composer closure (devlog 070)
+apps/web/src/components/chat/WorkLog.tsx
+apps/web/src/components/chat/TurnFoldLabel.tsx
+apps/web/src/components/chat/TimelineWorkGroupRows.tsx
+apps/web/src/components/chat/TimelineWorkGroupRows.logic.ts
+apps/web/src/components/chat/TimelineWorkEntryRow.tsx
+apps/web/src/components/chat/TimelineWorkEntryRow.logic.ts
+apps/web/src/components/chat/TimelineRowParts.tsx
+apps/web/src/components/chat/TimelineToolActivityIcon.tsx
+apps/web/src/components/chat/selectionClick.ts
+apps/web/src/components/chat/timelineRowContext.ts
+apps/web/src/components/chat/MessagesTimeline.logic.ts
+apps/web/src/components/ui/button.tsx
+apps/web/src/components/ui/spinner.tsx
+apps/web/src/components/ui/popover.tsx
+apps/web/src/components/ui/scroll-area.tsx
+apps/web/src/components/ui/tooltip.tsx
+apps/web/src/lib/utils.ts
+apps/web/src/index.css
+dir:apps/web/src/components/solar
+pkg:@goat/client-runtime/work-log/line-counts
+pkg:@goat/client-runtime/work-log/presentation
+pkg:@goat/client-runtime/work-log/scroll-anchor
+pkg:@goat/client-runtime/work-log/user-input

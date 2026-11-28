@@ -13,21 +13,30 @@
     "build:prototype": "VITE_GOAT2_MODE=prototype vite build --base=./"
   },
   "dependencies": {
+    "@base-ui/react": "1.9.0",
     "@goat2/bot-face": "workspace:*",
     "@goat2/contracts": "workspace:*",
     "@goat2/contracts-rs": "workspace:*",
     "@goat2/provider-icons": "workspace:*",
     "@goat2/runtime-stamp": "workspace:*",
+    "@legendapp/list": "3.3.5",
+    "class-variance-authority": "0.7.1",
+    "effect": "4.1.3",
+    "gt-react": "11.4.18",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "tailwind-merge": "3.6.0"
   },
   "devDependencies": {
     "@playwright/test": "catalog:",
+    "@tailwindcss/postcss": "4.3.3",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "jsdom": "catalog:",
+    "postcss-prefix-selector": "2.2.1",
+    "tailwindcss": "4.3.3",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vitest": "catalog:"
