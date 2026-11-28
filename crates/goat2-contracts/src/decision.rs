@@ -202,11 +202,33 @@ where
     D: serde::Deserializer<'de>,
 {
     let reason = String::deserialize(deserializer)?;
+    // Length in code points, as JSON Schema `maxLength` counts (v1 counted UTF-16 units, which differs
+    // only for characters outside the BMP). Blank means only ECMAScript whitespace, the set the schema's
+    // `\S` pattern uses.
     let chars = reason.chars().count();
-    if chars == 0 || chars > DECISION_REASON_MAX_CHARS || reason.trim().is_empty() {
+    if chars == 0
+        || chars > DECISION_REASON_MAX_CHARS
+        || reason.chars().all(is_ecmascript_whitespace)
+    {
         return Err(serde::de::Error::custom(format!(
             "reason must be 1 to {DECISION_REASON_MAX_CHARS} characters and not blank"
         )));
     }
     Ok(reason)
+}
+
+/// ECMAScript `\s` (WhiteSpace and LineTerminator, ECMA-262), so serde and JSON Schema `\S` agree.
+/// It differs from `char::is_whitespace`: it includes U+FEFF and excludes U+0085.
+fn is_ecmascript_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{9}' | '\u{a}' | '\u{b}' | '\u{c}' | '\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
 }
