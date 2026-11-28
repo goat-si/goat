@@ -1,6 +1,7 @@
 // Wire types for the engine-helper stdio protocol. See ../PROTOCOL.md.
 import type {
   ChatAttachment,
+  ContentStreamKind,
   ItemId,
   ModelSelection,
   ProviderCapabilities,
@@ -107,6 +108,13 @@ export type RequestKind = "approval" | "question" | "signin";
 
 export type EngineEvent =
   | { readonly type: "text_delta"; readonly turnId: string; readonly itemId: ItemId; readonly text: string }
+  | {
+      readonly type: "content_delta";
+      readonly turnId: string;
+      readonly itemId: ItemId;
+      readonly streamKind: ContentStreamKind;
+      readonly text: string;
+    }
   | {
       readonly type: "item_completed";
       readonly turnId: string;

@@ -481,6 +481,49 @@ async fn probe_answers_from_a_short_lived_helper() {
     assert!(factory.capabilities().turns.supports_active_steering);
 }
 
+/// Reasoning streams as ContentDelta (reasoning_text) on its own item id, then completes under that
+/// same id; assistant text still arrives as TextDelta.
+#[tokio::test]
+async fn reasoning_streams_as_content_delta_on_its_item() {
+    let mut handle = start("thread-think").await;
+    accepted(handle.session.start_turn(input("think"), &settings()).await);
+    let events = until_finished(&mut handle).await;
+    let reasoning: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::ContentDelta {
+                item_id,
+                stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+                text,
+                ..
+            } => Some((item_id.to_string(), text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning.len(), 2);
+    let reasoning_id = reasoning[0].0.clone();
+    assert!(reasoning.iter().all(|(id, _)| *id == reasoning_id));
+    assert_eq!(
+        reasoning
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<String>(),
+        "weighing options"
+    );
+    let completed = events.iter().position(|event| {
+        matches!(event, EngineEvent::ItemCompleted { item, .. }
+            if item.id.to_string() == reasoning_id
+                && matches!(item.body, TurnItemBody::Reasoning { .. }))
+    });
+    let last_delta = events
+        .iter()
+        .rposition(|event| matches!(event, EngineEvent::ContentDelta { .. }))
+        .expect("delta");
+    assert!(completed.expect("reasoning item completed") > last_delta);
+    assert_eq!(final_text(&events), "echo: think");
+    handle.session.shutdown().await;
+}
+
 /// Capabilities reported with a probe replace the static ones until the next probe; a probe
 /// without them goes back to the static set.
 #[tokio::test]

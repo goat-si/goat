@@ -678,6 +678,15 @@ impl Translator {
                 item_id: ItemId::from(text("itemId")?),
                 text: text("text")?,
             },
+            "content_delta" => EngineEvent::ContentDelta {
+                turn_id: text("turnId")?,
+                item_id: ItemId::from(text("itemId")?),
+                stream_kind: serde_json::from_value(
+                    event.get("streamKind").cloned().unwrap_or(Value::Null),
+                )
+                .map_err(|error| format!("bad streamKind: {error}"))?,
+                text: text("text")?,
+            },
             "item_completed" => {
                 let turn_id = text("turnId")?;
                 let item = self.item(event.get("item").ok_or("missing item")?)?;

@@ -5,13 +5,14 @@
 //   "approve" opens an approval; the outcome is echoed
 //   "fail"    the turn fails
 //   anything else echoes "echo: <text>" in two deltas
+//   "think"   streams reasoning (content_delta reasoning_text) on its own item, then echoes
 // A steer during a turn is accepted and appended to the final message. When the turn ends, its
 // steers are reported with steer_updated: completed if the turn finished, cancelled otherwise.
 // session.set_config is supported unless launch.env GOAT2_FAKE_NO_SET_CONFIG=1; after it, echoes
 // end with " [model: <model>, mode: <runtimeMode>]".
 import { readFile } from "node:fs/promises";
 import type { EngineHost, EngineModule, EngineSession } from "../engine.ts";
-import { assistantMessage, item } from "../items.ts";
+import { assistantMessage, item, reasoning } from "../items.ts";
 import {
   HelperError,
   type EngineInput,
@@ -135,6 +136,21 @@ class FakeSession implements EngineSession {
 
     let reply: string;
     switch (text.trim()) {
+      case "think": {
+        const reasoningId = `${turn.turnId}:reasoning`;
+        for (const part of ["weighing ", "options"]) {
+          host.emit({ type: "content_delta", turnId: turn.turnId, itemId: reasoningId, streamKind: "reasoning_text", text: part });
+        }
+        host.emit({
+          type: "item_completed",
+          turnId: turn.turnId,
+          item: reasoning(base(reasoningId), "weighing options"),
+          locator: { turnId: turn.turnId, itemId: reasoningId },
+        });
+        reply = "echo: think";
+        host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply });
+        break;
+      }
       case "crash":
         host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: "about to crash" });
         await sleep(20);

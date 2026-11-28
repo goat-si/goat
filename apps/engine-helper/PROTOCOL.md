@@ -59,6 +59,7 @@ reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
 | type | fields |
 |---|---|
 | text_delta | turnId, itemId, text (never stored) |
+| content_delta | turnId, itemId, streamKind (goat2-contracts ContentStreamKind: assistant_text, reasoning_text, reasoning_summary_text, plan_text, command_output, file_change_output, unknown), text (never stored). Stream on the item's own id, then item_completed with the same id; an item's first delta fixes its kind. text_delta is the assistant_text shorthand. |
 | item_completed | turnId, item, locator: {turnId, itemId} or null |
 | request_opened | turnId, key, itemId or null, kind: approval/question/signin, summary, item or null |
 | request_closed | key |
