@@ -1372,3 +1372,114 @@ async fn set_config_refuses_before_changing_anything() {
         "set_model was sent before the refusal"
     );
 }
+
+/// Final review 4 finding 1: configuration changes are serialized with each other (and with turn
+/// starts); a later `set_config` sees the earlier one's result instead of a stale mode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_set_config_calls_apply_in_order() {
+    let run = Run::new("wire/set_config_in_order.ndjson");
+    let mut factory = run.factory();
+    let (held_tx, mut held_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let go_rx = std::sync::Mutex::new(go_rx);
+    factory.options.write_hook = Some(std::sync::Arc::new(move |line: &str| {
+        if line.contains("set_permission_mode") && line.contains("acceptEdits") {
+            let _ = held_tx.send(());
+            let _ = go_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10));
+        }
+    }));
+    let handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await
+    .unwrap();
+    let accept_edits = settings(MODEL, RuntimeMode::AutoAcceptEdits);
+    let approval = settings(MODEL, RuntimeMode::ApprovalRequired);
+    let first = handle.session.set_config(&accept_edits);
+    let second = handle.session.set_config(&approval);
+    tokio::pin!(first, second);
+    tokio::select! {
+        result = &mut first => panic!("the first change finished while held: {result:?}"),
+        _ = held_rx.recv() => {}
+    }
+    // The second change must wait for the first instead of acting on the old mode.
+    let early = tokio::time::timeout(std::time::Duration::from_millis(300), &mut second).await;
+    assert!(
+        early.is_err(),
+        "the second change ran beside the first: {early:?}"
+    );
+    go_tx.send(()).unwrap();
+    let (a, b) = tokio::join!(first, second);
+    a.unwrap();
+    b.unwrap();
+    handle.session.shutdown().await;
+    let modes: Vec<String> = run
+        .stdin_frames()
+        .iter()
+        .filter(|f| f["request"]["subtype"] == "set_permission_mode")
+        .filter_map(|f| f["request"]["mode"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(modes, vec!["acceptEdits", "default"]);
+    run.assert_replayed(1);
+}
+
+/// Final review 4 finding 2: Claude exiting while the GOAT MCP server is being registered fails
+/// the start; it is not reported as a working session.
+#[tokio::test]
+async fn an_exit_during_mcp_registration_fails_the_start() {
+    let run = Run::new("wire/exit_during_mcp_registration.ndjson");
+    let started = goat2_engine_api::EngineFactory::start(
+        &run.factory(),
+        run.spec(MODEL, RuntimeMode::ApprovalRequired, None),
+    )
+    .await;
+    match started {
+        Err(goat2_engine_api::EngineError::StartFailed(reason)) => {
+            assert!(reason.contains("MCP"), "{reason}");
+            assert!(!reason.contains(MCP_TOKEN), "{reason}");
+        }
+        Err(other) => panic!("{other:?}"),
+        Ok(_) => panic!("a session whose Claude exited during MCP registration started"),
+    }
+}
+
+/// Final review 4 finding 2 (v1 `ClaudeAgentSdkQueryRunner.ts:609-625`): MCP servers Claude could
+/// not attach are logged by name only (errors can echo headers), and the session carries on.
+#[tokio::test]
+async fn mcp_registration_errors_are_logged_by_server_name_only() {
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let capture = Capture::default();
+    let writer = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let run = Run::new("wire/mcp_registration_errors.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logged.contains("claude-mcp-servers-unavailable"),
+        "{logged}"
+    );
+    assert!(logged.contains("goat"), "{logged}");
+    assert!(
+        !logged.contains(MCP_TOKEN) && !logged.contains("Bearer"),
+        "{logged}"
+    );
+    handle.session.shutdown().await;
+}

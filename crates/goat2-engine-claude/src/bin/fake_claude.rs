@@ -51,6 +51,10 @@ struct Fake {
     next_permission: u64,
     /// A control request whose answer an `expect_wire` entry deferred.
     deferred: Option<Value>,
+    /// `mcp_set_servers` per-server errors to report (transcript metadata `mcpErrors`).
+    mcp_errors: Value,
+    /// `close_stdin` with `exit`: exit instead of answering the named request.
+    exit_instead: bool,
 }
 
 const LOGGED_ENV: [&str; 9] = [
@@ -173,9 +177,16 @@ impl Fake {
                             .as_object()
                             .map(|s| s.keys().cloned().collect())
                             .unwrap_or_default();
+                        if closing && self.exit_instead {
+                            self.log(
+                                json!({"kind": "exit", "status": "before mcp_set_servers answer"}),
+                            );
+                            exit(1);
+                        }
+                        let errors = self.mcp_errors.clone();
                         self.write(&json!({"type": "control_response", "response": {
                             "subtype": "success", "request_id": id,
-                            "response": {"added": names, "removed": [], "errors": {}}}}));
+                            "response": {"added": names, "removed": [], "errors": errors}}}));
                         if closing {
                             return None;
                         }
@@ -401,6 +412,7 @@ impl Fake {
                 }
                 "expect_outbound" => self.expect(&label, &entry["frame"]),
                 "close_stdin" => {
+                    self.exit_instead = entry.get("exit") == Some(&json!(true));
                     let before = entry["before"]
                         .as_str()
                         .unwrap_or("mcp_set_servers")
@@ -599,7 +611,17 @@ fn main() {
         open_permissions: Vec::new(),
         next_permission: 0,
         deferred: None,
+        mcp_errors: json!({}),
+        exit_instead: false,
     };
+    if let Some(errors) = fake
+        .entries
+        .first()
+        .and_then(|e| e["metadata"].get("mcpErrors"))
+        .cloned()
+    {
+        fake.mcp_errors = errors;
+    }
     let env: serde_json::Map<String, Value> = LOGGED_ENV
         .iter()
         .filter_map(|key| std::env::var(key).ok().map(|v| (key.to_string(), json!(v))))
