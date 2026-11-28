@@ -2271,3 +2271,59 @@ async fn a_key_answered_after_a_failed_decline_is_never_declined_later() {
     let b_retries = answers("KEY-B-5502", RequestOutcome::Decline);
     assert_eq!(b_retries, 2, "B is queued once and retried once");
 }
+
+#[tokio::test]
+async fn a_key_still_held_by_another_open_signin_is_never_declined() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-shared", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let declines = || {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-SHARED-6601"))
+            .count()
+    };
+    let turn = t.fake.active_turn(&id).unwrap();
+    // The session scope and the running turn's scope both hold the same key.
+    for turn_id in [None, Some(turn.clone())] {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-SHARED-6601".into()),
+                turn_id,
+                url: None,
+                message: "signin".into(),
+            },
+        );
+    }
+    eventually("two sign-ins", || signins(&t, &id).len() == 2).await;
+    // The run ends: its sign-in closes, but the session's sign-in still holds the key.
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    // A late event for the ended turn with the same key is not declined either.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-SHARED-6601".into()),
+            turn_id: Some(turn),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-PROBE-6602".into()),
+            turn_id: Some("turn-never".into()),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    // The probe key is declined after the shared one was processed, so the order is settled.
+    eventually("probe declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-PROBE-6602"))
+    })
+    .await;
+    assert_eq!(declines(), 0, "the session sign-in still holds the key");
+}

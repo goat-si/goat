@@ -1553,7 +1553,12 @@ impl Actor {
     /// Decline one engine sign-in request while the session lives. The engine's error text can
     /// name the key, so only the reason is logged.
     /// A failed decline keeps the key for [Self::retry_undeclined_signin_keys].
+    /// Callers remove their own entry first; a key that another open sign-in still holds (the
+    /// session and a run can share one) is never declined.
     async fn decline_signin_key(&mut self, key: &str, why: &str) {
+        if self.signin_keys.iter().any(|(_, live)| live == key) {
+            return;
+        }
         let Some(session) = &self.session else { return };
         let answer = RequestAnswer {
             outcome: RequestOutcome::Decline,
@@ -1603,8 +1608,14 @@ impl Actor {
         // Last chance for declines that failed earlier; the session ends after this.
         self.retry_undeclined_signin_keys().await;
         if let Some(s) = &self.session {
+            let mut declined: Vec<&String> = Vec::new();
             for (id, key) in &self.signin_keys {
-                // The engine's error text can name the key, so it is not logged.
+                // Each key is declined once; the engine's error text can name it, so it is not
+                // logged.
+                if declined.contains(&key) {
+                    continue;
+                }
+                declined.push(key);
                 if self.is_open(id)
                     && s.session
                         .answer_request(
