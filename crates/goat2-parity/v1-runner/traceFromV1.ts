@@ -34,6 +34,11 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
         if (input) emit({kind: "queue.changed", thread: thread, input, op: "enqueued"});
         else pendingQueuedMessages.add(p.userMessageId);
       }
+      if (p.status === "cancelled" && old === "queued") {
+        const input = messageAliases.get(p.userMessageId);
+        if (!input) throw new Error(`unmapped cancelled message ${p.userMessageId}`);
+        emit({kind: "queue.changed", thread: thread, input, op: "cancelled"});
+      }
       if (p.status === "running" && !runAliases.has(p.id)) {
         const input = messageAliases.get(p.userMessageId);
         if (!input) throw new Error(`unmapped run input ${p.userMessageId}`);

@@ -30,7 +30,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
   const sends = scenario.steps.filter((s: any) => s.do === "send");
-  const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit");
+  const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit" || s.do === "queue_cancel");
   if (editSteps.length > 1 || (editSteps.length === 1 && (sends.length !== 2 || editSteps[0].input !== sends[1].input || editSteps[0].thread !== sends[1].thread))) throw new Error("unsupported queue edit target");
   // v1's fixture DSL creates one run per start/queue send, numbered by send order
   // (shared.ts runIndex). Resolve a scenario run alias through the expected trace:
@@ -52,7 +52,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   for (const s of scenario.steps) {
     if (s.do === "send" && s.mode === "start") fixtureSteps.push({type: "message", text: s.text});
     else if (s.do === "send" && s.mode === "queue") fixtureSteps.push({type: "queue_message", text: s.text});
-    else if (s.do === "queue_edit") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
+    else if (s.do === "queue_edit" || s.do === "queue_cancel") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
     else if (s.do === "await" && s.until === "run_status" && fixtureSteps.length > 0) {
       const list = awaitsAfterSend.get(fixtureSteps.length - 1) ?? [];
       list.push(s);
@@ -93,7 +93,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     const command = steps[index].command;
     steps.splice(index, 1,
       {type: "await_run_status", threadId, runId: command.runId, status: "queued"},
-      {type: "dispatch", command: {...command, type: "queued-run.edit", text: edit.text}},
+      {type: "dispatch", command: edit.do === "queue_edit" ? {...command, type: "queued-run.edit", text: edit.text} : command},
       {type: "release_replay_gate", label: "turn/completed"},
       {type: "await", key: "run:1"},
       {type: "await_thread_idle", threadId});
