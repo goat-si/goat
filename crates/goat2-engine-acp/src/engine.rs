@@ -2428,6 +2428,187 @@ impl From<EngineError> for StartFailure {
 /// How a probe's start failure names an agent that wants a sign-in.
 pub(crate) const AUTH_REQUIRED_PREFIX: &str = "authentication required";
 
+/// The sign-in links a failed start sent (session-scoped `AuthRequired` with a URL), in order.
+/// Link-less sign-in notices are left out: the host would let one replace the link.
+fn signin_links(events: Option<mpsc::UnboundedReceiver<EngineEvent>>) -> Vec<EngineEvent> {
+    let Some(mut events) = events else {
+        return Vec::new();
+    };
+    let mut links = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let EngineEvent::AuthRequired {
+            url: Some(url),
+            message,
+            ..
+        } = event
+        {
+            links.push(EngineEvent::AuthRequired {
+                turn_id: None,
+                url: Some(url),
+                message,
+            });
+        }
+    }
+    links
+}
+
+/// A start that failed after the agent sent the person a sign-in link (final review finding 7).
+/// v1 hands such a link to the provider's runtime coordinator, which outlives the failed start
+/// (registry adapter.ts:425-436; the probe keeps it too, probe.ts:461-487). GOAT 2 hands it to
+/// the host as a session-scoped `AuthRequired` on this handle, so it stays until the person
+/// resolves it or the session stops. The turn that caused the start is declined with the start
+/// error; a later turn starts the agent again and then runs on it.
+struct SigninPending {
+    factory: AcpEngineFactory,
+    spec: SessionSpec,
+    events: mpsc::UnboundedSender<EngineEvent>,
+    /// The start error, answered to the first turn.
+    error: Mutex<Option<String>>,
+    /// The agent once a later start worked.
+    live: Mutex<Option<Arc<AcpSession>>>,
+    stopped: AtomicBool,
+    /// One start at a time.
+    starting: tokio::sync::Mutex<()>,
+}
+
+impl SigninPending {
+    fn handle(
+        factory: AcpEngineFactory,
+        spec: SessionSpec,
+        error: EngineError,
+        links: Vec<EngineEvent>,
+    ) -> EngineHandle {
+        let (events, rx) = mpsc::unbounded_channel();
+        for link in links {
+            let _ = events.send(link);
+        }
+        // A resumable session stays the card's pointer; without one there is none yet.
+        let engine_ref = spec.resume.clone().unwrap_or_else(|| EngineRef {
+            driver: factory.flavor.engine_driver(),
+            id: String::new(),
+        });
+        EngineHandle {
+            session: Box::new(Self {
+                factory,
+                spec,
+                events,
+                error: Mutex::new(Some(error.to_string())),
+                live: Mutex::new(None),
+                stopped: AtomicBool::new(false),
+                starting: tokio::sync::Mutex::new(()),
+            }),
+            events: rx,
+            engine_ref,
+        }
+    }
+
+    fn live(&self) -> Option<Arc<AcpSession>> {
+        self.live.lock().expect("live").clone()
+    }
+}
+
+#[async_trait]
+impl EngineSession for SigninPending {
+    async fn start_turn(
+        &self,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let starting = self.starting.lock().await;
+        if self.stopped.load(Ordering::SeqCst) {
+            return TurnStartResult::Declined {
+                reason: "the agent process has ended".into(),
+            };
+        }
+        if let Some(live) = self.live() {
+            drop(starting);
+            return live.start_turn(inputs, settings).await;
+        }
+        if let Some(reason) = self.error.lock().expect("error").take() {
+            return TurnStartResult::Declined { reason };
+        }
+        match self.factory.start_inner(self.spec.clone()).await {
+            Ok(started) => {
+                let live = Arc::new(started.session);
+                *self.live.lock().expect("live") = Some(Arc::clone(&live));
+                let mut agent_events = started.events;
+                let events = self.events.clone();
+                tokio::spawn(async move {
+                    while let Some(event) = agent_events.recv().await {
+                        if events.send(event).is_err() {
+                            return;
+                        }
+                    }
+                });
+                drop(starting);
+                live.start_turn(inputs, settings).await
+            }
+            Err(failure) => {
+                for link in signin_links(failure.events) {
+                    let _ = self.events.send(link);
+                }
+                TurnStartResult::Declined {
+                    reason: failure.error.to_string(),
+                }
+            }
+        }
+    }
+
+    async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult {
+        match self.live() {
+            Some(live) => live.steer(turn_id, inputs).await,
+            None => SteerResult::Declined {
+                reason: "the agent has not started".into(),
+            },
+        }
+    }
+
+    async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.interrupt(turn_id).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.answer_request(key, answer).await,
+            None => Err(EngineError::Unavailable(format!("no open request {key}"))),
+        }
+    }
+
+    async fn set_config(&self, settings: &TurnSettings) -> Result<(), EngineError> {
+        match self.live() {
+            Some(live) => live.set_config(settings).await,
+            // The next start applies the turn's settings.
+            None => Ok(()),
+        }
+    }
+
+    fn group_rss_bytes(&self) -> Option<u64> {
+        self.live().and_then(|live| live.group_rss_bytes())
+    }
+
+    fn process_group_id(&self) -> Option<i32> {
+        self.live().and_then(|live| live.process_group_id())
+    }
+
+    async fn shutdown(&self) {
+        let _starting = self.starting.lock().await;
+        if self.stopped.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        match self.live() {
+            Some(live) => live.shutdown().await,
+            None => {
+                let _ = self.events.send(EngineEvent::Exited {
+                    reason: "shutdown".into(),
+                });
+            }
+        }
+    }
+}
+
 pub struct StartedAcp {
     pub session: AcpSession,
     pub events: mpsc::UnboundedReceiver<EngineEvent>,
@@ -2437,12 +2618,25 @@ pub struct StartedAcp {
 #[async_trait]
 impl EngineFactory for AcpEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
-        let started = self.start_acp(spec).await?;
-        Ok(EngineHandle {
-            session: Box::new(started.session),
-            events: started.events,
-            engine_ref: started.engine_ref,
-        })
+        match self.start_inner(spec.clone()).await {
+            Ok(started) => Ok(EngineHandle {
+                session: Box::new(started.session),
+                events: started.events,
+                engine_ref: started.engine_ref,
+            }),
+            Err(failure) => {
+                let links = signin_links(failure.events);
+                if links.is_empty() || self.probe {
+                    return Err(failure.error);
+                }
+                Ok(SigninPending::handle(
+                    self.clone(),
+                    spec,
+                    failure.error,
+                    links,
+                ))
+            }
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -2865,7 +3059,8 @@ impl AcpEngineFactory {
         let resume_id = spec
             .resume
             .as_ref()
-            .filter(|r| r.driver == flavor.engine_driver())
+            // An empty id is no session (a start that never opened one, [SigninPending]).
+            .filter(|r| r.driver == flavor.engine_driver() && !r.id.is_empty())
             .map(|r| r.id.clone());
         let setup_once = || async {
             if let Some(session_id) = &resume_id {
