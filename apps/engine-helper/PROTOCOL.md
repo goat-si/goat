@@ -55,7 +55,8 @@ reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
 | item_completed | turnId, item, locator: {turnId, itemId} or null |
 | request_opened | turnId, key, itemId or null, kind: approval/question/signin, summary, item or null |
 | request_closed | key |
-| auth_required | turnId or null, url or null, message (sign-in needed; host opens a signin request) |
+| auth_required | turnId or null, url or null, message, key (optional, string or null: answered later with request.answer accepted/declined, each key at most once) (sign-in needed; host opens a signin request) |
+| token_usage | turnId or null, usage: goat2-contracts ThreadTokenUsageSnapshot (camelCase; usedTokens required) (the run's latest snapshot; not stored as an item) |
 | subagent_update | turnId or null, subagentId, status (TurnItemStatus), title or null, progress or null (not stored) |
 | turn_finished | turnId, outcome: {type: "done"} / {type: "failed", reason} / {type: "interrupted"} |
 | steer_updated | turnId, inputIds (the steer's inputIds), status: {type: "completed"} (the engine read it into the turn) / {type: "cancelled", reason} (accepted but never ran) (not stored) |

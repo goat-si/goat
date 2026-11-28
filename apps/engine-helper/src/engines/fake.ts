@@ -185,6 +185,11 @@ class FakeSession implements EngineSession {
         host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply.slice(0, half) });
         await sleep(5);
         host.emit({ type: "text_delta", turnId: turn.turnId, itemId: messageId, text: reply.slice(half) });
+        host.emit({
+          type: "token_usage",
+          turnId: turn.turnId,
+          usage: { usedTokens: reply.length, inputTokens: text.length, outputTokens: reply.length },
+        });
       }
     }
     await sleep(5);

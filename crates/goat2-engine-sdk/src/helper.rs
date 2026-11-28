@@ -686,9 +686,15 @@ impl Translator {
             }
             "request_closed" => EngineEvent::RequestClosed { key: text("key")? },
             "auth_required" => EngineEvent::AuthRequired {
+                key: optional_text("key"),
                 turn_id: optional_text("turnId"),
                 url: optional_text("url"),
                 message: text("message")?,
+            },
+            "token_usage" => EngineEvent::TokenUsage {
+                turn_id: optional_text("turnId"),
+                usage: serde_json::from_value(event.get("usage").cloned().unwrap_or(Value::Null))
+                    .map_err(|error| format!("bad token usage: {error}"))?,
             },
             "subagent_update" => EngineEvent::SubagentUpdate {
                 turn_id: optional_text("turnId"),

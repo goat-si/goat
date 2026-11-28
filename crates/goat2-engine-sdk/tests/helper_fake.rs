@@ -148,6 +148,17 @@ async fn echo_turn_streams_completes_and_fills_item_fields() {
     assert_eq!(item.0.ordinal, 0);
     assert_eq!(item.1.expect("locator").turn_id, turn);
     assert_eq!(final_text(&events), "echo: hello");
+    // token_usage reaches the host as EngineEvent::TokenUsage for the turn.
+    let usage = events
+        .iter()
+        .find_map(|event| match event {
+            EngineEvent::TokenUsage { turn_id, usage } => Some((turn_id.clone(), usage.clone())),
+            _ => None,
+        })
+        .expect("token usage");
+    assert_eq!(usage.0.as_deref(), Some(turn.as_str()));
+    assert_eq!(usage.1.used_tokens, "echo: hello".len() as u64);
+    assert_eq!(usage.1.input_tokens, Some("hello".len() as u64));
     assert!(matches!(
         events.last(),
         Some(EngineEvent::TurnFinished {

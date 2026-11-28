@@ -6,6 +6,7 @@ import type {
   ProviderProbeResult,
   RequestOutcome,
   RuntimeMode,
+  ThreadTokenUsageSnapshot,
   TurnItem,
 } from "@goat2/contracts-rs";
 
@@ -123,7 +124,10 @@ export type EngineEvent =
       readonly turnId: string | null;
       readonly url: string | null;
       readonly message: string;
+      /** Engine handle the host answers with request.answer (accepted/declined); null when none. */
+      readonly key?: string | null;
     }
+  | { readonly type: "token_usage"; readonly turnId: string | null; readonly usage: ThreadTokenUsageSnapshot }
   | {
       readonly type: "subagent_update";
       readonly turnId: string | null;
