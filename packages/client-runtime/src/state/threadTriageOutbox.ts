@@ -101,6 +101,8 @@ export function createThreadTriageOutbox<R, E>(input: {
     Atom.keepAlive,
   );
   const entriesAtom = Atom.make<PendingThreadTriages>([]).pipe(Atom.keepAlive);
+  // Command IDs already superseded by a live server write whose storage cleanup has not finished.
+  const supersededCommandIds = new Set<CommandId>();
   // Storage is shared with other tabs, so memory takes each result in the order storage gave it.
   const order = Semaphore.makeUnsafe(1);
   // Per-thread lock serializing replay check+send against queue persistence and cancel/undo.
@@ -133,8 +135,12 @@ export function createThreadTriageOutbox<R, E>(input: {
     return yield* store.update(change).pipe(
       Effect.tap((entries) =>
         Effect.sync(() => {
-          if (!sameEntries(registry.get(entriesAtom), entries)) {
-            registry.set(entriesAtom, entries);
+          const visible =
+            supersededCommandIds.size === 0
+              ? entries
+              : entries.filter((entry) => !supersededCommandIds.has(entry.commandId));
+          if (!sameEntries(registry.get(entriesAtom), visible)) {
+            registry.set(entriesAtom, visible);
           }
         }),
       ),
@@ -176,23 +182,53 @@ export function createThreadTriageOutbox<R, E>(input: {
           stored.some((entry) => entry.commandId === commandId)
             ? stored.filter((entry) => entry.commandId !== commandId)
             : stored,
-        ).pipe(Effect.ignore);
+        ).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              supersededCommandIds.delete(commandId);
+            }),
+          ),
+          Effect.ignore,
+        );
 
-  const forgetSupersededEffect = (
+  const forgetSupersededEffect = Effect.fn("ThreadTriageOutbox.forgetSuperseded")(function* (
     registry: AtomRegistry.AtomRegistry,
     environmentId: EnvironmentId,
     threadId: ThreadId,
     succeeded: PendingThreadTriage["action"]["type"],
-  ) =>
-    update(registry, (stored) => {
-      const kept = stored.filter(
-        (entry) =>
-          entry.environmentId !== environmentId ||
-          entry.threadId !== threadId ||
-          !supersedesAction(succeeded, entry.action.type),
+  ) {
+    const isSuperseded = (entry: PendingThreadTriage) =>
+      entry.environmentId === environmentId &&
+      entry.threadId === threadId &&
+      supersedesAction(succeeded, entry.action.type);
+    const markedIds: CommandId[] = [];
+    for (const entry of registry.get(entriesAtom)) {
+      if (isSuperseded(entry)) {
+        supersededCommandIds.add(entry.commandId);
+        markedIds.push(entry.commandId);
+      }
+    }
+    if (markedIds.length > 0) {
+      registry.update(entriesAtom, (current) =>
+        current.filter((entry) => !supersededCommandIds.has(entry.commandId)),
       );
-      return kept.length === stored.length ? stored : kept;
-    }).pipe(Effect.ignore);
+    }
+    yield* update(registry, (stored) => {
+      const kept: PendingThreadTriage[] = [];
+      let changed = false;
+      for (const entry of stored) {
+        if (isSuperseded(entry) || supersededCommandIds.has(entry.commandId)) {
+          supersededCommandIds.add(entry.commandId);
+          markedIds.push(entry.commandId);
+          changed = true;
+          continue;
+        }
+        kept.push(entry);
+      }
+      return changed ? kept : stored;
+    });
+    for (const id of markedIds) supersededCommandIds.delete(id);
+  });
 
   const isCompensatingAction = (action: PendingThreadTriage["action"]) =>
     action.type === "unsettle" || action.type === "unsnooze";
@@ -216,6 +252,10 @@ export function createThreadTriageOutbox<R, E>(input: {
             );
             const current = currentIndex === -1 ? undefined : stored[currentIndex];
             if (current === undefined) return false;
+            if (supersededCommandIds.has(current.commandId)) {
+              yield* forgetEffect(registry, current.commandId);
+              return false;
+            }
             // A follow-up action queued behind a compensating undo waits until that undo finishes.
             const blockedByCompensation = stored.some(
               (candidate, index) =>
@@ -376,7 +416,11 @@ export function createThreadTriageOutbox<R, E>(input: {
   function queueWhenOffline<I extends { readonly threadId: ThreadId }, CE>(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
     toAction: (input: I) => PendingThreadTriage["action"],
-  ): AtomCommand<Target<I>, { readonly sequence: number }, CE | E> {
+  ): AtomCommand<
+    Target<I>,
+    { readonly sequence: number },
+    CE | ThreadTriageOutboxStorageError | E
+  > {
     if (!enabled) return command;
     return {
       label: command.label,
