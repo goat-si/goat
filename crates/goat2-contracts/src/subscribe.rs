@@ -616,6 +616,13 @@ pub enum HostFrame {
         thread_id: ThreadId,
         line: Box<LogLine>,
     },
+    /// Live, non-stored usage; updated_at is host receipt time (v1 contextWindow.ts:46-90).
+    ThreadUsage {
+        sub_id: String,
+        thread_id: ThreadId,
+        usage: crate::ThreadTokenUsageSnapshot,
+        updated_at: String,
+    },
     /// Replay done; live events follow.
     ThreadCaughtUp {
         sub_id: String,
