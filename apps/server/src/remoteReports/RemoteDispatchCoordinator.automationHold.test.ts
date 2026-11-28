@@ -35,6 +35,7 @@ it.effect(
         assert.equal(yield* Queue.size(f.calls), 0);
         assert.equal(yield* Queue.size(f.notifications), 0);
         yield* hold.release;
+        yield* TestClock.adjust("5 seconds");
         const read = yield* Queue.take(f.calls);
         yield* Queue.offer(
           read.reply,
