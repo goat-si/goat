@@ -178,6 +178,9 @@ struct Actor {
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
     signin_keys: Vec<(RequestId, String)>,
+    /// Engine sign-in keys whose decline failed: retried at the next run end and before the
+    /// engine stops, so no engine request is left waiting without a retry.
+    undeclined_signin_keys: Vec<String>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -201,6 +204,7 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         idle_gen: 0,
         session_signins: Vec::new(),
         signin_keys: Vec::new(),
+        undeclined_signin_keys: Vec::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
@@ -982,12 +986,20 @@ impl Actor {
         message: String,
     ) {
         let run_id = match (&turn_id, &self.phase) {
-            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => Some(run.run_id.clone()),
-            (Some(_), _) => {
-                tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
-                return;
+            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => {
+                Some(Some(run.run_id.clone()))
             }
-            (None, _) => None,
+            (Some(_), _) => None,
+            (None, _) => Some(None),
+        };
+        let Some(run_id) = run_id else {
+            tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
+            // The engine still waits for an answer to a keyed request: decline it.
+            if let Some(key) = key {
+                self.decline_signin_key(&key, "the sign-in named a turn that is not running")
+                    .await;
+            }
+            return;
         };
         let scope: &[RequestId] = match (&run_id, &self.phase) {
             (Some(_), Phase::Running(run)) => &run.signins,
@@ -1092,6 +1104,7 @@ impl Actor {
                 }
             }
         }
+        self.retry_undeclined_signin_keys().await;
         events.extend(self.close_signins(&run.signins, "the run ended"));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: run.run_id.clone(),
@@ -1536,7 +1549,8 @@ impl Actor {
 
     /// Decline one engine sign-in request while the session lives. The engine's error text can
     /// name the key, so only the reason is logged.
-    async fn decline_signin_key(&self, key: &str, why: &str) {
+    /// A failed decline keeps the key for [Self::retry_undeclined_signin_keys].
+    async fn decline_signin_key(&mut self, key: &str, why: &str) {
         let Some(session) = &self.session else { return };
         let answer = RequestAnswer {
             outcome: RequestOutcome::Decline,
@@ -1544,12 +1558,22 @@ impl Actor {
             answers: None,
         };
         if session.session.answer_request(key, answer).await.is_err() {
-            tracing::warn!(thread = %self.id, why, "failed to decline a sign-in");
+            tracing::warn!(thread = %self.id, why, "failed to decline a sign-in; will retry");
+            self.undeclined_signin_keys.push(key.to_owned());
+        }
+    }
+
+    /// Retry the declines that failed earlier; a key that fails again stays for the next try.
+    async fn retry_undeclined_signin_keys(&mut self) {
+        for key in std::mem::take(&mut self.undeclined_signin_keys) {
+            self.decline_signin_key(&key, "retrying an earlier decline")
+                .await;
         }
     }
 
     fn drop_session(&mut self) {
         self.signin_keys.clear();
+        self.undeclined_signin_keys.clear();
         let signins = std::mem::take(&mut self.session_signins);
         let closed = self.close_signins(&signins, "the engine stopped");
         if !closed.is_empty() {
@@ -1567,6 +1591,8 @@ impl Actor {
     }
 
     async fn stop_session(&mut self, why: &str) {
+        // Last chance for declines that failed earlier; the session ends after this.
+        self.retry_undeclined_signin_keys().await;
         if let Some(s) = &self.session {
             for (id, key) in &self.signin_keys {
                 // The engine's error text can name the key, so it is not logged.

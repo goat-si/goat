@@ -2148,3 +2148,61 @@ async fn a_repeated_keyed_signin_declines_the_replaced_key_and_errors_never_show
     assert!(!data_contains(&t, "KEY-FIRST-7731"));
     assert!(!data_contains(&t, "KEY-SECOND-7732"));
 }
+
+#[tokio::test]
+async fn a_late_keyed_signin_is_declined_and_a_failed_decline_is_retried() {
+    // A keyed sign-in naming a turn that already ended is declined, not left waiting.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-late", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let ended = t.fake.active_turn(&id).unwrap();
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-LATE-4401".into()),
+            turn_id: Some(ended),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("late key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-LATE-4401"))
+    })
+    .await;
+    assert!(signins(&t, &id).is_empty(), "no request for an ended turn");
+
+    // A decline that fails while a newer key replaces the old one is retried at run end.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-OLD-4402"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-NEW-4403"));
+    let declines = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: RequestOutcome::Decline, .. } if k == key))
+            .count()
+    };
+    eventually("first decline attempted", || declines("KEY-OLD-4402") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("old key retried", || declines("KEY-OLD-4402") == 2).await;
+    assert_eq!(
+        declines("KEY-NEW-4403"),
+        1,
+        "the current key is declined at run end"
+    );
+    assert!(!data_contains(&t, "KEY-OLD-4402"));
+}
