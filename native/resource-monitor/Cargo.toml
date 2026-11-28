@@ -1,3 +1,4 @@
+# Windows builds use the static CRT configured in .cargo/config.toml.
 [package]
 name = "goat-resource-monitor"
 version = "0.1.0"

@@ -320,7 +320,8 @@ const ScheduledTaskUpsertInputFields = Schema.Struct({
   routineMode: Schema.optional(RoutineMode),
   id: Schema.optional(ScheduledTaskId),
   requireExisting: Schema.optional(Schema.Boolean).annotate({
-    description: "Reject the save if the task no longer exists, for edits from a client form.",
+    description:
+      "Reject the save if the task no longer exists, for edits based on an earlier read.",
   }),
   commandId: Schema.optional(CommandId),
   title: TrimmedNonEmptyString,
@@ -330,6 +331,7 @@ const ScheduledTaskUpsertInputFields = Schema.Struct({
   schedule: ScheduledTaskUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  unbindThread: Schema.optional(Schema.Boolean),
   /** Omitted: keep the stored mode, or derive it from threadId for a new or rebound task. */
   threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,

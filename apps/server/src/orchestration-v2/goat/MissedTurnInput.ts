@@ -1,8 +1,8 @@
+import { isSlashCommandMessage } from "../ContextHandoffDelivery.ts";
 import { indexRunInputDelivery } from "@goat/shared/orchestrationV2ManualContinuation";
 import {
   getProviderAttachmentLimitError,
   isCompactionCommandMessage,
-  parseGoalCommand,
   type ChatAttachment,
   type OrchestrationV2TurnItem,
   type OrchestrationV2Run,
@@ -54,12 +54,7 @@ export function missedTurnImages(input: {
     const run = runs.get(attempt.runId);
     if (!run || run.ordinal >= input.run.ordinal || missed.has(run.id)) continue;
     const message = messages.get(run.userMessageId);
-    if (
-      message &&
-      (isCompactionCommandMessage(message) ||
-        (input.goalDriver && parseGoalCommand(message) !== null))
-    )
-      continue;
+    if (message && isSlashCommandMessage(message, input.goalDriver)) continue;
     // A replay may have carried older missed images alongside its identified source.
     lastPossibleDelivery = Math.max(lastPossibleDelivery, run.ordinal);
   }

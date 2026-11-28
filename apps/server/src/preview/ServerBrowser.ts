@@ -138,7 +138,7 @@ import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
 import { closeUnadoptedPopup } from "./popupAdmission.ts";
 import { pageRead } from "./pageRead.ts";
-import { attachNetworkTracker } from "./networkTracker.ts";
+import * as Network from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
 import { publishFetchedBody } from "./browserArtifacts.ts";
@@ -677,7 +677,7 @@ const make = Effect.gen(function* () {
       const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
       if (!adopted && !desktop) opened.push(() => page.close());
       openSignal?.throwIfAborted();
-      attachNetworkTracker(page);
+      Network.attachNetworkTracker(page);
       const cdp = await context.newCDPSession(page);
       openSignal?.throwIfAborted();
       await installPdfDocumentNavigation(cdp, openSignal);
@@ -752,6 +752,7 @@ const make = Effect.gen(function* () {
         desktopViewportStale: true,
         desktopViewportChanges: 0,
         desktopResize: Promise.withResolvers<void>(),
+        desktopResizeUndrawn: false,
         loading: false,
         loadError: undefined,
         titleWatcher: makeBrowserTitleWatcher(cdp, () => {
@@ -801,17 +802,15 @@ const make = Effect.gen(function* () {
         openSignal?.throwIfAborted();
         await cdp.send("Page.enable");
       }
-      const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
-        request.isNavigationRequest() && request.frame() === page.mainFrame();
-      const navigationGenerations = new WeakMap<object, number>();
+      const generations = new WeakMap<object, number>();
       page.on("request", (request) => {
         if (request.isNavigationRequest()) {
           for (let hop: typeof request | null = request; hop; hop = hop.redirectedFrom())
             observeNavigation(hop.url());
         }
-        if (!isMainNavigation(request)) return;
+        if (!Network.trackNavigation(page, request, generations, tab, settleAborted)) return;
         const stoppedFirst = Stop.stoppedFirstRequest(tab, request.url());
-        navigationGenerations.set(request, ++tab.navigationGeneration);
+        generations.set(request, ++tab.navigationGeneration);
         tab.documentGeneration++;
         tab.titleWatcher.stop();
         clearAbortedNavigation(tab);
@@ -863,9 +862,9 @@ const make = Effect.gen(function* () {
       page.on("requestfailed", (request) => {
         const errorText = request.failure()?.errorText ?? "";
 
-        if (!isMainNavigation(request)) return;
+        if (!Network.isMainNavigation(page, request) || Network.isAppLinkRequest(request)) return;
         // Newer navigations own status; untracked initial popup requests yield to any tracked navigation.
-        const generation = navigationGenerations.get(request) ?? 0;
+        const generation = generations.get(request) ?? 0;
         if (generation !== tab.navigationGeneration) return;
         // An aborted navigation is usually a download; its `download` event settles the status.
         if (errorText.includes("ERR_ABORTED")) {
@@ -879,7 +878,7 @@ const make = Effect.gen(function* () {
             timer: setTimeout(() => {
               if (tab.abortedNavigation?.generation !== navigationGeneration) return;
               tab.abortedNavigation = null;
-              if (!tab.closing) settleAbortedNavigation(tab, navigationGeneration, url, undefined);
+              if (!tab.closing) settleAborted(tab, navigationGeneration, url, undefined);
             }, ServerBrowserLimits.ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS),
           };
           return;
@@ -962,7 +961,7 @@ const make = Effect.gen(function* () {
     else void reportLoaded(tab);
   });
 
-  const settleAbortedNavigation = (
+  const settleAborted = (
     tab: ServerTab,
     generation: number,
     url: string,
@@ -987,7 +986,7 @@ const make = Effect.gen(function* () {
   const saveDownload = makeSaveDownload({
     directory: config.browserArtifactsDir,
     clearAbortedNavigation,
-    settleAbortedNavigation,
+    settleAbortedNavigation: settleAborted,
     reportFailure: (cause) =>
       runFork(Effect.logWarning("server preview download failed", { cause })),
   });
@@ -2543,7 +2542,8 @@ const make = Effect.gen(function* () {
   });
 
   yield* manager.registerBeforeClose(makeBeforePreviewClose(tabs, pendingTabs, closedPendingTabs));
-  yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  const managerEvents = Stream.fromSubscription(yield* manager.subscribeEvents);
+  yield* managerEvents.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
   if (
     !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
     (yield* PreviewBrowserHost.sandboxBlocked)

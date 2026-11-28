@@ -31,6 +31,23 @@ function makeRecordLimitTranscript(cwd: string, overflow: boolean): string {
 }
 
 describe("parseAgentSessionTranscript", () => {
+  it("does not split an emoji when shortening a first message into a title", () => {
+    const contents = [
+      encodeTranscriptRecord({ type: "session_meta", payload: { id: "codex-session" } }),
+      encodeTranscriptRecord({
+        type: "event_msg",
+        payload: { type: "user_message", message: `${"a".repeat(99)}🚀 then deploy` },
+      }),
+    ].join("\n");
+    const thread = AgentSessionScanner.parseAgentSessionTranscript({
+      contents,
+      source: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      fallbackSessionId: "fallback",
+      lastActiveAtMs: Date.parse("2026-08-25T08:00:00.000Z"),
+    });
+    expect(thread?.title).toBe("a".repeat(99));
+  });
   it.each([false, true])(
     "handles the exact record limit and an interior blank overflow=%s",
     (overflow) => {

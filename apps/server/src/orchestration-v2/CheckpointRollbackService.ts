@@ -167,6 +167,7 @@ export const layer: Layer.Layer<
       aside: { path: string | null },
     ) {
       const context = yield* projections.getCheckpointRollbackContext(input.threadId, input);
+      if (context.thread.deletedAt !== null) return;
       const { providerThread, checkpoint, scope, targetAttempt, runsToRollback, staleCheckpoints } =
         context;
       if (
@@ -177,7 +178,10 @@ export const layer: Layer.Layer<
         checkpoint.scopeId !== scope.id ||
         // Missing snapshots support conversation rewind only.
         (checkpoint.status !== "ready" &&
-          !(input.restoreFiles === false && checkpoint.status === "missing"))
+          !(
+            input.restoreFiles === false &&
+            (checkpoint.status === "missing" || checkpoint.status === "error")
+          ))
       ) {
         return yield* new CheckpointRollbackExecutionError({
           reason: "rollback-target-invalid",

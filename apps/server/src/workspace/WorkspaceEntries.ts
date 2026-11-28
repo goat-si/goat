@@ -1,9 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFSP from "node:fs/promises";
 
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -152,11 +155,32 @@ const resolveBrowseTarget = Effect.fn("WorkspaceEntries.resolveBrowseTarget")(fu
   );
 });
 
+// A link to an unresponsive network share must not hold up the local entries beside it.
+const SYMLINK_TARGET_STAT_TIMEOUT = Duration.seconds(1);
+// A timed-out stat cannot be cancelled and keeps a libuv worker (4 by default) busy,
+// so cap target stats in flight to leave most of the pool to other fs work.
+const MAX_PENDING_SYMLINK_TARGET_STATS = 2;
+
 /** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchFinderCache;
+  let pendingSymlinkTargetStats = 0;
+  const statSymlinkTarget = (candidate: { readonly name: string; readonly fullPath: string }) => {
+    if (pendingSymlinkTargetStats >= MAX_PENDING_SYMLINK_TARGET_STATS) {
+      return Promise.resolve(null);
+    }
+    pendingSymlinkTargetStats++;
+    return NodeFSP.stat(candidate.fullPath)
+      .then(
+        (stats) => (stats.isDirectory() ? candidate : null),
+        () => null,
+      )
+      .finally(() => {
+        pendingSymlinkTargetStats--;
+      });
+  };
   const vcsProcess = yield* VcsProcess.VcsProcess;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
@@ -165,12 +189,31 @@ export const make = Effect.gen(function* () {
     return yield* workspacePaths.normalizeWorkspaceRoot(cwd);
   });
 
+  // Refreshing goes through `get`, which restarts the map's idle timer, so idleness is measured
+  // from the last search, not the last refresh.
+  const lastSearchedAt = new Map<string, number>();
+  const indexIdleMillis = Duration.toMillis(WorkspaceSearchIndex.WORKSPACE_INDEX_IDLE_TTL);
+  const markSearched = (indexKey: string, now: number) => {
+    // A record older than the timeout counts the same as none, so it can go.
+    for (const [key, searchedAt] of lastSearchedAt) {
+      if (now - searchedAt >= indexIdleMillis) lastSearchedAt.delete(key);
+    }
+    lastSearchedAt.set(indexKey, now);
+  };
+
   const refresh: WorkspaceEntries["Service"]["refresh"] = Effect.fn("WorkspaceEntries.refresh")(
     function* (cwd) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(cwd).pipe(
         Effect.orElseSucceed(() => cwd),
       );
       for (const variant of WorkspaceSearchIndex.WORKSPACE_SEARCH_INDEX_VARIANTS) {
+        const indexKey = `${variant}\n${normalizedCwd}`;
+        const searchedAt = lastSearchedAt.get(indexKey) ?? 0;
+        if ((yield* Clock.currentTimeMillis) - searchedAt >= indexIdleMillis) {
+          lastSearchedAt.delete(indexKey);
+          yield* workspaceSearchIndexes.invalidate(normalizedCwd, variant);
+          continue;
+        }
         const recoverRefreshFailure = Effect.fn("WorkspaceEntries.recoverRefreshFailure")(
           function* (
             cause:
@@ -228,16 +271,33 @@ export const make = Effect.gen(function* () {
       const showHidden = endsWithSeparator || prefix.startsWith(".");
       const lowerPrefix = prefix.toLowerCase();
       const entries: Array<{ readonly name: string; readonly fullPath: string }> = [];
+      const symlinkCandidates: Array<{ readonly name: string; readonly fullPath: string }> = [];
       for (const dirent of dirents) {
         if (
-          dirent.isDirectory() &&
-          dirent.name.toLowerCase().startsWith(lowerPrefix) &&
-          (showHidden || !dirent.name.startsWith("."))
+          !dirent.name.toLowerCase().startsWith(lowerPrefix) ||
+          (!showHidden && dirent.name.startsWith("."))
         ) {
-          entries.push({
-            name: dirent.name,
-            fullPath: path.join(parentPath, dirent.name),
-          });
+          continue;
+        }
+        const fullPath = path.join(parentPath, dirent.name);
+        if (dirent.isDirectory()) {
+          entries.push({ name: dirent.name, fullPath });
+        } else if (dirent.isSymbolicLink()) {
+          symlinkCandidates.push({ name: dirent.name, fullPath });
+        }
+      }
+      if (symlinkCandidates.length > 0) {
+        const resolvedSymlinks = yield* Effect.forEach(
+          symlinkCandidates,
+          (candidate) =>
+            Effect.promise(() => statSymlinkTarget(candidate)).pipe(
+              Effect.timeoutOption(SYMLINK_TARGET_STAT_TIMEOUT),
+              Effect.map(Option.getOrNull),
+            ),
+          { concurrency: MAX_PENDING_SYMLINK_TARGET_STATS },
+        );
+        for (const candidate of resolvedSymlinks) {
+          if (candidate !== null) entries.push(candidate);
         }
       }
 
@@ -254,6 +314,8 @@ export const make = Effect.gen(function* () {
       const normalizedQuery = normalizeSearchQuery(input.query, {
         trimLeadingPattern: /^[@./]+/,
       });
+      const indexKey = `paths\n${normalizedCwd}`;
+      markSearched(indexKey, yield* Clock.currentTimeMillis);
       const result = yield* Effect.gen(function* () {
         const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.search(normalizedQuery, input.limit, input.kind, input.imageOnly);
@@ -358,6 +420,8 @@ export const make = Effect.gen(function* () {
     "WorkspaceEntries.searchContents",
   )(function* (input) {
     const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+    const indexKey = `content\n${normalizedCwd}`;
+    markSearched(indexKey, yield* Clock.currentTimeMillis);
     return yield* Effect.gen(function* () {
       const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "content");
       return yield* searchIndex.searchContents(input);
@@ -536,6 +600,8 @@ export const make = Effect.gen(function* () {
           truncated: false,
         };
       }
+      const indexKey = `paths\n${normalizedCwd}`;
+      markSearched(indexKey, yield* Clock.currentTimeMillis);
       return yield* Effect.gen(function* () {
         const searchIndex = yield* workspaceSearchIndexes.get(normalizedCwd, "paths");
         return yield* searchIndex.list();

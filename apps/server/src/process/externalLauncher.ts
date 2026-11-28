@@ -6,6 +6,7 @@ import {
   ExternalLauncherBrowserSpawnError,
   ExternalLauncherCommandNotFoundError,
   ExternalLauncherEditorSpawnError,
+  ExternalLauncherRevealTargetMissingError,
   ExternalLauncherUnknownEditorError,
   ExternalLauncherUnsupportedEditorError,
   ExternalLauncherUnsupportedTargetError,
@@ -42,6 +43,7 @@ export {
   ExternalLauncherBrowserSpawnError,
   ExternalLauncherCommandNotFoundError,
   ExternalLauncherEditorSpawnError,
+  ExternalLauncherRevealTargetMissingError,
   ExternalLauncherUnknownEditorError,
   ExternalLauncherUnsupportedEditorError,
   ExternalLauncherUnsupportedTargetError,
@@ -537,6 +539,22 @@ const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
 
   let target = input.cwd;
   if (input.reveal === true) {
+    // Explorer answers /select of a missing path by opening its default folder, not the parent.
+    const exists = yield* (yield* FileSystem.FileSystem).exists(target).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ExternalLauncherEditorSpawnError({
+            editor: editorDef.id,
+            target,
+            command,
+            args: [],
+            cause,
+          }),
+      ),
+    );
+    if (!exists) {
+      return yield* new ExternalLauncherRevealTargetMissingError({ editor: editorDef.id, target });
+    }
     return yield* resolveFileManagerRevealLaunch(target, platform, env, command);
   }
   if (platform === "darwin" && target.endsWith(".app")) {

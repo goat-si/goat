@@ -473,10 +473,13 @@ type ClerkListener = Parameters<Parameters<typeof cloudAccountService.attach>[0]
 function observeClerk(accountId: string | null) {
   const attach = cloudAccountService.attach({
     addListener: (listener: ClerkListener) => {
+      // Clerk includes the client its API returned; an id-less one means it was unreachable.
+      const client = { id: "client_test" };
       listener(
         (accountId === null
-          ? { user: null, session: null }
+          ? { client, user: null, session: null }
           : {
+              client,
               user: { id: accountId },
               session: { status: "active" },
             }) as Parameters<ClerkListener>[0],

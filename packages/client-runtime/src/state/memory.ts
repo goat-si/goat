@@ -576,16 +576,35 @@ export function createMemoryEnvironmentAtoms<R, E>(
   const turnMemory = bodyQuery(WS_METHODS.memoryTurnInspect);
   const canInspectTurnMemory = command(WS_METHODS.memoryTurnInspect).permissionAtom;
   const syncStatus = command(WS_METHODS.memorySyncStatus);
+  // A bound space outlives thread views, so switching threads does not ask for sync status again.
+  // Failures and unbound states are not kept, and a new connection asks afresh.
+  const boundSpace = Atom.family((_environmentId: EnvironmentId) =>
+    Atom.make<{
+      readonly connection: unknown;
+      readonly space: NonNullable<ReturnType<typeof memoryLocalSpace>>;
+    } | null>(null).pipe(Atom.setIdleTTL(5 * 60_000)),
+  );
   const spaceForTurn = Atom.family((environmentId: EnvironmentId) =>
     runtime
       .atom((get) => {
-        if (Option.isNone(get(sessions.preparedConnectionValueAtom(environmentId))))
-          return Effect.succeed(null);
+        const connection = get(sessions.preparedConnectionValueAtom(environmentId));
+        if (Option.isNone(connection)) return Effect.succeed(null);
+        const kept = get.once(boundSpace(environmentId));
+        if (kept?.connection === connection.value) return Effect.succeed(kept.space);
         return Effect.promise(() =>
           syncStatus.run(get.registry, { environmentId, input: {} }),
         ).pipe(
           Effect.map((status) =>
             status._tag === "Success" ? memoryLocalSpace(status.value) : null,
+          ),
+          Effect.tap((space) =>
+            Effect.sync(() => {
+              if (space !== null)
+                get.registry.set(boundSpace(environmentId), {
+                  connection: connection.value,
+                  space,
+                });
+            }),
           ),
         );
       })

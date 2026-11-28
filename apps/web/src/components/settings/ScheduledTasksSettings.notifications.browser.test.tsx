@@ -38,6 +38,19 @@ vi.mock(import("../../state/query"), async (original) => ({
   useEnvironmentQuery: (() => ({ data: { tasks: state.tasks }, error: null })) as never,
   formatEnvironmentQueryError: () => "Unavailable",
 }));
+// The worktree base reads the project's branches; this repo reports none.
+vi.mock(import("../../state/queries"), async (original) => ({
+  ...(await original()),
+  usePaginatedBranches: () => ({
+    data: { refs: [], isRepo: true, hasPrimaryRemote: false, nextCursor: null, totalCount: 0 },
+    refs: [],
+    error: null,
+    isPending: false,
+    isFetchingNextPage: false,
+    refresh: () => {},
+    loadNext: () => {},
+  }),
+}));
 vi.mock(import("../../state/server"), async (original) => ({
   ...(await original()),
   EMPTY_SERVER_PROVIDERS: [],

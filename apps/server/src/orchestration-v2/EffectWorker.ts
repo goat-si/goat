@@ -344,8 +344,7 @@ export const layerExecutor: Layer.Layer<
                         messageId: message.id,
                         memoryGrantCeiling: run.memoryGrantCeiling ?? "none",
                         ...(error.steerDeclined ? { steerFollowUpOfRunId: run.id } : {}),
-                        ...(error.steerDeclined &&
-                        effect.request.steerFollowUpAfterRunOrdinal !== undefined
+                        ...(effect.request.steerFollowUpAfterRunOrdinal !== undefined
                           ? {
                               steerFollowUpAfterRunOrdinal:
                                 effect.request.steerFollowUpAfterRunOrdinal,

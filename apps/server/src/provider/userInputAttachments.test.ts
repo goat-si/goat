@@ -2,6 +2,10 @@ import {
   documentAlternateContentFixtures,
   documentHiddenTextFixtures,
   documentLineBreakFixtures,
+  documentRtfCases,
+  documentMainPartFixtures,
+  documentEmptyNotesFixture,
+  documentIndexFixture,
 } from "./documentTextFixtures.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
@@ -31,50 +35,7 @@ const attachment = {
   sizeBytes: 4,
 };
 describe("question answer paths", () => {
-  it.effect.each([
-    [
-      "page-specific headers and footers",
-      String.raw`{\rtf1\ansi\facingp\sectd\titlepg
-{\headerf First-page header}{\headerl Left-page header}{\headerr Right-page header}
-{\footerf First-page footer}{\footerl Left-page footer}{\footerr Right-page footer}
-\pard Approved delivery date: 24 November.\par
-}`,
-      "Approved delivery date: 24 November.",
-    ],
-    [
-      "text symbols",
-      String.raw`{\rtf1\ansi Pages 1\endash 5\emdash\lquote left\rquote\ldblquote right\rdblquote\bullet\b End\b0\unknown{\*\secret\bullet hidden}}`,
-      "Pages 1–5—‘left’“right”•End",
-    ],
-    [
-      "space and hyphen symbols",
-      String.raw`{\rtf1\ansi A\enspace B\emspace C\qmspace D\~E\_F\-G}`,
-      "A\u2002B\u2003C\u2005D\u00a0E\u2011FG",
-    ],
-    [
-      "joiner and direction marks",
-      String.raw`{\rtf1\ansi A\zwj B\zwnj C\ltrmark D\rtlmark E}`,
-      "A\u200dB\u200cC\u200eD\u200fE",
-    ],
-    [
-      "text symbol fallback",
-      String.raw`{\rtf1\ansi\uc10\u945\endash\emdash\enspace\emspace\qmspace\lquote\rquote\ldblquote\rdblquote\bullet Z}`,
-      "αZ",
-    ],
-    ["hyphen symbol fallback", String.raw`{\rtf1\ansi\uc3\u945\~\_\-Z}`, "αZ"],
-    ["control word", String.raw`{\rtf1\ansi A\u9\tab X}`, "A\tX"],
-    ["line break paragraphs", "{\\rtf1\\ansi First\\\nSecond\\\r\nThird}", "First\nSecond\nThird"],
-    ["group close", String.raw`{\rtf1\ansi{\u945}Z}`, "αZ"],
-    ["group open", String.raw`{\rtf1\ansi\u945{Z}}`, "αZ"],
-    ["hex byte", String.raw`{\rtf1\ansi\u945\'3fZ}`, "αZ"],
-    ["escaped symbol", String.raw`{\rtf1\ansi\u945\{Z}`, "αZ"],
-    ["destination symbol", String.raw`{\rtf1\ansi\u945\*Z}`, "αZ"],
-    ["multiple units", String.raw`{\rtf1\ansi\uc4\u945?\tab\'3f\~Z}`, "αZ"],
-    ["binary unit", String.raw`{\rtf1\ansi\u945\bin3 abcZ}`, "αZ"],
-    ["large fallback", String.raw`{\rtf1\ansi\uc20\u945????????????????????Z}`, "αZ"],
-    ["no fallback", String.raw`{\rtf1\ansi\uc0\u945Z}`, "αZ"],
-    ["scoped count", String.raw`{\rtf1\ansi{\uc2\u945??}\u946?Z}`, "αβZ"],
-  ] as const)("extracts RTF text: %s", ([name, source, expected]) =>
+  it.effect.each(documentRtfCases)("extracts RTF text: %s", ([name, source, expected]) =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const path = NodePath.join(config.attachmentsDir, `${name}.rtf`);
@@ -95,6 +56,7 @@ describe("question answer paths", () => {
         mimeType: "application/x-ipynb+json",
       };
       const path = NodePath.join(config.attachmentsDir, `${file.id}.ipynb`);
+      const rawSource = String.raw`\begin{tabular}{lr} North & 120 \\ \end{tabular}`;
       const notebook = JSON.stringify({
         cells: [
           { cell_type: "markdown", source: ["# Survey\n", "Vessel: Larkspur"] },
@@ -102,8 +64,12 @@ describe("question answer paths", () => {
             cell_type: "code",
             source: ["print(43 * 7)"],
             outputs: [
-              { text: ["301\n"] },
-              { data: { "text/plain": ["42"] } },
+              { output_type: "stream", name: "stdout", text: "\u001b[32m301\u001b[0m\n" },
+              {
+                output_type: "display_data",
+                data: { "text/plain": ["\u001b[", "33m42\u001b[0m\n", "Next line"] },
+                metadata: {},
+              },
               {
                 output_type: "error",
                 ename: "ZeroDivisionError",
@@ -116,6 +82,7 @@ describe("question answer paths", () => {
               },
             ],
           },
+          { cell_type: "raw", source: [rawSource] },
         ],
       });
       NodeFS.writeFileSync(path, notebook);
@@ -126,9 +93,10 @@ describe("question answer paths", () => {
       });
       expect(answers.q).toContain(`text extracted to: ${JSON.stringify(path + ".txt")}`);
       expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("Vessel: Larkspur");
-      expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("301");
-      expect(NodeFS.readFileSync(`${path}.txt`, "utf8")).toContain("42");
       const extracted = NodeFS.readFileSync(`${path}.txt`, "utf8");
+      expect(extracted).toContain("Output:\n301\n");
+      expect(extracted).toContain("42\nNext line");
+      expect(extracted).toContain(`## Cell 3 (raw)\n${rawSource}`);
       expect(extracted).toContain(
         "ZeroDivisionError: division by zero\nCell In[1], line 1\n----> 1 1 / 0\nZeroDivisionError: division by zero",
       );
@@ -202,6 +170,7 @@ describe("question answer paths", () => {
           expected: ["Readable despite embedded media"],
           absent: ["[Extracted text truncated"],
         },
+        ...documentMainPartFixtures,
         ...[false, true].map((deep) => ({
           ext: "docx",
           bounded: true,
@@ -385,11 +354,12 @@ describe("question answer paths", () => {
           bounded: true,
           parts: {
             "word/document.xml":
-              '<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Report &amp; totals</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p><w:p><w:r><w:t>34</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Neighbor</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
+              '<w:document xmlns:w="urn:w"><w:body><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>Report &amp; totals</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>North</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>12</w:t></w:r></w:p><w:p><w:r><w:t>34</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:sdt><w:sdtPr><w:alias w:val="Title"/></w:sdtPr><w:sdtContent><w:tc><w:p><w:r><w:t>Annual report</w:t></w:r></w:p></w:tc></w:sdtContent></w:sdt><w:tc><w:p><w:r><w:t>Draft</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Before</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Inner</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>After</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Neighbor</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:noBreakHyphen/></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>',
           },
           expected: [
             "## Report & totals",
             "North\t12 34",
+            "Annual report\tDraft",
             "Before Inner After\tNeighbor\t\u2011\n\u2011",
           ],
         },
@@ -542,7 +512,7 @@ describe("question answer paths", () => {
             "ppt/slides/_rels/slide1.xml.rels":
               '<Relationships><Relationship Type="http://purl.oclc.org/ooxml/officeDocument/relationships/notesSlide" Target="/ppt/notesSlides/notes3.xml"/></Relationships>',
             "ppt/notesSlides/notes7.xml":
-              "<p:notes><a:p><a:r><a:t>evacuation code ORCHID-81</a:t></a:r></a:p></p:notes>",
+              '<p:notes><p:cSld><p:spTree><p:sp><p:nvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr></p:sp><p:sp><p:nvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>evacuation code ORCHID-81</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:nvPr><p:ph type="hdr" sz="quarter"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Harbor briefing</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:nvPr><p:ph type="dt" idx="1"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:fld type="datetime1"><a:t>11/21/2026</a:t></a:fld></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:nvPr><p:ph type="ftr" sz="quarter" idx="4"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:r><a:t>Crew only</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:nvPr><p:ph type="sldNum" sz="quarter" idx="5"/></p:nvPr></p:nvSpPr><p:txBody><a:p><a:fld type="slidenum"><a:t>57</a:t></a:fld></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>',
             "ppt/notesSlides/notes3.xml":
               "<p:notes><a:p><a:r><a:t>Board at gate 4</a:t></a:r></a:p></p:notes>",
             "ppt/notesSlides/ignored.xml": "<p:notes><a:p>Unrelated notes</a:p></p:notes>",
@@ -554,8 +524,18 @@ describe("question answer paths", () => {
             "Departure\nNotes:\nBoard at gate 4",
           ],
           occurrences: { text: "## Slide ", count: 2 },
-          absent: ["Unrelated notes", "[Skipped document part", "[Extracted text truncated"],
+          absent: [
+            "Unrelated notes",
+            "Harbor briefing",
+            "11/21/2026",
+            "Crew only",
+            "57",
+            "[Skipped document part",
+            "[Extracted text truncated",
+          ],
         },
+        documentEmptyNotesFixture,
+        documentIndexFixture,
         ...[false, true].map((missing) => ({
           ext: "pptx",
           bounded: true,
@@ -597,16 +577,7 @@ describe("question answer paths", () => {
           ],
           absent: ["Unneeded notes", "Unneeded slide", "## Slide 2"],
         },
-        {
-          ext: "odt",
-          parts: {
-            "content.xml":
-              '<office:document><text:h text:outline-level="2">\n  Orchard\n</text:h><text:p>19<text:s text:c="3"/>violet<text:s/>crates <text:span>\n\t  shipped</text:span>   today<text:tab/>Dock<text:line-break/>Gate\u00a0B </text:p><text:p>Second</text:p><text:p>A<text:span><text:script>console.log(1);\n</text:script></text:span> B</text:p></office:document>',
-          },
-          expected: [
-            "## Orchard\n19   violet crates shipped today\tDock\nGate\u00a0B\nSecond\nA B",
-          ],
-        },
+        documentIndexFixture,
         {
           ext: "ods",
           parts: {
@@ -652,9 +623,20 @@ describe("question answer paths", () => {
           ext: "odp",
           parts: {
             "content.xml":
-              "<office:document><draw:page><draw:frame><draw:text-box><text:p>\n  First\n\t  slide </text:p></draw:text-box></draw:frame></draw:page><draw:page><text:p>Second</text:p></draw:page></office:document>",
+              "<office:document>" +
+              "<draw:page><draw:frame><draw:text-box><text:p>\n  First\n\t  slide </text:p></draw:text-box></draw:frame>" +
+              "<svg:title>Overview</svg:title>" +
+              "<presentation:notes><draw:frame><draw:text-box><text:p>Speaker only</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>" +
+              "<draw:page><text:p>Second</text:p><presentation:notes><draw:g><draw:page-thumbnail>" +
+              "<svg:title>Slide preview</svg:title><svg:desc>Thumbnail metadata</svg:desc>" +
+              "</draw:page-thumbnail></draw:g></presentation:notes></draw:page>" +
+              "<draw:page><text:p>Third</text:p><presentation:notes><draw:frame><draw:text-box>" +
+              '<table:table><table:table-column/><table:table-row><table:table-cell office:value-type="float" office:value="42"/></table:table-row></table:table>' +
+              "</draw:text-box></draw:frame></presentation:notes></draw:page></office:document>",
           },
-          expected: ["## Slide 1\nFirst slide\n\n## Slide 2\nSecond"],
+          expected: [
+            "## Slide 1\nFirst slide\nOverview\nNotes:\nSpeaker only\n\n## Slide 2\nSecond\n\n## Slide 3\nThird\n\nNotes:\n42",
+          ],
         },
         {
           ext: "ods",

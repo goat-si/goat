@@ -12,6 +12,7 @@ import {
   PositiveInt,
   PullRequestActivity,
   PullRequestChecks,
+  PullRequestChecksState,
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestFilterOptions,
@@ -261,6 +262,8 @@ export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
   watching: Schema.Boolean,
   wasWatching: Schema.Boolean,
+  checksState: Schema.optional(PullRequestChecksState),
+  next: Schema.optional(Schema.String),
 });
 export type WatchPullRequestResult = typeof WatchPullRequestResult.Type;
 

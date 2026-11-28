@@ -129,12 +129,16 @@ export function startGoatBotAttentionNotifications(
         );
       },
     });
-    const enabled = Atom.make(
-      (get) =>
-        get(environmentPresentations.presentationAtom(environmentId))?.serverConfig?.environment
-          .capabilities.goatBotAttention === true &&
-        get(channelEnvironment.listBotAttention.permissionAtom(environmentId)),
-    );
+    const enabled = Atom.make((get) => {
+      const presentation = get(environmentPresentations.presentationAtom(environmentId));
+      const connected =
+        presentation?.connection === undefined || presentation.connection.phase === "connected";
+      return (
+        connected &&
+        presentation?.serverConfig?.environment.capabilities.goatBotAttention === true &&
+        get(channelEnvironment.listBotAttention.permissionAtom(environmentId))
+      );
+    });
     let stop = () => {};
     const unsubscribe = registry.subscribe(
       enabled,

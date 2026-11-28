@@ -43,42 +43,40 @@ describe("ThreadErrorBanner", () => {
       ),
     ).toBe(true);
   });
+
+  it("reappears when a later run fails with the same error on the same thread", () => {
+    const error = "Turn failed";
+    const dismissedKey = getThreadErrorBannerKey("env:thread-c", error, "run-a");
+    dismissThreadErrorBannerForSession(dismissedKey);
+    const laterRunKey = getThreadErrorBannerKey("env:thread-c", error, "run-b");
+
+    expect(isThreadErrorBannerDismissedForSession(dismissedKey)).toBe(true);
+    expect(isThreadErrorBannerDismissedForSession(laterRunKey)).toBe(false);
+    expect(
+      shouldShowThreadErrorBanner(
+        "env:thread-c",
+        error,
+        isThreadErrorBannerDismissedForSession(laterRunKey),
+      ),
+    ).toBe(true);
+  });
 });
 
 it("does not persist dismissals of local errors", () => {
   const input = {
+    threadKey: "local-repeat",
     isServerThread: true,
     localServerError: "Local failure",
     localDraftError: null,
     runtimeError: null,
+    runtimeSource: null,
   };
-  const local = resolveThreadErrorBanner(
-    input.isServerThread,
-    input.localServerError,
-    input.localDraftError,
-    input.runtimeError,
-  );
-  dismissThreadErrorBannerForSession(
-    local.sessionDismissal === null
-      ? null
-      : getThreadErrorBannerKey("local-repeat", local.sessionDismissal),
-  );
+  const local = resolveThreadErrorBanner(input);
+  expect(local.key).toBeNull();
+  dismissThreadErrorBannerForSession(local.key);
+  expect(resolveThreadErrorBanner(input).visible).toBe("Local failure");
   expect(
-    isThreadErrorBannerDismissedForSession(
-      local.sessionDismissal === null
-        ? null
-        : getThreadErrorBannerKey("local-repeat", local.sessionDismissal),
-    ),
-  ).toBe(false);
-  expect(
-    resolveThreadErrorBanner(
-      input.isServerThread,
-      input.localServerError,
-      input.localDraftError,
-      input.runtimeError,
-    ).threadError,
-  ).toBe("Local failure");
-  expect(resolveThreadErrorBanner(true, null, null, "Runtime failure").sessionDismissal).toBe(
-    "Runtime failure",
-  );
+    resolveThreadErrorBanner({ ...input, localServerError: null, runtimeError: "Runtime failure" })
+      .key,
+  ).not.toBeNull();
 });

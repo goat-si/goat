@@ -1,3 +1,5 @@
+import { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
+export { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
 import {
   OrchestrationV2ThreadCreateInitialMessage,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
@@ -5,8 +7,6 @@ import {
 export { OrchestrationV2ThreadLaunchWorkspaceStrategy } from "./orchestrationV2Launch.ts";
 import { PreparedRunPinBase, WorktreePreparationBasePin } from "./worktreePreparation.ts";
 import { ThreadResultAttachments } from "./threadResultAttachments.ts";
-import { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
-export { OrchestrationV2TaskRole } from "./orchestrationV2TaskRole.ts";
 export type { WorktreePreparationBasePin } from "./worktreePreparation.ts";
 export * from "./orchestrationV2WorkflowFileErrors.ts";
 export { isOrchestrationV2WorkActive } from "./orchestrationV2WorkActive.ts";
@@ -3851,6 +3851,7 @@ export const OrchestrationV2ThreadHistoryPage = withRecordIdTable(
     ),
     nextCursor: Schema.NullOr(TrimmedNonEmptyString),
     hasMoreHistory: Schema.Boolean,
+    subagents: Schema.optionalKey(Schema.Array(OrchestrationV2Subagent)),
     idTable: IdTableMarker,
   }),
   () => null,

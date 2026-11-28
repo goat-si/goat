@@ -13,7 +13,7 @@ export function steerFollowUpQueuePosition(
   },
 ): number | undefined {
   const afterRunOrdinal = command.steerFollowUpAfterRunOrdinal;
-  if (command.steerFollowUpOfRunId === undefined || afterRunOrdinal === undefined) return undefined;
+  if (afterRunOrdinal === undefined) return undefined;
   const steerOrdinal =
     projection.turnItems.find(
       (item) => item.type === "user_message" && item.messageId === command.messageId,

@@ -175,6 +175,12 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "TurnMemoryReceipts",
   "ConversationMemoryPolicy",
   "ConversationMemoryExcludedMessages",
+  "ProviderTurnAttemptIndex",
+  "BackgroundRecoveryIndexes",
+  "TurnStartReadIndexes",
+  "ThreadItemCounts",
+  "WorktreePathKeyIndex",
+  "DeferredSlashCommandIndex",
 ]);
 
 type MigrationEntry<E> = readonly [

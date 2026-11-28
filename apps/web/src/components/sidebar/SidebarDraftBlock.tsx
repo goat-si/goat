@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
@@ -38,7 +39,9 @@ const SidebarDraftRow = memo(function SidebarDraftRow(props: {
   const { composer, draftId, onContextMenu, onDiscard, onNavigate } = props;
   const promptPreview =
     assistantCitationsToPlainText(
-      replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
+      composerFileLinksToPlainText(
+        replaceComposerContextReferences(composer.prompt, (occurrence) => occurrence.label),
+      ),
     )
       .trim()
       .split("\n", 1)[0] ?? "";

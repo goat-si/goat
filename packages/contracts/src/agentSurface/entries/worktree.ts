@@ -56,6 +56,8 @@ export const worktreeEntries = {
       scope:
         "working-tree, branch-range, staged or unstaged; omitted returns the normal review views.",
       baseRef: "Base revision for a branch-range comparison.",
+      mergeBase:
+        "Merge-base commit (or HEAD) a previous preview returned, so a one-file read compares against the same base.",
       ignoreWhitespace: "Ignore whitespace changes when true.",
       metadataOnly:
         "Return file statistics without loading full patches, unless a file is selected.",

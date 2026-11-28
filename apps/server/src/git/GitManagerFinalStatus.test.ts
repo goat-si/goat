@@ -47,7 +47,7 @@ it.layer(layerGitManagerTest)("GitManager final status", (it) => {
         ),
       );
       yield* Deferred.await(gate.reached);
-      NodeFS.writeFileSync(NodePath.join(cwd, ".git", "index.lock"), "");
+      NodeFS.writeFileSync(NodePath.join(cwd, ".git", "config"), "invalid config\n");
       yield* Deferred.succeed(gate.release, undefined);
       const result = yield* Fiber.join(action);
       expect(result.push.status).toBe("pushed");

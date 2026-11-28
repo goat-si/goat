@@ -80,6 +80,7 @@ import {
 } from "./platformPen";
 import {
   desktopLocalConnectionId,
+  readDesktopPrimaryBootstrap,
   readDesktopSecondaryBootstrapsResult,
   type DesktopSecondaryBootstrapsRead,
 } from "./desktopLocal";
@@ -680,11 +681,9 @@ export function desktopOwnsSshHostConfig(
 ) {
   if (bridge === undefined || primaryHttpBaseUrl === null) return false;
   try {
-    const primary = bridge
-      .getLocalEnvironmentBootstraps()
-      .find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID);
+    const primary = readDesktopPrimaryBootstrap(bridge);
     return (
-      primary !== undefined &&
+      primary !== null &&
       !primary.runningDistro &&
       typeof primary.bootstrapToken === "string" &&
       primary.bootstrapToken.length > 0 &&

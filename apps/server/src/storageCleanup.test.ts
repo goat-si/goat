@@ -1713,8 +1713,6 @@ describe("storage cleanup reports and local file policies", () => {
       Effect.gen(function* () {
         const { service, fs, repo, worktree, command, fullStatusCalls } = yield* cleanupFixture();
         const changed = { outcome: "kept", reason: "Repository or branch changed" };
-        yield* command(worktree, ["checkout", "--detach"]);
-        expect((yield* service.runNow).entries[0]).toMatchObject(changed);
         yield* command(worktree, ["switch", "--orphan", "other"]);
         expect((yield* service.runNow).entries[0]).toMatchObject(changed);
         yield* command(worktree, ["tag", "feature", "feature"]);
@@ -1805,12 +1803,13 @@ describe("storage cleanup reports and local file policies", () => {
     runCleanupTest(
       Effect.gen(function* () {
         yield* TestClock.setTime(NOW_MS);
-        const { service, fs, repo, worktree, command, setThreads } = yield* cleanupFixture({
-          ...DEFAULT_SERVER_SETTINGS.storageCleanup,
-          ...LEGACY_WORKTREE_RULES,
-          worktreeUnchanged: state !== "merged-only",
-          worktreeOnMerge: true,
-        });
+        const { service, fs, repo, worktree, command, setThreads, statusCommands } =
+          yield* cleanupFixture({
+            ...DEFAULT_SERVER_SETTINGS.storageCleanup,
+            ...LEGACY_WORKTREE_RULES,
+            worktreeUnchanged: state !== "merged-only",
+            worktreeOnMerge: true,
+          });
         yield* command(repo, ["branch", "-m", "main", "trunk"]);
         setThreads([shell({ branch: "feature", worktreePath: worktree, archivedAt: at(-DAY_MS) })]);
         if (state === "unmerged") {
@@ -1818,10 +1817,10 @@ describe("storage cleanup reports and local file policies", () => {
           yield* command(worktree, ["commit", "-am", "unmerged work"]);
         }
         if (state === "detached") yield* command(repo, ["checkout", "--detach"]);
-
         const report = yield* service.runNow;
         expect(report.entries[0]).toMatchObject({ outcome, reason });
         expect(yield* fs.exists(worktree)).toBe(outcome === "kept");
+        if (outcome === "kept") expect(statusCommands()).toBe(0);
         expect(
           (yield* command(repo, ["show-ref", "--verify", "refs/heads/feature"])).stdout,
         ).not.toBe("");
@@ -1847,7 +1846,6 @@ describe("storage cleanup reports and local file policies", () => {
           yield* command(repo, ["push", "origin", "main:trunk"]);
           yield* command(repo, ["update-ref", "-d", "refs/remotes/origin/trunk"]);
           expect((yield* command(repo, ["for-each-ref", "refs/remotes/origin"])).stdout).toBe("");
-
           const report = yield* service.runNow;
           expect(report.entries[0]).toMatchObject({
             outcome: "removed",

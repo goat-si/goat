@@ -2,6 +2,7 @@ import { SourceControlProviderKind } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
@@ -23,6 +24,7 @@ const makeDiscovery = (credential: GitHubRest.GitHubRest["Service"]["credential"
       Layer.mergeAll(
         Layer.mock(GitHubRest.GitHubRest)({ credential }),
         TestSourceControlHost.layer(),
+        FileSystem.layerNoop({}),
       ),
     ),
     Effect.provideService(HostProcess.Environment, {}),

@@ -114,6 +114,7 @@ interface HarnessOptions {
   readonly project?: OrchestrationProjectShell | null;
   readonly readFailure?: PullRequestService.PullRequestError;
   readonly readState?: PullRequestSummary["state"];
+  readonly readChecksState?: PullRequestSummary["checksState"];
 }
 
 const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
@@ -144,6 +145,7 @@ const makeHarness = Effect.fn("makePullRequestWatchHarness")(function* (
               title: "Pull request",
               url: `https://github.com/${input.repository}/pull/${input.number}`,
               state: options.readState ?? "open",
+              checksState: options.readChecksState,
               headBranch: "feature",
               baseBranch: "main",
               updatedAt: "2026-08-20T00:00:00.000Z",
@@ -187,6 +189,16 @@ describe("PullRequestWatchService", () => {
           },
         ]);
       }
+    }),
+  );
+
+  it.effect("tells the caller when the checks already passed, since no wake will report it", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ readChecksState: "passing" });
+      const result = yield* harness.setWatching(true, {
+        url: "https://github.com/goat-si/goat/pull/9",
+      });
+      expect(result).toMatchObject({ wasWatching: false, checksState: "passing" });
     }),
   );
 

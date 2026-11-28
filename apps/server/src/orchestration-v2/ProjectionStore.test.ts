@@ -1,3 +1,4 @@
+import { assertHistorySubagent } from "./ProjectionHistorySubagent.testkit.ts";
 import { threadWorktreePathsIncludeArchivedOnRequest } from "./ProjectionWorktreePaths.testkit.ts";
 import { PlanId } from "@goat/contracts";
 import * as NodeSqlite from "node:sqlite";
@@ -29,7 +30,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Statement from "effect/sql/Statement";
 import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
@@ -446,107 +446,6 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
   }
   return { projectId, activeThreadId, forkThreadId, otherThreadId };
 });
-it.effect.each([
-  ["memory", ProjectionStore.layerMemory],
-  ["SQL", layerTest],
-] as const)("%s shells read a subagent family and a worktree's threads", ([kind, layer]) =>
-  Effect.gen(function* () {
-    const store = yield* ProjectionStore.ProjectionStoreV2;
-    const now = yield* DateTime.now;
-    const projectId = ProjectId.make("project:family");
-    const worktreePath = "/repo/.t3/worktrees/family";
-    const id = (name: string) => ThreadId.make(`thread:family:${name}`);
-    const payloadOf = (input: {
-      readonly name: string;
-      readonly parent?: string;
-      readonly root?: string;
-      readonly worktreePath?: string;
-      readonly archived?: boolean;
-    }) =>
-      ({
-        createdBy: "user",
-        creationSource: input.parent === undefined ? "web" : "mcp",
-        id: id(input.name),
-        projectId,
-        title: input.name,
-        providerInstanceId,
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: input.worktreePath ?? null,
-        activeProviderThreadId: null,
-        lineage: {
-          parentThreadId: input.parent === undefined ? null : id(input.parent),
-          relationshipToParent: input.parent === undefined ? null : "subagent",
-          rootThreadId: id(input.root ?? input.name),
-        },
-        forkedFrom: null,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: input.archived === true ? now : null,
-        settledOverride: null,
-        settledAt: null,
-        lastVisitedAt: null,
-        deletedAt: null,
-      }) as const;
-    const createThread = (input: Parameters<typeof payloadOf>[0]) =>
-      store.apply({
-        id: EventId.make(`event:family:${input.name}`),
-        type: "thread.created",
-        threadId: id(input.name),
-        occurredAt: now,
-        payload: payloadOf(input),
-      });
-    yield* createThread({ name: "root", worktreePath });
-    yield* createThread({ name: "child", parent: "root", root: "root", worktreePath });
-    yield* createThread({ name: "grandchild", parent: "child", root: "root" });
-    yield* createThread({ name: "archived-child", parent: "root", root: "root", archived: true });
-    yield* createThread({ name: "other", worktreePath: "/repo" });
-    yield* createThread({ name: "other-child", parent: "other", root: "other", worktreePath });
-    const family = (threadId: ThreadId) =>
-      store
-        .getShellSnapshot({ location: "active", familyOf: threadId })
-        .pipe(Effect.map((snapshot) => snapshot.threads.map((thread) => thread.id)));
-    // Any member, or the root itself, names the same active tree, root included.
-    const tree = [id("root"), id("child"), id("grandchild")];
-    assert.sameMembers([...(yield* family(id("root")))], tree);
-    assert.sameMembers([...(yield* family(id("grandchild")))], tree);
-    assert.deepEqual([...(yield* family(id("missing")))], []);
-    // Includes another root's idle child on the same path, which a shell may leave out.
-    const { statements, tracer } = traceSqlStatements();
-    const onWorktree = yield* store
-      .getShellSnapshot({ location: "active", worktreePath })
-      .pipe(Effect.withTracer(tracer));
-    assert.sameMembers(
-      onWorktree.threads.map((thread) => thread.id),
-      [id("root"), id("child"), id("other-child")],
-    );
-    // A path names a few threads; scanning every thread parses every payload.
-    const sqlClient = yield* Effect.serviceOption(SqlClient.SqlClient);
-    if (kind === "SQL") {
-      const sql = Option.getOrThrow(sqlClient);
-      const threadQuery = statements.find((statement) =>
-        statement.includes("AS latest_run_stop_requested"),
-      );
-      assert.isDefined(threadQuery);
-      const threadPlan = (yield* sql.unsafe<{ readonly detail: string }>(
-        `EXPLAIN QUERY PLAN ${threadQuery}`,
-        [],
-      )).map((row) => row.detail);
-      assert.notInclude(threadPlan, "SCAN t", threadPlan.join("\n"));
-    }
-    // A fork keeps its deleted source's root, so the deleted root still names the live tree.
-    yield* store.apply({
-      id: EventId.make("event:family:root-deleted"),
-      type: "thread.deleted",
-      threadId: id("root"),
-      occurredAt: now,
-      payload: { ...payloadOf({ name: "root", worktreePath }), deletedAt: now },
-    });
-    assert.sameMembers([...(yield* family(id("root")))], [id("child"), id("grandchild")]);
-  }).pipe(Effect.provide(layer)),
-);
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
@@ -1621,6 +1520,8 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
             '$.runId', 'run:bounded-sql-history:' || ordinal, '$.type', 'command_execution')
         WHERE thread_id = ${threadId} AND ordinal IN (500, 580)
       `;
+
+      yield* assertHistorySubagent({ sql, projectionStore, threadId, now, historyPage });
 
       // Older pages and timeline pages read the rows near the page, not the whole history. A
       // full index that another read left cached gives the same page.
@@ -3194,6 +3095,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           if (/^SEARCH (r|run) /.test(detail)) {
             assert.include(detail, "COVERING INDEX", detail);
           }
+          // A thread's item count reads one count row per hidden run, not one per run it had.
+          if (detail.startsWith("SEARCH counts ")) {
+            assert.include(detail, "run_key=?", detail);
+          }
           if (detail.includes("orchestration_v2_projection_turn_items")) {
             // Only held input is read from the sparse index; transcript history stays unread.
             assert.include(
@@ -3203,6 +3108,18 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           }
         }
       }
+
+      // Without the hint the planner walks every settled command, tool, and subagent item.
+      const pendingQuery = statements.find((statement) =>
+        statement.includes("AS owning_provider_instance_id"),
+      );
+      assert.isDefined(pendingQuery);
+      const pendingPlan = yield* planOf(pendingQuery);
+      assert.include(
+        pendingPlan.find((detail) => detail.startsWith("SEARCH i ")) ?? "",
+        "orchestration_v2_projection_turn_items_shell_pending_idx",
+        pendingPlan.join("\n"),
+      );
     }),
   );
 
@@ -4806,6 +4723,16 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ),
       );
       yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at = NULL WHERE thread_id = ${threadId}`;
+      yield* sql`INSERT INTO orchestration_v2_projection_turn_items
+        (turn_item_id, thread_id, run_id, node_id, ordinal, type, status, updated_at, payload_json)
+        VALUES ('limit-shell:malformed-error', ${threadId}, ${original.id}, ${original.rootNodeId},
+          99, 'error', 'failed', '2999-01-01T00:00:00.000Z', '{broken')`;
+      assert.isUndefined(
+        (yield* store.getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })).find(
+          (row) => row.id === threadId,
+        ),
+      );
+      yield* sql`DELETE FROM orchestration_v2_projection_turn_items WHERE turn_item_id = 'limit-shell:malformed-error'`;
       const recoveryOptions = { now, autoResume: false, snooze: false };
       assert.isUndefined(
         (yield* store.getLimitRecoveryCandidates(recoveryOptions)).find(
@@ -5289,6 +5216,13 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         const plan = (yield* sql.unsafe<{ readonly detail: string }>(
           `EXPLAIN QUERY PLAN ${statement}`,
         )).map((row) => row.detail);
+        if (marker === "AS failure_payload_json") {
+          assert.include(
+            plan.join("\n"),
+            "orchestration_v2_projection_turn_items_usage_limit_idx",
+            marker,
+          );
+        }
         const bindingLookup = plan.findIndex((detail) => detail.startsWith("SEARCH binding "));
         const sessionLookup = plan.findIndex((detail) => detail.startsWith("SEARCH session "));
         assert.isAtLeast(bindingLookup, 0, marker);

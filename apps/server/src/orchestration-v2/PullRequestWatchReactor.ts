@@ -355,19 +355,29 @@ export const make = Effect.gen(function* () {
     });
   });
 
-  const giveUp = (target: WatchTarget) =>
-    record(target, null, {
-      text: `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} only if it is still open.`,
+  const giveUp = (target: WatchTarget, cause: Cause.Cause<PullRequestService.PullRequestError>) => {
+    const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+    // The message is the host's own setup instruction, never the subprocess output in `cause`.
+    const unusable =
+      error?._tag === "PullRequestUnavailableError" && error.reason !== "provider-unsupported"
+        ? error.message
+        : null;
+    return record(target, null, {
+      text:
+        unusable === null
+          ? `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because it failed to read it from the host ${READ_FAILURE_LIMIT} times in a row. Check it yourself, and call ${goatCallText("pull_request.watch")} only if it is still open.`
+          : `GOAT stopped watching pull request #${target.link.number} (${target.link.url}) because the GOAT server cannot use the host: ${unusable} Fix that on the server, then call ${goatCallText("pull_request.watch")} only if it is still open.`,
       notification: {
         source: { kind: "monitor" },
         outcome: "failed",
-        summary: `#${target.link.number}: stopped watching, could not read it`,
+        summary: `#${target.link.number}: stopped watching, ${unusable === null ? "could not read it" : "host not set up on the server"}`,
       },
     }).pipe(
       Effect.tap(() => woke(target)),
       Effect.catch(() => record(target, null)),
       Effect.tap(() => ended(target, "unreadable")),
     );
+  };
 
   const readRemarks = Effect.fn("PullRequestWatchReactor.readRemarks")(
     function* (
@@ -674,7 +684,10 @@ export const make = Effect.gen(function* () {
       const spent = counts.flatMap(({ target, count }) =>
         count >= READ_FAILURE_LIMIT ? [target] : [],
       );
-      if (spent.length > 0 && (yield* eachTarget(group.key, spent, giveUp))) {
+      if (
+        spent.length > 0 &&
+        (yield* eachTarget(group.key, spent, (target) => giveUp(target, detailRead.cause)))
+      ) {
         for (const target of spent) readFailures.delete(lifeKey(target));
       }
       return yield* Effect.failCause(detailRead.cause);

@@ -509,3 +509,14 @@ export const assertStopThroughFailedRecovery = Effect.fn(
   yield* crashRenderer(live, browser, tabId, url, "setupFailure");
   yield* assertStoppedOnReconnect(browser, tabId, setSetupGate, stage);
 });
+
+export const framelessNavigationRequest = () => ({
+  redirectedFrom: () => null,
+  url: () => "https://example.com/early",
+  method: () => "GET",
+  isNavigationRequest: () => true,
+  frame: () => {
+    throw new Error("Frame unavailable");
+  },
+  failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }),
+});

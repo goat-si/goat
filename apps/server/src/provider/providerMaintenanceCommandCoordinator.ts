@@ -1,6 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off - Update leases coordinate Node server processes.
+import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as KeyedLock from "@goat/shared/KeyedLock";
+import { lock } from "proper-lockfile";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 
 export interface ProviderMaintenanceCommandCoordinatorShape<E> {
   readonly withCommandLock: <A, R>(input: {
@@ -11,9 +19,58 @@ export interface ProviderMaintenanceCommandCoordinatorShape<E> {
   }) => Effect.Effect<A, E, R>;
 }
 
+class MachineLockError extends Schema.TaggedError<MachineLockError>()("MachineLockError", {
+  held: Schema.Boolean,
+  cause: Schema.Defect(),
+}) {}
+
+/** @internal */
+export const machineLockFile = (lockKey: string, uid: number | undefined = process.getuid?.()) => {
+  const owner = uid === undefined ? "" : `-${uid}`;
+  const digest = NodeCrypto.createHash("sha256").update(lockKey).digest("hex").slice(0, 32);
+  return NodePath.join(NodeOS.tmpdir(), `goat-provider-update${owner}-${digest}`);
+};
+
+const withMachineLock = <A, E, R>(
+  lockKey: string,
+  run: Effect.Effect<A, E, R>,
+  makeLockError: () => E,
+): Effect.Effect<A, E, R> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const compromised = yield* Deferred.make<never, E>();
+      const services = yield* Effect.context<never>();
+      yield* Effect.acquireRelease(
+        Effect.tryPromise({
+          try: () =>
+            lock(machineLockFile(lockKey), {
+              realpath: false,
+              stale: 60_000,
+              update: 10_000,
+              onCompromised: () =>
+                Effect.runSyncWith(services)(Deferred.fail(compromised, makeLockError())),
+            }),
+          catch: (cause) =>
+            new MachineLockError({
+              held: (cause as { code?: unknown } | null)?.code === "ELOCKED",
+              cause,
+            }),
+        }).pipe(
+          Effect.retry({ while: (error) => error.held, schedule: Schedule.spaced("1 second") }),
+          Effect.mapError(makeLockError),
+        ),
+        (release) => Effect.promise(() => release()).pipe(Effect.ignore),
+      );
+      return yield* Effect.raceFirst(run, Deferred.await(compromised));
+    }),
+  );
+
 export const makeProviderMaintenanceCommandCoordinator = Effect.fn(
   "makeProviderMaintenanceCommandCoordinator",
-)(function* <E>(input: { readonly makeAlreadyRunningError: (targetKey: string) => E }) {
+)(function* <E>(input: {
+  readonly makeAlreadyRunningError: (targetKey: string) => E;
+  readonly makeLockError: () => E;
+}) {
   const runningTargetsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
   const locks = yield* KeyedLock.make<string>();
 
@@ -48,7 +105,7 @@ export const makeProviderMaintenanceCommandCoordinator = Effect.fn(
       }
 
       return yield* (onQueued ?? Effect.void).pipe(
-        Effect.andThen(locks.withLock(lockKey, run)),
+        Effect.andThen(locks.withLock(lockKey, withMachineLock(lockKey, run, input.makeLockError))),
         Effect.ensuring(releaseTarget(targetKey)),
       );
     });

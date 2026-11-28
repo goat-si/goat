@@ -57,14 +57,16 @@ export function systemdManager(input: {
         args: ["--user", "restart", input.names.unitFile],
       },
     ],
-    handoff: [
-      ...prepareActivation,
-      {
-        step: "restarting the service",
-        command: "systemctl",
-        args: ["--user", "restart", "--no-block", input.names.unitFile],
-      },
-    ],
+    handoff: {
+      prepare: prepareActivation,
+      restart: [
+        {
+          step: "restarting the service",
+          command: "systemctl",
+          args: ["--user", "restart", "--no-block", input.names.unitFile],
+        },
+      ],
+    },
     deactivate: [
       {
         step: "stopping the service",

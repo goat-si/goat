@@ -33,6 +33,7 @@ it.effect.skipIf(windowsHost)(
           layerTest({
             platform: "linux",
             env: { PATH: bin, WSL_DISTRO_NAME: "Ubuntu", WSL_INTEROP: "/run/interop" },
+            existingPaths: ["/mnt/c/work/a.txt"],
             onSpawn: (command) => spawned.push(command),
             spawnResult: (command) =>
               command.command === "wslpath"

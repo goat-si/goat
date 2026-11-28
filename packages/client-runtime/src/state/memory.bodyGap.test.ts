@@ -190,9 +190,15 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
       return yield* Deferred.await(reply);
     });
   let historyRequests = 0;
+  let syncStatusRequests = 0;
+  let syncStatusState = "online";
   const client = {
     [WS_METHODS.memoryChanges]: () => Stream.fromQueue(signals),
-    [WS_METHODS.memorySyncStatus]: () => Effect.succeed({ state: "online", memorySpaceId: space }),
+    [WS_METHODS.memorySyncStatus]: () =>
+      Effect.sync(() => {
+        syncStatusRequests++;
+        return { state: syncStatusState, memorySpaceId: space };
+      }),
     [WS_METHODS.memoryThreadPreference]: () => held(preferences),
     [WS_METHODS.memoryRead]: () =>
       Effect.gen(function* () {
@@ -272,6 +278,10 @@ const harness = Effect.fn(function* ({ holdPages = false }: { readonly holdPages
     preferences,
     active,
     historyRequests: () => historyRequests,
+    syncStatusRequests: () => syncStatusRequests,
+    setSyncStatusState: (state: "online" | "bootstrapping") => {
+      syncStatusState = state;
+    },
   };
 });
 const config = {
@@ -847,6 +857,75 @@ it.effect("updates the saved preference on admission and fences a stale reply on
       expect(h.registry.get(receipt)).toBeNull();
       h.registry.set(grants(env), AsyncResult.initial());
       expect(h.registry.get(receipt)).toBeNull();
+    }),
+  ),
+);
+
+it.effect("switching threads in one environment reads its memory space once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.registry.set(configs(env), {
+        ...config,
+        environment: {
+          ...config.environment,
+          capabilities: {
+            ...config.environment.capabilities,
+            memory: { protocolVersion: 1, savedThreadPreference: true },
+          },
+        },
+      });
+      const open = (threadId: string) =>
+        h.registry.mount(
+          h.memory.savedThreadPreference({ environmentId: env, threadId: ThreadId.make(threadId) }),
+        );
+      const closeFirst = open("first");
+      yield* Queue.offer(h.signals, signal("reset"));
+      yield* waitFor(h.registry, h.exposure, (state) => state.ready);
+      yield* Deferred.succeed(yield* Queue.take(h.preferences), null);
+      closeFirst();
+      // The registry removes idle atoms on its scheduler; yielding lets that removal run.
+      yield* Effect.yieldNow;
+      const closeSecond = open("second");
+      yield* Deferred.succeed(yield* Queue.take(h.preferences), null);
+      closeSecond();
+
+      expect(h.syncStatusRequests()).toBe(1);
+    }),
+  ),
+);
+
+it.effect("a thread opened after memory finished starting asks for the space again", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      h.registry.set(configs(env), {
+        ...config,
+        environment: {
+          ...config.environment,
+          capabilities: {
+            ...config.environment.capabilities,
+            memory: { protocolVersion: 1, savedThreadPreference: true },
+          },
+        },
+      });
+      const open = (threadId: string) =>
+        h.registry.mount(
+          h.memory.savedThreadPreference({ environmentId: env, threadId: ThreadId.make(threadId) }),
+        );
+      h.setSyncStatusState("bootstrapping");
+      const closeFirst = open("first");
+      yield* Queue.offer(h.signals, signal("reset"));
+      yield* waitFor(h.registry, h.exposure, (state) => state.ready);
+      closeFirst();
+      // The registry removes idle atoms on its scheduler; yielding lets that removal run.
+      yield* Effect.yieldNow;
+      h.setSyncStatusState("online");
+      const closeSecond = open("second");
+      yield* Deferred.succeed(yield* Queue.take(h.preferences), null);
+      closeSecond();
+
+      expect(h.syncStatusRequests()).toBe(2);
     }),
   ),
 );

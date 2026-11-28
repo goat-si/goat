@@ -203,6 +203,7 @@ const REDACTED_RELAY_AGENT_FAILURE_DETAIL = "The agent run failed.";
 const RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000] as const;
 // The relay's per-thread bound, as in SubagentWaits; an evicted thread republishes once on its next event.
 const MAX_PUBLISHED_THREADS = 2048;
+const RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS = 60_000;
 
 function sanitizeRelayAgentActivityState(
   state: RelayAgentActivityState | null,
@@ -762,11 +763,13 @@ export const makeWith = Effect.fn("AgentAwarenessRelay.make")(function* (
 
   schedulePublishRetry = Effect.fnUntraced(function* (threadId: ThreadId) {
     const attempts = publishRetries.get(threadId)?.attempts ?? 0;
-    const ladderDelay = RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts];
-    if (ladderDelay === undefined) {
-      // Retain exhausted budgets until activity or success resets them; old timers must not restart retries.
-      yield* Effect.logWarning("agent activity publish retry budget exhausted", { threadId });
-      return;
+    const ladderDelay =
+      RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS[attempts] ?? RELAY_AGENT_ACTIVITY_STEADY_RETRY_DELAY_MS;
+    if (attempts === RELAY_AGENT_ACTIVITY_RETRY_DELAYS_MS.length) {
+      yield* Effect.logWarning(
+        "agent activity publish retry budget exhausted; retrying every minute",
+        { threadId },
+      );
     }
     const delayMs = Math.max(ladderDelay, relayRetryAt - (yield* DateTime.now).epochMilliseconds);
     const retry = {

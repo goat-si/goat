@@ -2,6 +2,7 @@ import {
   availableState,
   offlineState,
   connectingState,
+  mergeRefusedRoutes,
   type SupervisorIntent,
 } from "./supervisorState.ts";
 import { exitUnlessInterrupted } from "./exitUnlessInterrupted.ts";
@@ -45,6 +46,7 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
+import { admitAtOnce, type EstablishmentSlot } from "./establishmentGate.ts";
 import { SYNCHRONIZATION_TIMEOUT } from "./synchronization.ts";
 import {
   connectionRouteId,
@@ -92,17 +94,6 @@ interface PendingRetryTrace {
   readonly reason: ConnectionFailure["reason"];
 }
 
-function mergeRefusedRoutes(
-  known: ReadonlyArray<string>,
-  refused: ReadonlyArray<string>,
-  keep: (routeId: string) => boolean,
-): ReadonlyArray<string> {
-  const next = [...new Set([...known, ...refused])].filter(keep);
-  return next.length === known.length && next.every((id, index) => id === known[index])
-    ? known
-    : next;
-}
-
 interface TracedAttemptFailure {
   readonly error: ConnectionAttemptError;
   readonly attemptSpan: Option.Option<Tracer.Span>;
@@ -140,6 +131,8 @@ type EstablishmentEvent =
 
 export interface EnvironmentSupervisorOptions {
   readonly initiallyDesired?: boolean;
+  /** Queues each connection setup for a shared slot; without one, setups start at once. */
+  readonly establishmentSlot?: EstablishmentSlot | undefined;
   readonly learnRoutes?: (input: {
     readonly activeRoute: ConnectionRoute;
     readonly reported: ReadonlyArray<ReportedEndpoint>;
@@ -844,6 +837,19 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     const attemptActive = yield* Ref.make(true);
     const switchingTo = yield* Ref.get(preferredRouteId);
     yield* SubscriptionRef.set(prepared, Option.none());
+    // Waiting for a setup slot is not setup time, so the clock starts after it.
+    yield* reportProgress(attempt, generation, lastFailure, attemptActive, { stage: "preparing" });
+    const slot = yield* (options?.establishmentSlot ?? admitAtOnce)(
+      waitForEstablishmentInterrupt(ignoreOfflineState, sequence),
+    );
+    if (slot._tag === "Withdrawn") {
+      return {
+        _tag: "Interrupted",
+        established: false,
+        stable: false,
+        resetRetry: slot.value,
+      } satisfies AttemptOutcome;
+    }
     const startedAt = yield* Clock.monotonicTimeNanos;
     const establishmentProgress = yield* Ref.make<EstablishmentProgress>({
       preparation: setupContinuation ?? { routeId: undefined, startedAt },
@@ -924,7 +930,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           );
         }
       }),
-    ]);
+    ]).pipe(Effect.ensuring(slot.release));
 
     if (establishment._tag === "Interrupted") {
       return {

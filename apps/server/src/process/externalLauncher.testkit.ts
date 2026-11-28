@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
@@ -51,6 +52,7 @@ export function makeMockDetachedHandle(
 
 export const layerTest = (input: {
   readonly platform: NodeJS.Platform;
+  readonly existingPaths?: readonly string[];
   readonly env?: Record<string, string>;
   readonly path?: Path.Path;
   readonly resolveExecutable?: (command: string) => string | undefined;
@@ -82,6 +84,14 @@ export const layerTest = (input: {
       Layer.provide(
         Layer.mergeAll(
           NodeServices.layer,
+          Layer.effect(
+            FileSystem.FileSystem,
+            Effect.map(FileSystem.FileSystem, (fs) => ({
+              ...fs,
+              exists: (path: string) =>
+                input.existingPaths?.includes(path) ? Effect.succeed(true) : fs.exists(path),
+            })),
+          ).pipe(Layer.provide(NodeServices.layer)),
           NodeCrypto.layer,
           layerSpawner,
           input.path ? Layer.succeed(Path.Path, input.path) : Layer.empty,

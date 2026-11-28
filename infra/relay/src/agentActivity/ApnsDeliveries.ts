@@ -365,7 +365,7 @@ export const make = Effect.gen(function* () {
       // Keep the card on persistence failures; a later sweep can retry.
       Effect.catch((error) =>
         Effect.logWarning("Content recheck failed; keeping the card", { error }).pipe(
-          Effect.as(true),
+          Effect.as(false),
         ),
       ),
     );
@@ -392,11 +392,11 @@ export const make = Effect.gen(function* () {
             current.updatedAt === input.updatedAt,
         ),
         Effect.catchCause((cause) =>
-          Effect.logWarning("agent-activity state recheck failed; allowing queued delivery", {
+          Effect.logWarning("agent-activity state recheck failed; skipping queued delivery", {
             cause,
             environmentId: input.environmentId,
             threadId: input.threadId,
-          }).pipe(Effect.as(true)),
+          }).pipe(Effect.as(false)),
         ),
       );
   });
@@ -423,10 +423,10 @@ export const make = Effect.gen(function* () {
         });
       }),
       Effect.catchCause((cause) =>
-        Effect.logWarning("agent-activity aggregate recheck failed; allowing queued delivery", {
+        Effect.logWarning("agent-activity aggregate recheck failed; skipping queued delivery", {
           cause,
           userId: input.userId,
-        }).pipe(Effect.as(true)),
+        }).pipe(Effect.as(false)),
       ),
     );
   });

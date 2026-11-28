@@ -1,3 +1,4 @@
+import { composerFileLinksToPlainText } from "@goat/shared/composerInlineTokens";
 import { BookmarkIcon, FileIcon, FileTextIcon } from "~/components/solar";
 import { memo, useEffect, useRef, useState, type RefObject, useEffectEvent } from "react";
 
@@ -17,7 +18,9 @@ function missingImageCount(entry: PromptStashEntry): number {
 
 export function stashEntrySnippet(entry: PromptStashEntry): string {
   const trimmed = assistantCitationsToPlainText(
-    replaceComposerContextReferences(entry.prompt, (reference) => reference.label),
+    composerFileLinksToPlainText(
+      replaceComposerContextReferences(entry.prompt, (reference) => reference.label),
+    ),
   )
     .trim()
     .replace(/\s+/g, " ");

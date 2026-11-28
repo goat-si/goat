@@ -271,3 +271,41 @@ it.effect("an agent's Stop ends its tab's load through the same stop a person's 
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.effect("app links leave the current page loaded, including after a redirect", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      heldGoto = null;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
+      const page = pages.at(-1)!.page;
+      const status = broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      const direct = navigationRequest(page, "obsidian://open?vault=notes");
+      page.emit("request", direct);
+      page.emit("requestfailed", direct);
+      expect((yield* status).loading).toBe(false);
+      const open = navigationRequest(page, "https://example.com/open");
+      page.emit("request", open);
+      expect((yield* status).loading).toBe(true);
+      const redirect = {
+        ...navigationRequest(page, "obsidian://open?vault=notes"),
+        redirectedFrom: () => open,
+      };
+      page.emit("request", redirect);
+      page.emit("requestfailed", redirect);
+      expect((yield* status).loading).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);

@@ -86,6 +86,10 @@ export const claudeAdapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 interface HarnessOptions {
+  readonly dispatch?: (
+    command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
+    dispatch: ThreadManagement.ThreadManagementService["Service"]["dispatch"],
+  ) => ReturnType<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>;
   /** The database every layer shares; an in-memory one unless given. */
   readonly databaseLayer?: typeof SqlitePersistence.layerMemory;
   readonly adapter?: ProviderAdapter.ProviderAdapterV2["Service"];
@@ -258,7 +262,9 @@ export function makeHarness(options: HarnessOptions = {}) {
         layerDatabase,
         layerRegistry,
         layerExternalServices,
-        prepared === undefined && options.launchEvents === undefined
+        prepared === undefined &&
+          options.launchEvents === undefined &&
+          options.dispatch === undefined
           ? layerThreadManagement
           : Layer.effect(
               ThreadManagement.ThreadManagementService,
@@ -270,15 +276,15 @@ export function makeHarness(options: HarnessOptions = {}) {
                     options.launchEvents?.(service.streamStoredEventsFrom) ??
                     service.streamStoredEventsFrom,
                   dispatch: (command) =>
-                    service
-                      .dispatch(command)
-                      .pipe(
-                        Effect.tap(() =>
-                          prepared !== undefined && command.type === "prepared-run.release"
-                            ? Deferred.succeed(prepared, undefined)
-                            : Effect.void,
-                        ),
+                    (
+                      options.dispatch?.(command, service.dispatch) ?? service.dispatch(command)
+                    ).pipe(
+                      Effect.tap(() =>
+                        prepared !== undefined && command.type === "prepared-run.release"
+                          ? Deferred.succeed(prepared, undefined)
+                          : Effect.void,
                       ),
+                    ),
                 });
               }),
             ).pipe(Layer.provide(layerThreadManagement)),
