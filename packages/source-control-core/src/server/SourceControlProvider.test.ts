@@ -16,12 +16,16 @@ it("removes URL credentials, query parameters, and fragments from error transpor
 
 it.each([
   ["git@github.com:Sample-Tools/goat.git", "Sample-Tools/goat"],
+  ["git@github.com:/Sample-Tools/goat.git", "Sample-Tools/goat"],
   ["github.com:Sample-Tools/goat.git", "Sample-Tools/goat"],
+  ["github.com:/Sample-Tools/goat.git", "Sample-Tools/goat"],
   ["gitlab.com:T3Tools/platform/t3code", "T3Tools/platform/t3code"],
+  ["hg::user@host:Owner/Repo.git", null],
   ["https://github.com/Sample-Tools/goat.git", "Sample-Tools/goat"],
   ["https://github.com/Sample-Tools/goat.git?view=compact", "Sample-Tools/goat"],
   ["https://github.com/Sample-Tools/goat.git#section", "Sample-Tools/goat"],
   ["C:/repos/t3code", null],
+  ["file:///tmp/Sample-Tools/goat.git", null],
 ])("reads the repository path of %s", (remoteUrl, expected) => {
   assert.strictEqual(repositoryPathFromRemoteUrl(remoteUrl), expected);
 });
