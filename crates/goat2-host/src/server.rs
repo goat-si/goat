@@ -96,26 +96,55 @@ fn own_pgid() -> i32 {
     0
 }
 
-/// Kill process groups a previous host left behind (never our own group).
+/// The command name of a process group's leader, if it is alive.
 #[cfg(unix)]
-fn kill_leftovers(previous: &HostJson) {
+fn leader_command(pgid: i32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pgid.to_string()])
+        .output()
+        .ok()?;
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Kill process groups a previous host left behind. Called only after this host holds the
+/// store lock (so the previous host is gone), never for our own group, and only for groups
+/// whose leader is still the program that was recorded (a Codex engine or a goat2-host), so a
+/// reused group id is left alone. Returns what was killed and skipped, for the stall log.
+#[cfg(unix)]
+fn kill_leftovers(previous: &HostJson) -> serde_json::Value {
     let own = own_pgid();
-    let mut groups = previous.engine_groups.clone();
+    let mut groups: Vec<(i32, &str)> = previous
+        .engine_groups
+        .iter()
+        .map(|g| (*g, "codex"))
+        .collect();
     if previous.pid != std::process::id() {
-        groups.push(previous.pgid);
+        groups.push((previous.pgid, "goat2-host"));
     }
-    for pgid in groups {
-        if pgid > 1 && pgid != own {
-            // SAFETY: kill with a negative pid signals a process group; errors are ignored.
-            unsafe {
-                libc::kill(-pgid, libc::SIGKILL);
+    let (mut killed, mut skipped) = (Vec::new(), Vec::new());
+    for (pgid, expected) in groups {
+        if pgid <= 1 || pgid == own {
+            continue;
+        }
+        match leader_command(pgid) {
+            Some(name) if name.contains(expected) => {
+                // SAFETY: kill with a negative pid signals a process group; errors are ignored.
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+                killed.push(json!({ "pgid": pgid, "command": name }));
             }
+            other => skipped.push(json!({ "pgid": pgid, "command": other })),
         }
     }
+    json!({ "killed": killed, "skipped": skipped })
 }
 
 #[cfg(not(unix))]
-fn kill_leftovers(_previous: &HostJson) {}
+fn kill_leftovers(_previous: &HostJson) -> serde_json::Value {
+    serde_json::Value::Null
+}
 
 /// Start the host: settle, serve, write `host.json`. The caller prints [Running::ready].
 pub async fn start(cfg: HostConfig) -> Result<Running, String> {
@@ -132,15 +161,16 @@ pub async fn start_with_engine(
         .map_err(|e| format!("data dir {}: {e}", data_dir.display()))?;
     let host_json = data_dir.join("host.json");
     let previous = read_host_json(&host_json);
-    if let Some(previous) = &previous {
-        kill_leftovers(previous);
-    }
     let generated_token = cfg.ui_token.is_none();
     let ui_token = cfg.ui_token.clone().unwrap_or_else(crate::util::new_token);
 
     let stall = StallRecorder::open(&data_dir).map_err(|e| format!("stall log: {e}"))?;
     let ticker = stall.spawn_ticker();
+    // The store lock comes first: a second host is refused here and signals nothing.
     let (store, report) = LaneAStore::open(&data_dir).map_err(|e| format!("thread store: {e}"))?;
+    if let Some(previous) = &previous {
+        stall.note("leftover_groups", kill_leftovers(previous));
+    }
     stall.note(
         "store_open",
         serde_json::to_value(&report).unwrap_or_default(),
@@ -233,4 +263,79 @@ pub async fn start_with_engine(
         server,
         ticker,
     })
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::process::CommandExt;
+
+    /// A process group whose leader's command name is `name` (a symlink to sleep).
+    fn group_named(dir: &Path, name: &str) -> std::process::Child {
+        let link = dir.join(name);
+        let _ = std::os::unix::fs::symlink("/bin/sleep", &link);
+        std::process::Command::new(&link)
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap()
+    }
+
+    fn alive(child: &mut std::process::Child) -> bool {
+        child.try_wait().unwrap().is_none()
+    }
+
+    #[test]
+    fn leftover_groups_are_killed_only_when_the_leader_is_what_was_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut codex = group_named(dir.path(), "codex");
+        let mut other = group_named(dir.path(), "sleepy");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let previous = HostJson {
+            pid: 1,
+            pgid: 1,
+            engine_groups: vec![codex.id() as i32, other.id() as i32],
+            ..HostJson::default()
+        };
+        let report = kill_leftovers(&previous);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!alive(&mut codex), "recorded engine group killed: {report}");
+        assert!(
+            alive(&mut other),
+            "a reused group id is left alone: {report}"
+        );
+        let _ = other.kill();
+    }
+
+    #[tokio::test]
+    async fn a_second_host_is_refused_before_it_signals_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = || HostConfig {
+            data_dir: dir.path().to_path_buf(),
+            port: 0,
+            ui_token: Some("t".into()),
+            engine: EngineChoice::Fake,
+            exit_on_stdin_close: false,
+        };
+        let first = start(cfg()).await.unwrap();
+        // The running host's engine group, as host.json would record it.
+        let mut engine = group_named(dir.path(), "codex");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut recorded = read_host_json(&dir.path().join("host.json")).unwrap();
+        recorded.engine_groups = vec![engine.id() as i32];
+        write_host_json(&dir.path().join("host.json"), &recorded).unwrap();
+        let second = start(cfg()).await;
+        assert!(
+            matches!(&second, Err(e) if e.contains("locked")),
+            "{:?}",
+            second.as_ref().err()
+        );
+        assert!(alive(&mut engine), "the running host's engine is untouched");
+        let health = reqwest::get(format!("http://127.0.0.1:{}/health", first.ready.port))
+            .await
+            .unwrap();
+        assert_eq!(health.status(), 200);
+        let _ = engine.kill();
+        first.shutdown().await;
+    }
 }

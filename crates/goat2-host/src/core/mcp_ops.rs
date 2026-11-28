@@ -56,7 +56,12 @@ fn card_json(card: &ThreadCard) -> serde_json::Value {
 impl Host {
     /// Writes commit only while the caller's run is still the thread's active run (the MCP
     /// layer checks the caller once at admission; this fences a call that outlived its run).
-    fn fence(&self, caller: &Caller) -> Result<(), Box<SurfaceResult>> {
+    async fn fence(
+        &self,
+        caller: &Caller,
+    ) -> Result<tokio::sync::OwnedMutexGuard<()>, Box<SurfaceResult>> {
+        // Held through the commit: the actor ends the run under the same lock.
+        let guard = self.fence_lock(&caller.thread_id).lock_owned().await;
         let active = self
             .runtime_of(&caller.thread_id)
             .and_then(|rt| rt.active_run);
@@ -67,7 +72,36 @@ impl Host {
                 "the calling run has ended, so nothing was written",
             )));
         }
-        Ok(())
+        Ok(guard)
+    }
+
+    /// Lend the caller run's slot while it waits on a child (see sched::RunSlot::park).
+    fn park_caller(&self, caller: &Caller) -> Option<super::sched::Parked> {
+        let rt = self.runtime_of(&caller.thread_id)?;
+        if rt.active_run.as_ref() != Some(&caller.run_id) {
+            return None;
+        }
+        rt.run_slot.map(|slot| slot.park())
+    }
+
+    /// An earlier input to `thread` with this clientRequestId, from its recent log.
+    async fn input_with_key(
+        &self,
+        thread: &ThreadId,
+        key: &str,
+    ) -> Option<goat2_contracts::InputId> {
+        let store = self.inner.store.clone();
+        let (thread, key) = (thread.clone(), key.to_owned());
+        tokio::task::spawn_blocking(move || {
+            let (lines, _) = store.read_page(&thread, u64::MAX, 512).ok()?;
+            lines.into_iter().rev().find_map(|l| match l.event {
+                LogEvent::InputAccepted(i) if i.client_request_id == key => Some(i.input_id),
+                _ => None,
+            })
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// The caller's own child, or a refusal.
@@ -111,9 +145,11 @@ impl Host {
                 json!({ "released": "idle", "card": card.as_ref().map(card_json) }),
             );
         }
-        let parked = self.inner.sched.park();
+        let parked = self.park_caller(caller);
         let waited = tokio::time::timeout(timeout, rx).await;
-        drop(parked);
+        if let Some(parked) = parked {
+            parked.resume().await;
+        }
         if waited.is_err() {
             self.prune_waiters(child);
         }
@@ -195,8 +231,26 @@ impl McpHost for Host {
                 "task is larger than 64 KB",
             );
         }
-        if let Err(e) = self.fence(caller) {
-            return *e;
+        let fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
+        // A key names the child: a retry, also after a host restart, finds the same thread.
+        let child_id = args.client_request_id.as_deref().map(|key| {
+            ThreadId::new(format!(
+                "thr_{}",
+                crate::util::stable_id(&[caller.thread_id.as_str(), "thread.start", key])
+            ))
+        });
+        if let Some(existing) = child_id.as_ref().and_then(|id| self.inner.store.card(id)) {
+            return SurfaceResult::ok(json!({
+                "started": {
+                    "childThreadId": existing.id,
+                    "title": existing.title,
+                    "link": format!("[{}](goat-thread://v1/{})", existing.title, existing.id),
+                },
+                "deduplicated": true,
+            }));
         }
         // Held until the child's first input made it busy, so parallel starts cannot pass the cap.
         let Some(reservation) = self.reserve_child(&caller.thread_id) else {
@@ -226,6 +280,7 @@ impl McpHost for Host {
             .unwrap_or_else(|| clamp_chars(args.task.lines().next().unwrap_or("Task").trim(), 80));
         let child = match create_thread(
             self,
+            child_id,
             NewThread {
                 kind: ThreadKind::Worker,
                 title,
@@ -282,6 +337,7 @@ impl McpHost for Host {
             return internal(r.message);
         }
         drop(reservation);
+        drop(fenced);
         let started = json!({
             "childThreadId": child.id,
             "title": child.title,
@@ -298,9 +354,11 @@ impl McpHost for Host {
         let timeout = args
             .timeout_ms
             .map_or(max, |ms| Duration::from_millis(ms).min(max));
-        let parked = self.inner.sched.park();
+        let parked = self.park_caller(caller);
         let waited = tokio::time::timeout(timeout, rx).await;
-        drop(parked);
+        if let Some(parked) = parked {
+            parked.resume().await;
+        }
         if waited.is_err() {
             self.prune_waiters(&child.id);
         }
@@ -327,8 +385,24 @@ impl McpHost for Host {
                 "text is larger than 64 KB",
             );
         }
-        if let Err(e) = self.fence(caller) {
-            return *e;
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
+        // Keyed per (parent thread, key): a retry after a lost reply or a host restart finds the
+        // input it already made.
+        let key = args
+            .client_request_id
+            .as_deref()
+            .map(|k| format!("mcp:{}:send:{k}", caller.thread_id));
+        if let Some(key) = &key
+            && let Some(input_id) = self.input_with_key(&child.id, key).await
+        {
+            return SurfaceResult::ok(json!({
+                "threadId": child.id,
+                "inputId": input_id,
+                "deduplicated": true,
+            }));
         }
         let child_busy = self.runtime_of(&child.id).is_some_and(|rt| rt.busy);
         let _reservation = if child_busy {
@@ -351,11 +425,8 @@ impl McpHost for Host {
             text: args.text,
             attachments: Vec::new(),
             mode: args.mode,
-            client_request_id: format!(
-                "mcp:{}:send:{}",
-                caller.run_id,
-                args.client_request_id.unwrap_or_else(|| new_id("call"))
-            ),
+            client_request_id: key
+                .unwrap_or_else(|| format!("mcp:{}:send:{}", caller.thread_id, new_id("call"))),
         };
         match ask(self, &child.id, |tx| Msg::Input(input, tx)).await {
             Ok(InputAck { input_id, run_id }) => SurfaceResult::ok(json!({
@@ -421,6 +492,10 @@ impl McpHost for Host {
             Ok(c) => c,
             Err(e) => return *e,
         };
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
         match ask(self, &card.id, |tx| Msg::Stop {
             hold: false,
             reply: Some(tx),
@@ -440,9 +515,10 @@ impl McpHost for Host {
                 "only a worker thread reports a result to its parent",
             );
         }
-        if let Err(e) = self.fence(caller) {
-            return *e;
-        }
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
         let summary = goat2_contracts::text::clamp_bytes(
             &args.summary,
             goat2_contracts::limits::CHILD_SUMMARY_MAX_BYTES,
@@ -456,9 +532,10 @@ impl McpHost for Host {
     }
 
     async fn user_send(&self, caller: &Caller, args: UserSendArgs) -> SurfaceResult {
-        if let Err(e) = self.fence(caller) {
-            return *e;
-        }
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
         let mut first = false;
         self.runtime_update(&caller.thread_id, |rt| {
             first = rt.notified.insert(args.kind)
@@ -484,9 +561,10 @@ impl McpHost for Host {
     }
 
     async fn request_ask(&self, caller: &Caller, args: RequestAskArgs) -> SurfaceResult {
-        if let Err(e) = self.fence(caller) {
-            return *e;
-        }
+        let _fenced = match self.fence(caller).await {
+            Ok(guard) => guard,
+            Err(e) => return *e,
+        };
         let kind = match args.kind {
             AskKind::Question => RequestKind::Question,
             AskKind::Approval => RequestKind::Approval,
@@ -499,8 +577,48 @@ impl McpHost for Host {
                 "a decision needs at least two options",
             );
         }
-        let request_id = RequestId::new(new_id("req"));
         let summary = clamp_chars(&args.summary, NEEDS_YOU_SUMMARY_MAX_CHARS);
+        let handoff = |request_id: &RequestId, state: &str| SurfaceResult::NeedsHuman {
+            handoff: Handoff {
+                handoff_id: request_id.to_string(),
+                kind: format!("{kind:?}").to_lowercase(),
+                title: summary.clone(),
+                state: state.to_owned(),
+                expires_at: None,
+                target_path: "request.ask".to_owned(),
+            },
+            next: None,
+        };
+        // A key names the request: a retry, also after a restart, returns the same handoff.
+        let request_id = match &args.client_request_id {
+            Some(key) => RequestId::new(format!(
+                "ask_{}",
+                crate::util::stable_id(&[caller.thread_id.as_str(), "request.ask", key])
+            )),
+            None => RequestId::new(new_id("req")),
+        };
+        if args.client_request_id.is_some() {
+            if self
+                .inner
+                .store
+                .fold(&caller.thread_id)
+                .is_some_and(|f| f.open_requests.iter().any(|r| r.request_id == request_id))
+            {
+                return handoff(&request_id, "open");
+            }
+            let store = self.inner.store.clone();
+            let (thread, id) = (caller.thread_id.clone(), request_id.clone());
+            let seen = tokio::task::spawn_blocking(move || {
+                store.read_page(&thread, u64::MAX, 512).ok().is_some_and(|(lines, _)| {
+                    lines.iter().any(|l| matches!(&l.event, LogEvent::RequestOpened(r) if r.request_id == id))
+                })
+            })
+            .await
+            .unwrap_or(false);
+            if seen {
+                return handoff(&request_id, "resolved");
+            }
+        }
         let opened = RequestOpened {
             request_id: request_id.clone(),
             run_id: Some(caller.run_id.clone()),
@@ -513,16 +631,6 @@ impl McpHost for Host {
         if let Err(e) = self.append(&caller.thread_id, vec![LogEvent::RequestOpened(opened)]) {
             return internal(e);
         }
-        SurfaceResult::NeedsHuman {
-            handoff: Handoff {
-                handoff_id: request_id.to_string(),
-                kind: format!("{kind:?}").to_lowercase(),
-                title: summary,
-                state: "open".to_owned(),
-                expires_at: None,
-                target_path: "request.ask".to_owned(),
-            },
-            next: None,
-        }
+        handoff(&request_id, "open")
     }
 }

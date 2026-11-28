@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use goat2_contracts::{
     CardCursor, Epoch, Fold, LogEvent, LogLine, ResetReason, ThreadCard, ThreadCreated,
@@ -76,9 +76,10 @@ pub trait ThreadStore: Send + Sync + 'static {
 /// [ThreadStore] over lane A's `goat2_thread_store::Store`.
 pub struct LaneAStore {
     store: Store,
-    /// Current fold per thread, advanced with every append. Lane A's Store has no fold accessor
-    /// yet (requested); remove this cache when it lands.
-    folds: Mutex<HashMap<ThreadId, Fold>>,
+    /// Current fold per thread. Each entry's lock is held across `Store::append` and the fold
+    /// update, so concurrent appends to one thread advance the cache in seq order. Lane A's
+    /// `Store::fold` (branch goat2_thread_store 9c8fcfe) replaces this cache once on goat2.
+    folds: Mutex<HashMap<ThreadId, Arc<Mutex<Option<Fold>>>>>,
 }
 
 const PAGE: u32 = 512;
@@ -130,26 +131,13 @@ impl LaneAStore {
         Ok(Some(fold))
     }
 
-    fn advance(&self, id: &ThreadId, lines: &[LogLine], card: &ThreadCard) -> Fold {
-        let mut folds = self.folds.lock().expect("folds");
-        let cached = folds.remove(id);
-        let fold = match cached {
-            Some(mut fold) => {
-                let mut scratch = card.clone();
-                for line in lines {
-                    goat2_thread_store::fold::apply(&mut scratch, &mut fold, line);
-                }
-                fold
-            }
-            None => {
-                drop(folds);
-                let fold = self.load_fold(id).ok().flatten().unwrap_or_default();
-                folds = self.folds.lock().expect("folds");
-                fold
-            }
-        };
-        folds.insert(id.clone(), fold.clone());
-        fold
+    fn entry(&self, id: &ThreadId) -> Arc<Mutex<Option<Fold>>> {
+        self.folds
+            .lock()
+            .expect("folds")
+            .entry(id.clone())
+            .or_default()
+            .clone()
     }
 }
 
@@ -159,19 +147,36 @@ impl ThreadStore for LaneAStore {
     }
 
     fn create(&self, id: &ThreadId, created: ThreadCreated) -> StoreResult<Appended> {
+        let entry = self.entry(id);
+        let mut cached = entry.lock().expect("fold");
         let card = self.store.create_thread(Some(id.clone()), created)?;
         let lines = self.store.read(id, None)?.lines;
         let fold = self.load_fold(id)?.unwrap_or_default();
-        self.folds
-            .lock()
-            .expect("folds")
-            .insert(id.clone(), fold.clone());
+        *cached = Some(fold.clone());
         Ok(Appended { lines, card, fold })
     }
 
     fn append(&self, id: &ThreadId, events: Vec<LogEvent>) -> StoreResult<Appended> {
+        let entry = self.entry(id);
+        let mut cached = entry.lock().expect("fold");
+        if cached.is_none() {
+            *cached = self.load_fold(id)?;
+        }
         let appended = self.store.append(id, events)?;
-        let fold = self.advance(id, &appended.lines, &appended.card);
+        let fold = match cached.as_mut() {
+            Some(fold) => {
+                let mut scratch = appended.card.clone();
+                for line in &appended.lines {
+                    goat2_thread_store::fold::apply(&mut scratch, fold, line);
+                }
+                fold.clone()
+            }
+            None => {
+                let fold = self.load_fold(id)?.unwrap_or_default();
+                *cached = Some(fold.clone());
+                fold
+            }
+        };
         Ok(Appended {
             lines: appended.lines,
             card: appended.card,
@@ -184,15 +189,13 @@ impl ThreadStore for LaneAStore {
     }
 
     fn fold(&self, id: &ThreadId) -> Option<Fold> {
-        if let Some(fold) = self.folds.lock().expect("folds").get(id) {
-            return Some(fold.clone());
+        self.card(id)?;
+        let entry = self.entry(id);
+        let mut cached = entry.lock().expect("fold");
+        if cached.is_none() {
+            *cached = self.load_fold(id).ok().flatten();
         }
-        let fold = self.load_fold(id).ok().flatten()?;
-        self.folds
-            .lock()
-            .expect("folds")
-            .insert(id.clone(), fold.clone());
-        Some(fold)
+        cached.clone()
     }
 
     fn cards(&self) -> Vec<ThreadCard> {
@@ -293,4 +296,87 @@ pub fn thread_cursor(store: &dyn ThreadStore, id: &ThreadId) -> Option<ThreadCur
         epoch: store.thread_epoch(id)?,
         seq: store.last_seq(id)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use goat2_contracts::{
+        EngineConfig, FollowUpMode, InputAccepted, InputMode, InputSource, ModelSelection,
+        RuntimeMode, ThreadKind,
+    };
+
+    #[test]
+    fn concurrent_appends_keep_the_cached_fold_in_seq_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = LaneAStore::open(dir.path()).unwrap();
+        let store = Arc::new(store);
+        let id = ThreadId::new("t");
+        store
+            .create(
+                &id,
+                ThreadCreated {
+                    kind: ThreadKind::User,
+                    title: "t".into(),
+                    project_id: None,
+                    bot_id: None,
+                    parent: None,
+                    engine: EngineConfig {
+                        provider_instance_id: "codex".into(),
+                        model_selection: ModelSelection {
+                            instance_id: "codex".into(),
+                            model: "m".into(),
+                            options: None,
+                        },
+                        runtime_mode: RuntimeMode::FullAccess,
+                        cwd: "/tmp".into(),
+                    },
+                    follow_up_mode: FollowUpMode::Steer,
+                },
+            )
+            .unwrap();
+        let workers: Vec<_> = (0..8)
+            .map(|w| {
+                let (store, id) = (store.clone(), id.clone());
+                std::thread::spawn(move || {
+                    for i in 0..25 {
+                        store
+                            .append(
+                                &id,
+                                vec![LogEvent::InputAccepted(InputAccepted {
+                                    input_id: format!("in_{w}_{i}").into(),
+                                    from: InputSource::User,
+                                    mode: InputMode::Followup,
+                                    text: "x".into(),
+                                    attachments: vec![],
+                                    client_request_id: format!("k_{w}_{i}"),
+                                })],
+                            )
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().unwrap();
+        }
+        let in_log: Vec<String> = store
+            .read_after(&id, 0)
+            .unwrap()
+            .into_iter()
+            .filter_map(|l| match l.event {
+                LogEvent::InputAccepted(i) => Some(i.input_id.to_string()),
+                _ => None,
+            })
+            .collect();
+        let cached: Vec<String> = store
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .into_iter()
+            .map(|q| q.input_id.to_string())
+            .collect();
+        assert_eq!(in_log.len(), 200);
+        assert_eq!(cached, in_log, "the cache follows the log order");
+    }
 }

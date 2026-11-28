@@ -1131,3 +1131,163 @@ async fn child_report_and_wake_input_are_written_together() {
         matches!(&lines[report + 1].event, LogEvent::InputAccepted(i) if matches!(i.from, InputSource::Child { .. }))
     );
 }
+
+// ---------------------------------------------------------------- final review round regressions
+
+/// Run the first host generation on its own runtime; dropping it releases the store lock.
+fn first_generation<R: Send + 'static>(
+    path: std::path::PathBuf,
+    f: impl FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = R> + Send>> + Send + 'static,
+) -> R {
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt.block_on(async move {
+            let t = open_at(&path, None, FakeEngine::new(manual()), 1).await;
+            f(t).await
+        });
+        drop(rt);
+        out
+    })
+    .join()
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_wait_result_lost_in_a_crash_wakes_the_parent_after_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let (bot, child) = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let bot = main_bot(&t);
+            send(&t, &bot, "lw-1", "work", InputMode::Followup).await;
+            eventually("bot running", || running(&t, &bot)).await;
+            let me = caller(&t, &bot).await;
+            let host = t.host.clone();
+            let call = tokio::spawn(async move {
+                host.thread_start(
+                    &me,
+                    ThreadStartArgs {
+                        task: "c".into(),
+                        mode: Some(StartMode::Wait),
+                        ..Default::default()
+                    },
+                )
+                .await
+            });
+            eventually("child", || {
+                t.host
+                    .store()
+                    .cards()
+                    .iter()
+                    .any(|c| c.kind == ThreadKind::Worker)
+            })
+            .await;
+            let child = t
+                .host
+                .store()
+                .cards()
+                .into_iter()
+                .find(|c| c.kind == ThreadKind::Worker)
+                .unwrap()
+                .id;
+            eventually("child running", || running(&t, &child)).await;
+            t.fake.finish_turn(&child, "the result");
+            // The wait got it; the parent run is still active when the process "crashes".
+            let _ = call.await.unwrap();
+            eventually("reported", || count(&t, &bot, "child.reported") == 1).await;
+            (bot, child)
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    eventually("parent woken with the lost result", || {
+        events(&t, &bot).iter().any(|e| matches!(e,
+            LogEvent::InputAccepted(i) if matches!(&i.from, InputSource::Child { thread_id } if thread_id == &child) && i.text.contains("the result")))
+    })
+    .await;
+    drop(keep);
+}
+
+#[tokio::test]
+async fn mcp_keys_survive_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let (bot, first_child, first_input) = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let bot = main_bot(&t);
+            send(&t, &bot, "mk-1", "work", InputMode::Followup).await;
+            eventually("bot running", || running(&t, &bot)).await;
+            let me = caller(&t, &bot).await;
+            let child = child_id(
+                &t.host
+                    .thread_start(
+                        &me,
+                        ThreadStartArgs {
+                            task: "c".into(),
+                            client_request_id: Some("start-key".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .await,
+            );
+            let sent = t
+                .host
+                .thread_send(
+                    &me,
+                    goat2_host::api::ThreadSendArgs {
+                        thread_id: child.clone(),
+                        text: "more".into(),
+                        mode: None,
+                        client_request_id: Some("send-key".into()),
+                    },
+                )
+                .await;
+            let SurfaceResult::Ok { value } = sent else {
+                panic!("{sent:?}")
+            };
+            (bot, child, value["inputId"].as_str().unwrap().to_owned())
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    send(&t, &bot, "mk-2", "again", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    let again = t
+        .host
+        .thread_start(
+            &me,
+            ThreadStartArgs {
+                task: "c".into(),
+                client_request_id: Some("start-key".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert_eq!(child_id(&again), first_child, "same key, same child");
+    assert_eq!(
+        t.host
+            .store()
+            .cards()
+            .iter()
+            .filter(|c| c.kind == ThreadKind::Worker)
+            .count(),
+        1
+    );
+    let resent = t
+        .host
+        .thread_send(
+            &me,
+            goat2_host::api::ThreadSendArgs {
+                thread_id: first_child.clone(),
+                text: "more".into(),
+                mode: None,
+                client_request_id: Some("send-key".into()),
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value } = resent else {
+        panic!("{resent:?}")
+    };
+    assert_eq!(value["inputId"], first_input.as_str());
+    assert_eq!(value["deduplicated"], true);
+    drop(keep);
+}

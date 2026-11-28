@@ -96,6 +96,8 @@ pub struct Runtime {
     pub notified: HashSet<NotifyKind>,
     /// Final answer text of the active run so far.
     pub last_answer: String,
+    /// The active run's scheduler slot, parked while the run waits on a child.
+    pub run_slot: Option<Arc<sched::RunSlot>>,
 }
 
 /// A finished child run, as delivered to waiters and the parent.
@@ -140,6 +142,9 @@ pub(crate) struct Inner {
     pub wait_mode: Mutex<HashMap<RunId, HashSet<ThreadId>>>,
     /// Child slots reserved by in-flight starts, per parent (atomic cap check).
     pub child_reservations: Mutex<HashMap<ThreadId, usize>>,
+    /// Per-thread run fence: a run ends and MCP writes for that run commit under this lock, so
+    /// a write either lands inside its run or is refused.
+    fences: Mutex<HashMap<ThreadId, Arc<tokio::sync::Mutex<()>>>>,
     pub sessions: Mutex<HashMap<ThreadId, LiveSession>>,
     pub bots: Mutex<Vec<BotProfile>>,
     pub dedupe: Mutex<HashMap<String, commands::DedupeEntry>>,
@@ -184,6 +189,7 @@ impl Host {
                 waiters: Mutex::new(HashMap::new()),
                 wait_mode: Mutex::new(HashMap::new()),
                 child_reservations: Mutex::new(HashMap::new()),
+                fences: Mutex::new(HashMap::new()),
                 sessions: Mutex::new(HashMap::new()),
                 bots: Mutex::new(Vec::new()),
                 dedupe: Mutex::new(HashMap::new()),
@@ -263,6 +269,16 @@ impl Host {
         self.inner.actors.lock().expect("actors").clear();
         let store = self.inner.store.clone();
         let _ = tokio::task::spawn_blocking(move || store.flush()).await;
+    }
+
+    pub(crate) fn fence_lock(&self, id: &ThreadId) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner
+            .fences
+            .lock()
+            .expect("fences")
+            .entry(id.clone())
+            .or_default()
+            .clone()
     }
 
     pub(crate) fn track(&self, task: &tokio::task::JoinHandle<()>) {

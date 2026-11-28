@@ -33,9 +33,117 @@ pub struct Scheduler {
     starts: Arc<Semaphore>,
 }
 
-/// Holds one run slot until dropped.
+/// Holds one run slot until dropped. [RunPermit::slot] gives the handle used to park it.
 pub struct RunPermit {
-    sched: Option<Arc<Scheduler>>,
+    slot: Arc<RunSlot>,
+}
+
+/// A run's slot. Parking is owned by the slot: several waits of one run park it once, the run
+/// finishing while parked does not release twice, and resuming waits for capacity again.
+pub struct RunSlot {
+    sched: Arc<Scheduler>,
+    st: Mutex<SlotState>,
+}
+
+impl std::fmt::Debug for RunSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunSlot").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default)]
+struct SlotState {
+    /// This slot is counted in `running`.
+    holding: bool,
+    /// Waits currently parking this slot.
+    parks: usize,
+    finished: bool,
+}
+
+impl RunPermit {
+    fn new(sched: &Arc<Scheduler>) -> Self {
+        Self {
+            slot: Arc::new(RunSlot {
+                sched: sched.clone(),
+                st: Mutex::new(SlotState {
+                    holding: true,
+                    parks: 0,
+                    finished: false,
+                }),
+            }),
+        }
+    }
+
+    pub fn slot(&self) -> Arc<RunSlot> {
+        self.slot.clone()
+    }
+
+    /// Hand this permit's count over (the caller now accounts for it) without releasing.
+    fn disown(self) {
+        let mut st = self.slot.st.lock().expect("slot");
+        st.holding = false;
+        st.finished = true;
+    }
+}
+
+impl RunSlot {
+    fn finish(&self) {
+        let release = {
+            let mut st = self.st.lock().expect("slot");
+            st.finished = true;
+            std::mem::take(&mut st.holding)
+        };
+        if release {
+            self.sched.release();
+        }
+    }
+
+    /// A run blocked on a child (`thread.wait`, `thread.start {mode: wait}`) lends its slot while
+    /// it waits. Without this, four parents waiting on children hold every slot and the children
+    /// never start.
+    pub fn park(self: &Arc<Self>) -> Parked {
+        let release = {
+            let mut st = self.st.lock().expect("slot");
+            if st.finished {
+                false
+            } else {
+                st.parks += 1;
+                st.parks == 1 && std::mem::take(&mut st.holding)
+            }
+        };
+        if release {
+            self.sched.release();
+        }
+        Parked {
+            slot: Some(self.clone()),
+        }
+    }
+
+    async fn unpark(self: Arc<Self>) {
+        let need = {
+            let mut st = self.st.lock().expect("slot");
+            st.parks = st.parks.saturating_sub(1);
+            st.parks == 0 && !st.finished && !st.holding
+        };
+        if !need {
+            return;
+        }
+        let Ok(permit) = self.sched.acquire(Priority::Child).await else {
+            return;
+        };
+        let take = {
+            let mut st = self.st.lock().expect("slot");
+            if st.parks == 0 && !st.finished && !st.holding {
+                st.holding = true;
+                true
+            } else {
+                false
+            }
+        };
+        if take {
+            permit.disown();
+        }
+    }
 }
 
 impl std::fmt::Debug for RunPermit {
@@ -44,22 +152,34 @@ impl std::fmt::Debug for RunPermit {
     }
 }
 
-/// See [Scheduler::park].
+/// See [RunSlot::park].
 pub struct Parked {
-    sched: Arc<Scheduler>,
+    slot: Option<Arc<RunSlot>>,
+}
+
+impl Parked {
+    /// Take the slot back before the run continues; waits for capacity under the cap.
+    pub async fn resume(mut self) {
+        if let Some(slot) = self.slot.take() {
+            slot.unpark().await;
+        }
+    }
 }
 
 impl Drop for Parked {
     fn drop(&mut self) {
-        self.sched.state.lock().expect("sched").running += 1;
+        // Dropped without resume (cancelled call): take the slot back in the background.
+        if let Some(slot) = self.slot.take()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            handle.spawn(slot.unpark());
+        }
     }
 }
 
 impl Drop for RunPermit {
     fn drop(&mut self) {
-        if let Some(sched) = self.sched.take() {
-            sched.release();
-        }
+        self.slot.finish();
     }
 }
 
@@ -98,13 +218,8 @@ impl Scheduler {
         if state.running < self.max_runs && state.waiters.is_empty() {
             state.running += 1;
             drop(state);
-            let permit = RunPermit {
-                sched: Some(self.clone()),
-            };
-            if let Err(mut permit) = tx.send(permit) {
-                permit.sched = None;
-                self.state.lock().expect("sched").running -= 1;
-            }
+            // A receiver dropped before the send gets the permit back here; its drop releases.
+            let _ = tx.send(RunPermit::new(self));
         } else {
             state.waiters.push(Waiter {
                 priority,
@@ -124,17 +239,6 @@ impl Scheduler {
             .expect("start semaphore never closes")
     }
 
-    /// A run blocked on a child (`thread.wait`, `thread.start {mode: wait}`) lends its slot
-    /// while it waits and takes it back on drop, which may exceed the cap for a moment (a parked
-    /// run uses no CPU). Without this, four parents waiting on children hold every slot and
-    /// the children never start.
-    pub fn park(self: &Arc<Self>) -> Parked {
-        self.release();
-        Parked {
-            sched: self.clone(),
-        }
-    }
-
     pub fn running(&self) -> usize {
         self.state.lock().expect("sched").running
     }
@@ -145,7 +249,7 @@ impl Scheduler {
 
     fn release(self: &Arc<Self>) {
         let mut state = self.state.lock().expect("sched");
-        state.running -= 1;
+        state.running = state.running.saturating_sub(1);
         while state.running < self.max_runs && !state.waiters.is_empty() {
             let now = Instant::now();
             let best = state
@@ -157,12 +261,9 @@ impl Scheduler {
                 .expect("non-empty");
             let waiter = state.waiters.remove(best);
             state.running += 1;
-            let permit = RunPermit {
-                sched: Some(self.clone()),
-            };
-            if let Err(mut permit) = waiter.tx.send(permit) {
+            if let Err(permit) = waiter.tx.send(RunPermit::new(self)) {
                 // The waiter went away: undo without re-entering release.
-                permit.sched = None;
+                permit.disown();
                 state.running -= 1;
             }
         }
@@ -201,6 +302,43 @@ mod tests {
         drop(a);
         let _permit = next.try_recv().expect("slot passed on");
         assert_eq!(sched.running(), 1);
+    }
+
+    #[tokio::test]
+    async fn parking_is_owned_by_the_run_and_counts_once() {
+        let sched = Scheduler::new(1, 1);
+        let permit = sched.acquire(Priority::Human).await.unwrap();
+        let slot = permit.slot();
+        // Two waits of the same run park it once.
+        let a = slot.park();
+        let b = slot.park();
+        assert_eq!(sched.running(), 0);
+        let child = sched.acquire(Priority::Child).await.unwrap();
+        assert_eq!(sched.running(), 1);
+        drop(a); // still parked by b
+        tokio::task::yield_now().await;
+        assert_eq!(sched.running(), 1);
+        // Resuming waits for capacity: the child holds the only slot.
+        let resume = tokio::spawn(b.resume());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!resume.is_finished());
+        drop(child);
+        resume.await.unwrap();
+        assert_eq!(sched.running(), 1);
+        // Finishing the run releases exactly once.
+        drop(permit);
+        assert_eq!(sched.running(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_run_finishing_while_parked_does_not_release_twice() {
+        let sched = Scheduler::new(2, 1);
+        let permit = sched.acquire(Priority::Human).await.unwrap();
+        let parked = permit.slot().park();
+        assert_eq!(sched.running(), 0);
+        drop(permit);
+        parked.resume().await;
+        assert_eq!(sched.running(), 0);
     }
 
     #[test]

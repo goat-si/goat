@@ -6,19 +6,24 @@
 //! rest:
 //! - a worker that was running wakes its parent with `child.reported(interrupted_by_restart)`;
 //! - a parent whose child finished without a report (crash in between) gets that report;
+//! - a parent whose settled run recorded a child result for a wait that died with the process
+//!   is woken with that result;
 //! - queued inputs start in order.
 
 use std::collections::HashSet;
 
-use goat2_contracts::{ChildResultStatus, RunOutcome, ThreadCursor, ThreadId};
+use goat2_contracts::{ChildResultStatus, LogEvent, RunOutcome, ThreadCursor, ThreadId};
 
-use super::actor::Msg;
+use super::actor::{Msg, wake_input};
 use super::{ChildOutcome, Host};
 use crate::store::StoreResult;
 
 pub(crate) async fn settle_and_resume(host: &Host, settled: &[ThreadId]) -> StoreResult<()> {
     let store = host.inner.store.clone();
     let restarted: HashSet<&ThreadId> = settled.iter().collect();
+    for parent in settled {
+        rewake_lost_wait_results(host, parent).await;
+    }
     for parent in store.cards() {
         let Some(fold) = store.fold(&parent.id) else {
             continue;
@@ -73,4 +78,51 @@ pub(crate) async fn settle_and_resume(host: &Host, settled: &[ThreadId]) -> Stor
         }
     }
     Ok(())
+}
+
+/// A parent whose run the store settled may have recorded a child result that was meant for a
+/// wait in that run (no wake input) and then lost the wait with the process. Wake it with every
+/// such result, so no child result is lost; a duplicate wake is harmless, a lost one is not.
+async fn rewake_lost_wait_results(host: &Host, parent: &ThreadId) {
+    let store = host.inner.store.clone();
+    let id = parent.clone();
+    let lines = tokio::task::spawn_blocking(move || store.read_after(&id, 0))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    let Some(run_start) = lines
+        .iter()
+        .rposition(|l| matches!(l.event, LogEvent::RunStarted(_)))
+    else {
+        return;
+    };
+    let after = &lines[run_start..];
+    for (i, line) in after.iter().enumerate() {
+        let LogEvent::ChildReported(reported) = &line.event else {
+            continue;
+        };
+        let prefix = format!("child:{}:", reported.child_thread_id);
+        let woken = after[i..].iter().any(|l| {
+            matches!(&l.event, LogEvent::InputAccepted(input) if input.client_request_id.starts_with(&prefix))
+        });
+        if woken {
+            continue;
+        }
+        let title = host
+            .inner
+            .store
+            .card(&reported.child_thread_id)
+            .map(|c| c.title)
+            .unwrap_or_default();
+        let outcome = ChildOutcome {
+            child_thread_id: reported.child_thread_id.clone(),
+            child_run_id: reported.child_run_id.clone(),
+            status: reported.status,
+            summary: reported.summary.clone(),
+            cursor: reported.child_cursor.clone(),
+        };
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        host.send(parent, Msg::Input(wake_input(&outcome, &title), tx));
+    }
 }

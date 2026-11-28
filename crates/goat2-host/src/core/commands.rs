@@ -70,8 +70,13 @@ pub(crate) struct NewThread {
     pub engine: EngineConfig,
 }
 
-pub(crate) fn create_thread(host: &Host, t: NewThread) -> Result<ThreadCard, StoreError> {
-    let id = ThreadId::new(new_id("thr"));
+/// Create a thread; `id` = a derived id (idempotency key) or a new random one.
+pub(crate) fn create_thread(
+    host: &Host,
+    id: Option<ThreadId>,
+    t: NewThread,
+) -> Result<ThreadCard, StoreError> {
+    let id = id.unwrap_or_else(|| ThreadId::new(new_id("thr")));
     let follow_up_mode = match t.kind {
         ThreadKind::Bot => FollowUpMode::Followup,
         ThreadKind::Worker | ThreadKind::User => FollowUpMode::Steer,
@@ -264,6 +269,7 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
             };
             let card = create_thread(
                 host,
+                None,
                 NewThread {
                     kind,
                     title,
@@ -487,6 +493,7 @@ fn create_bot(
     };
     let card = create_thread(
         host,
+        None,
         NewThread {
             kind: ThreadKind::Bot,
             title: name.clone(),

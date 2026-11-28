@@ -151,7 +151,7 @@ enum Phase {
 struct ActiveRun {
     run_id: RunId,
     turn_id: String,
-    _permit: RunPermit,
+    permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
 }
@@ -276,6 +276,10 @@ impl Actor {
     fn sync_runtime(&self) {
         let busy = !matches!(self.phase, Phase::Idle) || !self.pending().is_empty();
         let active = self.active_run_id();
+        let run_slot = match &self.phase {
+            Phase::Running(run) => Some(run.permit.slot()),
+            _ => None,
+        };
         let alive = self.session.is_some();
         let pgen = self.pgen;
         self.host.runtime_update(&self.id, |rt| {
@@ -286,6 +290,7 @@ impl Actor {
                 rt.last_answer.clear();
             }
             rt.active_run = active;
+            rt.run_slot = run_slot;
             rt.session_alive = alive;
             rt.process_generation = pgen;
         });
@@ -736,7 +741,7 @@ impl Actor {
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id,
-                    _permit: permit,
+                    permit,
                     engine_requests: Vec::new(),
                 });
             }
@@ -778,7 +783,7 @@ impl Actor {
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id: String::new(),
-                    _permit: permit,
+                    permit,
                     engine_requests: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
@@ -917,6 +922,13 @@ impl Actor {
 
     /// End the active run: `run.finished`, engine requests closed, checkpoint, child report.
     async fn finish_run(&mut self, outcome: RunOutcome, reason: Option<String>) {
+        if !matches!(self.phase, Phase::Running(_)) {
+            return;
+        }
+        // MCP writes for this run commit under the same fence: one in progress finishes first,
+        // later ones see the run ended and write nothing.
+        let fence = self.host.fence_lock(&self.id);
+        let fenced = fence.lock_owned().await;
         let Phase::Running(run) = std::mem::replace(&mut self.phase, Phase::Idle) else {
             return;
         };
@@ -950,6 +962,11 @@ impl Actor {
             }));
         }
         self.append(events);
+        self.host.runtime_update(&self.id, |rt| {
+            rt.active_run = None;
+            rt.run_slot = None;
+        });
+        drop(fenced);
         if matches!(
             outcome,
             RunOutcome::Interrupted | RunOutcome::Failed | RunOutcome::Unknown
@@ -1043,43 +1060,16 @@ impl Actor {
             }
             // The waiter went away in between: fall through to a normal wake.
             let _ = self
-                .accept_with(self.wake_input(&outcome, &child_title), Vec::new())
+                .accept_with(wake_input(&outcome, &child_title), Vec::new())
                 .await;
             return;
         }
         let _ = self
             .accept_with(
-                self.wake_input(&outcome, &child_title),
+                wake_input(&outcome, &child_title),
                 vec![LogEvent::ChildReported(reported)],
             )
             .await;
-    }
-
-    fn wake_input(&self, outcome: &ChildOutcome, child_title: &str) -> NewInput {
-        let status = serde_json::to_value(outcome.status)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        let text = format!(
-            "[child thread {} \"{}\" finished: {}]\n{}",
-            outcome.child_thread_id, child_title, status, outcome.summary
-        );
-        NewInput {
-            from: InputSource::Child {
-                thread_id: outcome.child_thread_id.clone(),
-            },
-            text,
-            attachments: Vec::new(),
-            mode: None,
-            client_request_id: format!(
-                "child:{}:{}",
-                outcome.child_thread_id,
-                outcome
-                    .child_run_id
-                    .as_ref()
-                    .map_or("restart", |r| r.as_str())
-            ),
-        }
     }
 
     // ------------------------------------------------------------------ stop / requests / queue
@@ -1364,6 +1354,34 @@ impl Actor {
         self.drop_session();
         // Events from the stopped process are ignored from here on.
         self.pgen += 1;
+    }
+}
+
+/// The parent's wake input for a child result. The clientRequestId names (child, child run).
+pub(crate) fn wake_input(outcome: &ChildOutcome, child_title: &str) -> NewInput {
+    let status = serde_json::to_value(outcome.status)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let text = format!(
+        "[child thread {} \"{}\" finished: {}]\n{}",
+        outcome.child_thread_id, child_title, status, outcome.summary
+    );
+    NewInput {
+        from: InputSource::Child {
+            thread_id: outcome.child_thread_id.clone(),
+        },
+        text,
+        attachments: Vec::new(),
+        mode: None,
+        client_request_id: format!(
+            "child:{}:{}",
+            outcome.child_thread_id,
+            outcome
+                .child_run_id
+                .as_ref()
+                .map_or("restart", |r| r.as_str())
+        ),
     }
 }
 
