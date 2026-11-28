@@ -84,3 +84,23 @@ export declare const BotModelSettings: ComponentType<{
   model: string;
   onChange: ((selection: { instanceId: string; model: string }) => void) | null;
 }>;
+
+/** One message row of the v1 timeline, drawn by GOAT 2 until v1 MessagesTimeline is lifted (wp7). */
+export interface V1TimelineMessage {
+  readonly id: string;
+  readonly role: "user" | "assistant" | "system";
+  readonly text: string;
+  readonly streaming: boolean;
+  readonly createdAt: string;
+}
+/**
+ * A GOAT 2 thread drawn with v1's timeline (lane F, wp6): the thread's log lines and streaming text become v1 rows;
+ * work log, working and fold rows are v1's components, message rows come back through renderMessage.
+ */
+export declare const V1ThreadTimeline: ComponentType<{
+  threadId: string;
+  lines: ReadonlyArray<import("@goat2/contracts-rs").LogLine>;
+  streaming: Readonly<Record<string, string>>;
+  renderMessage: (message: V1TimelineMessage) => import("react").ReactNode;
+  onOpenThread: (threadId: string) => void;
+}>;

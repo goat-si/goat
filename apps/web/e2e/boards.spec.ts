@@ -15,6 +15,9 @@ const size = (id: string) => manifest.find((b) => b.id === id)!;
 async function open(page: Page, id: string) {
   const { w, h } = size(id);
   await page.setViewportSize({ width: w, height: h });
+  // The demo world is dated at DEMO_NOW (host/demoWorld.ts); lifted v1 code reads Date.now() itself (devlog 070 A2:
+  // frozen clock for the thread view), so the browser clock is fixed there too.
+  await page.clock.setFixedTime(new Date(2026, 10, 28, 15, 41, 0));
   await page.goto(`/?fake=${id}`);
   await page.waitForTimeout(400);
 }
@@ -116,8 +119,15 @@ test("1FKW-0 drag a row onto the tiles pins it; right-click unpins", async ({ pa
 
 test("1NEM-1 thread view", async ({ page }) => {
   await open(page, "1NEM-1");
-  await expect(page.getByText("Worked for 4m 12s")).toBeVisible();
-  await expect(page.getByText(/Working for/)).toBeVisible();
+  // v1's timeline (lane F wp6): run-b2 starts without a new user message, so v1 treats everything after the last
+  // user message as the live turn: "Working for" under the user message, run-b1's work as a collapsed group, the
+  // answer, then the running command. Board 1NEM-1 drew a "Worked for" fold instead (reported to the owner).
+  const rows = page.locator("[data-timeline-row-kind]");
+  await expect(rows).toHaveCount(5);
+  expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-timeline-row-kind")))).toEqual(["message", "working", "work-toggle", "message", "work-live"]);
+  await expect(page.getByText("Working for 22s")).toBeVisible();
+  await expect(page.getByText("Used 1 tool, changed 1 file, and ran 2 commands")).toBeVisible();
+  await expect(page.locator('[data-timeline-row-kind="work-live"]')).toContainText("Running bun");
   await sideBySide(page, "1NEM-1");
 });
 
