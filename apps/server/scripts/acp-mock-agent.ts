@@ -14,6 +14,11 @@ import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
 import * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
+import {
+  emitEditUpdates,
+  editUpdatesThenRequest,
+  permissionOptionIds,
+} from "./acpMockAutoAcceptEdits.ts";
 import { mockSessionNotices } from "./acpMockNotices.ts";
 import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
@@ -144,11 +149,6 @@ const requiresAuthentication = process.env.GOAT_ACP_REQUIRE_AUTH === "1";
 const commandAdvertisementDelayMs = Number(
   process.env.GOAT_ACP_COMMAND_ADVERTISEMENT_DELAY_MS ?? "-1",
 );
-const permissionOptionIds = {
-  allowOnce: process.env.GOAT_ACP_ALLOW_ONCE_OPTION_ID ?? "allow-once",
-  allowAlways: process.env.GOAT_ACP_ALLOW_ALWAYS_OPTION_ID ?? "allow-always",
-  rejectOnce: process.env.GOAT_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
-};
 const omitAllowAlways = process.env.GOAT_ACP_OMIT_ALLOW_ALWAYS === "1";
 const permissionRequestCount = Math.max(
   1,
@@ -393,7 +393,6 @@ const antigravityModels = [
   { modelId: "gemini-test-low", name: "Gemini Test Low" },
   { modelId: "gemini-test-high", name: "Gemini Test High" },
 ] satisfies ReadonlyArray<AcpCompat.ModelInfo>;
-
 const availableModes: ReadonlyArray<AcpCompat.SessionMode> = antigravityProfile
   ? [
       { id: "default", name: "Default" },
@@ -423,14 +422,12 @@ const availableModes: ReadonlyArray<AcpCompat.SessionMode> = antigravityProfile
           description: "Write and modify code with full tool access",
         },
       ];
-
 function modeState(): AcpCompat.SessionModeState {
   return {
     currentModeId,
     availableModes,
   };
 }
-
 // Grok ACP advertises versioned model ids, never the CLI product name.
 const grokAcpModels: ReadonlyArray<AcpCompat.ModelInfo> = [
   {
@@ -450,7 +447,6 @@ const grokAcpModels: ReadonlyArray<AcpCompat.ModelInfo> = [
   },
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
 ];
-
 function modelState(): AcpCompat.SessionModelState {
   if (antigravityProfile) {
     return { currentModelId, availableModels: antigravityModels };
@@ -463,7 +459,6 @@ function modelState(): AcpCompat.SessionModelState {
     availableModels: grokAcpModels,
   };
 }
-
 const program = Effect.gen(function* () {
   const agent = yield* EffectAcpAgent.AcpAgent;
   const resumeRelease = yield* Deferred.make<void>();
@@ -480,7 +475,6 @@ const program = Effect.gen(function* () {
         availableCommands: antigravityCommands(command),
       },
     });
-
   const finishPrompt = (
     targetSessionId: string,
     stopReason: AcpSchema.StopReason,
@@ -1514,6 +1508,16 @@ const program = Effect.gen(function* () {
           },
         });
         if (!failPrompt && promptCount !== failPromptOrdinal) return yield* Effect.never;
+      }
+
+      if (editUpdatesThenRequest !== undefined) {
+        yield* emitEditUpdates(
+          agent,
+          requestedSessionId,
+          editUpdatesThenRequest,
+          permissionOptionIds,
+        );
+        return yield* Effect.never;
       }
 
       if (failPrompt || promptCount === failPromptOrdinal) {
