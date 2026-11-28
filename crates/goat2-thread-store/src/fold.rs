@@ -37,6 +37,8 @@ pub fn initial(
         epoch: epoch.clone(),
         applied_seq: seq,
         card_seq: 0,
+        open_asks: 0,
+        unread: false,
     };
     (card, Fold::default())
 }
@@ -261,6 +263,12 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
 /// failed; else idle.
 pub fn refresh_status(card: &mut ThreadCard, fold: &Fold) {
     card.children.running = fold.running_child_ids.len() as u32;
+    // Questions that need a person: every open request except the store's own `resend` holds.
+    card.open_asks = fold
+        .open_requests
+        .iter()
+        .filter(|r| r.kind != RequestKind::Resend)
+        .count() as u32;
     if let Some(request) = fold.open_requests.last() {
         card.status = ThreadStatus::NeedsYou;
         card.needs_you = Some(NeedsYou {
