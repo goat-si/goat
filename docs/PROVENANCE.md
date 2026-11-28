@@ -146,3 +146,12 @@ attachments, virtualized lists, thread menus, pinning, PR/machine metadata (mach
 
 Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
 
+## P2-S pi
+
+Owner decision: Pi and OmO use the Rust JSONL RPC transport directly; OmO is a
+profile of the same runtime, not a Node helper driver. The driver is not yet
+implemented by this entry.
+
+| GOAT 2 path | GOAT v1 source at `916b5ccc1b2` | Treatment |
+|---|---|---|
+| `crates/goat2-engine-sdk/src/pi/mod.rs` | `packages/provider-pi/src/server/mcpInjection.ts:49-205` | Launch argument validation ported to Rust; GOAT 2 receives tokenized arguments. |
