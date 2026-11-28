@@ -313,11 +313,7 @@ async fn devin_never_auto_selects_plan_bypass() {
     .env("GOAT_ACP_PERMISSION_REQUEST_COUNT", "1")
     .env("GOAT_ACP_DEVIN_PLAN_BYPASS", "1")
     .env("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap());
-    let flavor = RegistryAgentFlavor {
-        agent_id: "devin".into(),
-        command,
-        local: false,
-    };
+    let flavor = RegistryAgentFlavor::new("devin", command, false);
     let mut handle = AcpEngineFactory::new(Arc::new(flavor))
         .with_mcp_bridge(McpBridgeCommand::new(TEST_BRIDGE, Vec::<String>::new()))
         .start(spec(dir.path(), RuntimeMode::FullAccess))
@@ -344,11 +340,7 @@ async fn copilot_resends_the_reported_current_model() {
         Vec::<String>::new(),
     )
     .env("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap());
-    let flavor = RegistryAgentFlavor {
-        agent_id: "github-copilot-cli".into(),
-        command,
-        local: false,
-    };
+    let flavor = RegistryAgentFlavor::new("github-copilot-cli", command, false);
     let mut handle = AcpEngineFactory::new(Arc::new(flavor))
         .with_mcp_bridge(McpBridgeCommand::new(TEST_BRIDGE, Vec::<String>::new()))
         .start(spec(dir.path(), RuntimeMode::FullAccess))

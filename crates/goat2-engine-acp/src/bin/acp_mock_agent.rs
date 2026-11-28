@@ -45,6 +45,16 @@
 //!   (default `end_turn`) and `GOAT_ACP_XAI_AGENT_RESULT` set its `stopReason` and `agentResult`.
 //! - `GOAT_ACP_STDERR_LINE=<text>` (GOAT 2): print this line on stderr at start.
 //! - `GOAT_ACP_STDOUT_LINE=<text>` (GOAT 2): print this non-JSON line on stdout at start.
+//! - `GOAT_ACP_SCRIPT=<file>` (GOAT 2): JSON lines the agent plays at the start of every prompt,
+//!   for agent-specific traffic recorded from v1's per-agent tests. `$SESSION` in a line is the
+//!   prompt's session id. Each line is one step:
+//!   `{"update": {..}, "sessionId"?: ".."}` a `session/update` (default: the prompt's session);
+//!   `{"notify": "<method>", "params": {..}}` an extension notification;
+//!   `{"request": "<method>", "params": {..}, "log"?: "<file>"}` a client request, its answer
+//!   appended to `log` and echoed as `<method>: <answer>` in a message chunk;
+//!   `{"appendFile": "<file>", "lines": [..]}` append JSON lines to a file (an agent's own log);
+//!   `{"error": {"code", "message", "data"?}}` answer the prompt with this error and stop;
+//!   `{"hang": true}` stop and answer only `session/cancel`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -297,6 +307,11 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         agent.error(&id, -32603, "Mock prompt failure");
         return;
     }
+    if let Some(path) = env("GOAT_ACP_SCRIPT")
+        && !play_script(&agent, &id, &session, &path, &cancel_rx)
+    {
+        return;
+    }
     if flag("GOAT_ACP_EMIT_NOTICE") {
         for notice in [
             json!({"sessionUpdate": "notice", "severity": "info", "title": 42}),
@@ -436,6 +451,67 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         env("GOAT_ACP_STOP_REASON").unwrap_or_else(|| "end_turn".into())
     };
     agent.respond(&id, json!({"stopReason": stop}));
+}
+
+/// Play `GOAT_ACP_SCRIPT`. Returns false when a step answered the prompt.
+fn play_script(
+    agent: &Arc<Agent>,
+    id: &Value,
+    session: &str,
+    path: &str,
+    cancel_rx: &std::sync::mpsc::Receiver<()>,
+) -> bool {
+    let script = std::fs::read_to_string(path).unwrap_or_default();
+    for line in script.lines().filter(|l| !l.trim().is_empty()) {
+        let Ok(step) = serde_json::from_str::<Value>(&line.replace("$SESSION", session)) else {
+            continue;
+        };
+        if let Some(update) = step.get("update") {
+            let target = step
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .unwrap_or(session);
+            agent.update(target, update.clone());
+        } else if let Some(method) = step.get("notify").and_then(Value::as_str) {
+            agent.notify(method, step.get("params").cloned().unwrap_or(Value::Null));
+        } else if let Some(method) = step.get("request").and_then(Value::as_str) {
+            let answer = agent.request(method, step.get("params").cloned().unwrap_or(Value::Null));
+            if let Some(log) = step.get("log").and_then(Value::as_str)
+                && let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log)
+            {
+                let _ = writeln!(file, "{answer}");
+            }
+            agent.update(session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("{method}: {answer}\n")}}));
+        } else if let Some(file) = step.get("appendFile").and_then(Value::as_str) {
+            if let Ok(mut out) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)
+            {
+                for entry in step
+                    .get("lines")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let _ = writeln!(out, "{entry}");
+                }
+            }
+        } else if let Some(error) = step.get("error") {
+            agent.cancelled.lock().unwrap().remove(session);
+            agent.write(json!({"jsonrpc": "2.0", "id": id, "error": error}));
+            return false;
+        } else if step.get("hang") == Some(&Value::Bool(true)) {
+            if cancel_rx.recv().is_ok() {
+                agent.respond(id, json!({"stopReason": "cancelled"}));
+            }
+            return false;
+        }
+    }
+    true
 }
 
 fn main() {
