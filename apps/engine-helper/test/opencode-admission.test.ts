@@ -373,6 +373,21 @@ test("unknown legacy permission bases retain denies and warn about discarded all
   } finally { await session.shutdown(); }
 });
 
+test("unknown legacy permission bases retain scoped native approval requirements", async () => {
+  fake.reset(); fake.setNativePermission("session-fake", [
+    { permission: "*", pattern: "*", action: "allow" },
+    { permission: "bash", pattern: "/sensitive/*", action: "ask" },
+  ]);
+  const warnings: string[] = [];
+  const host = { emit(_event: EngineEvent) {}, log(level: string, message: string) { if (level === "warn") warnings.push(message); }, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try {
+    const update = fake.calls.findLast((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(update.permission.some((rule) => rule.permission === "bash" && rule.pattern === "/sensitive/*" && rule.action === "ask"));
+    assert.ok(warnings.some((message) => message.includes("unverified allow overrides were dropped")));
+  } finally { await session.shutdown(); }
+});
+
 test("resume checks idle before applying changed root and child policies", async () => {
   fake.reset(); fake.setChildren("session-fake", ["child-1"]);
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

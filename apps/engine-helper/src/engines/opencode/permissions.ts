@@ -72,8 +72,8 @@ export function resumePermissionRules(mode: RuntimeMode, native: PermissionRules
     const known = (["full-access", "approval-required", "auto-accept-edits", "auto"] as const).map(permissionRules).sort((a, b) => b.length - a.length).find((candidate) => startsWith(native, candidate));
     if (known) kept = native.slice(known.length);
     else if (native[0]?.permission === "*" && native[0].pattern === "*" && ["allow", "deny"].includes(native[0].action)) {
-      // v1's legacy-prefix heuristic can also consume native denies; preserve every deny when the base is unknown.
-      kept = native.filter((rule) => rule.action === "deny");
+      // v1's legacy-prefix heuristic can consume native restrictions; retain deny and ask rules when the base is unknown.
+      kept = native.filter((rule) => rule.action === "deny" || rule.action === "ask");
       droppedUnverifiedAllows = native.some((rule) => rule.action === "allow");
     }
   }
