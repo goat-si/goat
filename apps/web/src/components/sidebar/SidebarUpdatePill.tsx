@@ -13,7 +13,6 @@ import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
   canCheckForUpdate,
-  getDesktopUpdateDisabledReason,
   type DesktopUpdateTranslate,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateInstallError,
@@ -29,6 +28,7 @@ import {
   translateDesktopUpdateMessage,
 } from "../desktopUpdate.logic";
 import {
+  checkLocalUpdate,
   downloadLocalUpdate,
   showDesktopUpdateDownloadedToast,
   toastUpdateError,
@@ -417,30 +417,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
       setIsCheckAnimationLatched(true);
       setCheckAnimationKey((key) => key + 1);
     }
-    const appCheck = bridge
-      .checkForUpdate()
-      .then((result) => {
-        if (result.checked) return;
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: gt("Could not check for updates"),
-            description:
-              getDesktopUpdateDisabledReason(result.state, gt) ??
-              result.state.message ??
-              gt("Automatic updates are not available in this build."),
-          }),
-        );
-      })
-      .catch((error) => {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: gt("Could not check for updates"),
-            description: error instanceof Error ? error.message : gt("Update check failed."),
-          }),
-        );
-      });
+    const appCheck = checkLocalUpdate(bridge, gt);
     setProviderCheck("button");
     const providersChecked = checkProviderUpdates().finally(() => setProviderCheck(null));
     void Promise.allSettled([appCheck, providersChecked]).then(() => setIsActionPending(false));
