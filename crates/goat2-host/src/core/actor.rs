@@ -490,6 +490,7 @@ impl Actor {
                         kind: RequestKind::Resend,
                         summary: "Not sure a message reached the agent. Resend or drop it?"
                             .to_owned(),
+                        context: None,
                         options: None,
                         recommended: None,
                     }));
@@ -876,6 +877,7 @@ impl Actor {
                         &summary,
                         goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
                     ),
+                    context: None,
                     options: None,
                     recommended: None,
                 }));
@@ -970,6 +972,7 @@ impl Actor {
                     item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
                     kind: RequestKind::Signin,
                     summary: SIGNIN_SUMMARY.to_owned(),
+                    context: None,
                     options: None,
                     recommended: None,
                 })]);
@@ -1047,6 +1050,7 @@ impl Actor {
                 kind: RequestKind::Resend,
                 summary: "Not sure the last message reached the agent. Resend or drop it?"
                     .to_owned(),
+                context: None,
                 options: None,
                 recommended: None,
             }));

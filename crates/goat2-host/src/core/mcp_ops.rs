@@ -651,6 +651,8 @@ impl McpHost for Host {
                 run_id: Some(caller.run_id.clone()),
                 kind: args.kind,
                 text: args.text,
+                // Written by the agent's own session (v1 ChannelLedger source "session").
+                source: Some(goat2_contracts::NotificationSource::Session),
             })],
         ) {
             Ok(_) => SurfaceResult::ok(json!({ "sent": true })),
@@ -720,6 +722,13 @@ impl McpHost for Host {
             item_id: None,
             kind,
             summary: summary.clone(),
+            // `detail` is what the person needs to know to decide (v1 DecisionItem.context).
+            context: args
+                .detail
+                .as_deref()
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(|d| clamp_chars(d, goat2_contracts::limits::REQUEST_CONTEXT_MAX_CHARS)),
             options: (kind == RequestKind::Decision).then(|| args.options.clone()),
             recommended: None,
         };
