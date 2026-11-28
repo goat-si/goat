@@ -240,6 +240,8 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
                 actor
                     .stop_session("the thread log could not be written")
                     .await;
+                // Text that was streaming will never complete: later subscribers must not see it.
+                actor.host.stream_clear(&actor.id);
             }
             actor.sync_runtime();
             let took = started.elapsed();
@@ -897,7 +899,23 @@ impl Actor {
             } => {
                 // Live text only for the running turn; a late item arrives whole.
                 if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
-                    self.host.stream_text(&self.id, &item_id, &text);
+                    self.host.stream_text(
+                        &self.id,
+                        &item_id,
+                        goat2_contracts::ContentStreamKind::AssistantText,
+                        &text,
+                    );
+                }
+            }
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host
+                        .stream_text(&self.id, &item_id, stream_kind, &text);
                 }
             }
             EngineEvent::ItemCompleted {
@@ -1137,6 +1155,18 @@ impl Actor {
                     self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
                 }
             },
+            // Engine work outside a GOAT-started turn (Muse, Pi, OpenCode background turns).
+            // Host support is lane E's work item after the providers module and E-WF; until it
+            // lands drivers do not emit these, and anything that arrives is logged and ignored.
+            EngineEvent::SessionRequestOpened { kind, .. } => {
+                tracing::warn!(thread = %self.id, ?kind, "a request outside any turn is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationRequested { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationWithdrawn { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation withdrawal is not handled yet: ignored");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
