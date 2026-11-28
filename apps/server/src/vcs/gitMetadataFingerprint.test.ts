@@ -319,3 +319,25 @@ it.effect("#2462: non-UTF-8 config values fingerprint and same-stamp byte change
     assert.notEqual(after?.repository, before?.repository);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect("linked worktrees share a remote-read stamp until the remote or an include changes", () =>
+  Effect.gen(function* () {
+    const { cwd, append } = yield* setup;
+    const read = yield* makeGitMetadataFingerprint();
+    const worktree = `${yield* makeTmpDir()}/linked`;
+    yield* git(cwd, ["worktree", "add", "-b", "linked", worktree]);
+    const shared = (dir: string, branch: string) =>
+      read(dir, branch).pipe(Effect.map((value) => value?.shared ?? null));
+    const before = yield* shared(cwd, "main");
+    assert.isNotNull(before);
+    assert.equal(yield* shared(worktree, "linked"), before);
+    // Work in one worktree moves only its own HEAD and branch.
+    yield* git(worktree, ["commit", "--allow-empty", "-m", "work"]);
+    assert.equal(yield* shared(cwd, "main"), before);
+    yield* git(cwd, ["remote", "set-url", "origin", "https://github.com/example/moved.git"]);
+    assert.notEqual(yield* shared(worktree, "linked"), before);
+    // An included file can differ per worktree, so nothing is shared.
+    yield* append("[include]\n\tpath = extra.config\n");
+    assert.isNull(yield* shared(worktree, "linked"));
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

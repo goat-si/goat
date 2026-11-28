@@ -127,13 +127,13 @@ it.effect(
       yield* TestClock.adjust("1 minute");
       yield* sweep;
       assert.equal(reads, 2);
-      // Its own upstream and the remotes still invalidate.
+      // Its own upstream invalidates its branch reads; the remote list does not depend on it.
       yield* git(cwd, ["config", "branch.feature/own.merge", "refs/heads/feature/own"]);
       yield* sweep;
-      assert.equal(reads, 4);
+      assert.equal(reads, 3);
       yield* git(cwd, ["remote", "set-url", "origin", "https://github.com/example/moved.git"]);
       yield* sweep;
-      assert.equal(reads, 6);
+      assert.equal(reads, 5);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 

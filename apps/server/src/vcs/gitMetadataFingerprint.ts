@@ -195,19 +195,25 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
           : yield* fs
               .readDirectory(path.join(dirs.commonDir, "refs", "remotes"))
               .pipe(Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed([])));
-      const refFiles =
+      const sharedRefFiles =
         branch === undefined
           ? []
           : [
               path.join(dirs.commonDir, "packed-refs"),
               path.join(dirs.commonDir, "reftable", "tables.list"),
+              ...remotes
+                .toSorted()
+                .map((remote) => path.join(dirs.commonDir, "refs", "remotes", remote, "HEAD")),
+            ];
+      const refFiles =
+        branch === undefined
+          ? []
+          : [
+              ...sharedRefFiles,
               path.join(dirs.commonDir, "refs", "heads", branch),
               ...remotes
                 .toSorted()
-                .flatMap((remote) => [
-                  path.join(dirs.commonDir, "refs", "remotes", remote, branch),
-                  path.join(dirs.commonDir, "refs", "remotes", remote, "HEAD"),
-                ]),
+                .map((remote) => path.join(dirs.commonDir, "refs", "remotes", remote, branch)),
             ];
       const stamps = yield* Effect.forEach([...repositoryFiles, ...refFiles], stamp, {
         concurrency: "unbounded",
@@ -230,10 +236,21 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
           repositoryStamps[configIndex] = config.fallback;
         }
       }
+      // What remote list, remote URL and remote HEAD reads depend on, without this worktree's
+      // HEAD or branch refs, so linked worktrees share it. Includes may depend on the worktree.
+      const shared =
+        config?.sections == null
+          ? null
+          : [
+              dirs.commonDir,
+              ...repositoryStamps.slice(1),
+              ...refStamps.slice(0, sharedRefFiles.length),
+            ].join("\u0000");
       return {
         root: dirs.root,
         repository: `${dirs.gitDir}\u0000${repositoryStamps.join("\u0000")}`,
         refs: refStamps.join("\u0000"),
+        shared,
       };
     },
     Effect.orElseSucceed(() => null),
