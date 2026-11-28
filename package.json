@@ -4,7 +4,6 @@
   "type": "module",
   "scripts": {
     "dev:web": "pnpm --filter @goat2/web dev",
-    "dev:server": "pnpm --filter @goat2/server dev",
     "dev:desktop": "pnpm --filter @goat2/desktop dev",
     "typecheck": "pnpm -r --workspace-concurrency 4 typecheck"
   },
