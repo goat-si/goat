@@ -3,6 +3,7 @@
 //! Installation, discovery and agent-specific protocol handling are not yet implemented.
 
 pub mod index;
+pub mod resolve;
 
 use goat2_contracts::{EngineDriver, ProviderCapabilities};
 use goat2_engine_api::{EngineError, SessionSpec};
