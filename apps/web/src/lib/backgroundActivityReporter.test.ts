@@ -431,6 +431,56 @@ describe("layer", () => {
   );
 
   it.effect(
+    "reports promptly when an environment connects before its stateChanges watcher delivers its first event",
+    () =>
+      Effect.gen(function* () {
+        const envId = EnvironmentId.make("env-delayed-watcher");
+        const entries = yield* SubscriptionRef.make(new Map([[envId, { enabled: true }]]));
+        const connState = yield* SubscriptionRef.make<SupervisorConnectionState>({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connecting",
+        });
+        const releaseFirstStreamEvent = yield* Deferred.make<void>();
+        let reportCount = 0;
+
+        const registry = EnvironmentRegistry.EnvironmentRegistry.of({
+          entries,
+          state: () => SubscriptionRef.get(connState),
+          stateChanges: () =>
+            Stream.unwrap(
+              Deferred.await(releaseFirstStreamEvent).pipe(
+                Effect.as(SubscriptionRef.changes(connState)),
+              ),
+            ),
+          run: () =>
+            Effect.sync(() => {
+              reportCount += 1;
+            }),
+        } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+
+        yield* Layer.build(
+          layer.pipe(
+            Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry)),
+          ),
+        );
+
+        // Initial report pass sees "connecting" while the stateChanges stream has not delivered yet.
+        yield* TestClock.adjust("1 second");
+        expect(reportCount).toBe(0);
+
+        // Environment transitions to "connected" before the watcher observes its first stream item.
+        yield* SubscriptionRef.set(connState, {
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: "connected" as const,
+        });
+        yield* Deferred.succeed(releaseFirstStreamEvent, undefined);
+        yield* TestClock.adjust("1 millis");
+
+        expect(reportCount).toBe(1);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
     "does not let 40 stalled environments delay healthy lease renewals or issue duplicate concurrent retries",
     () =>
       Effect.gen(function* () {

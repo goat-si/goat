@@ -206,6 +206,7 @@ export const layer = Layer.effectDiscard(
     let disposed = false;
     const inFlight = new Set<EnvironmentId>();
     const pendingFollowUp = new Set<EnvironmentId>();
+    const lastObservedPhase = new Map<EnvironmentId, SupervisorConnectionState["phase"]>();
     const stateWatchers = new Map<EnvironmentId, Fiber.Fiber<void, never>>();
 
     const reportEnvironment: (environmentId: EnvironmentId) => Effect.Effect<void> = Effect.fn(
@@ -216,10 +217,17 @@ export const layer = Layer.effectDiscard(
       const entry = entries.get(environmentId);
       if (entry === undefined || entry.enabled === false) {
         pendingFollowUp.delete(environmentId);
+        lastObservedPhase.delete(environmentId);
         return;
       }
       const state = yield* registry.state(environmentId).pipe(Effect.option);
-      if (Option.isNone(state) || state.value.phase !== "connected") {
+      if (Option.isNone(state)) {
+        pendingFollowUp.delete(environmentId);
+        lastObservedPhase.delete(environmentId);
+        return;
+      }
+      lastObservedPhase.set(environmentId, state.value.phase);
+      if (state.value.phase !== "connected") {
         pendingFollowUp.delete(environmentId);
         return;
       }
@@ -268,21 +276,27 @@ export const layer = Layer.effectDiscard(
         if (entry === undefined || entry.enabled === false) {
           stateWatchers.delete(environmentId);
           pendingFollowUp.delete(environmentId);
+          lastObservedPhase.delete(environmentId);
           yield* Fiber.interrupt(fiber);
         }
       }
       if (typeof registry.stateChanges !== "function") return;
       for (const [environmentId, entry] of entries) {
         if (entry.enabled === false || stateWatchers.has(environmentId)) continue;
-        let previousPhase: SupervisorConnectionState["phase"] | undefined;
+        // Seed the last observed phase before subscribing so a connection that completes
+        // before the watcher's first stream event still triggers a prompt report.
+        if (!lastObservedPhase.has(environmentId)) {
+          const initialState = yield* registry.state(environmentId).pipe(Effect.option);
+          if (Option.isSome(initialState)) {
+            lastObservedPhase.set(environmentId, initialState.value.phase);
+          }
+        }
         const fiber = yield* registry.stateChanges(environmentId).pipe(
           Stream.runForEach((state) =>
             Effect.suspend(() => {
-              const becameConnected =
-                previousPhase !== undefined &&
-                previousPhase !== "connected" &&
-                state.phase === "connected";
-              previousPhase = state.phase;
+              const previousPhase = lastObservedPhase.get(environmentId);
+              lastObservedPhase.set(environmentId, state.phase);
+              const becameConnected = previousPhase !== "connected" && state.phase === "connected";
               return becameConnected ? reportEnvironment(environmentId) : Effect.void;
             }),
           ),
@@ -298,6 +312,7 @@ export const layer = Layer.effectDiscard(
       for (const [environmentId, entry] of entries) {
         if (entry.enabled === false) {
           pendingFollowUp.delete(environmentId);
+          lastObservedPhase.delete(environmentId);
           continue;
         }
         yield* reportEnvironment(environmentId);
@@ -320,6 +335,7 @@ export const layer = Layer.effectDiscard(
         Effect.gen(function* () {
           disposed = true;
           pendingFollowUp.clear();
+          lastObservedPhase.clear();
           const watchers = [...stateWatchers.values()];
           stateWatchers.clear();
           yield* Effect.forEach(watchers, Fiber.interrupt, { discard: true });
