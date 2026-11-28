@@ -163,6 +163,7 @@ enum PendingPrompt {
     CompactSteer(oneshot::Sender<Result<(), String>>),
 }
 struct UiRequest {
+    runless: bool,
     method: String,
     approval_key: (String, String),
     token: String,
@@ -182,6 +183,7 @@ struct Shared {
     turn: Option<String>,
     last_turn: Option<String>,
     unowned: bool,
+    wake: Option<(String, Vec<Value>)>,
     requests: HashMap<String, UiRequest>,
     approvals: HashSet<(String, String)>,
     custom: CustomAnswers,
@@ -461,14 +463,21 @@ async fn start_probe(
 }
 async fn pump(
     mut inbound: mpsc::UnboundedReceiver<Inbound>,
+    mut startup: VecDeque<Inbound>,
     shared: Arc<Mutex<Shared>>,
     tx: mpsc::UnboundedSender<EngineEvent>,
     client: Arc<Client>,
 ) {
-    while let Some(msg) = inbound.recv().await {
+    while let Some(msg) = match startup.pop_front() {
+        Some(msg) => Some(msg),
+        None => inbound.recv().await,
+    } {
         match msg {
             Inbound::Closed(reason) => {
                 let mut state = shared.lock().await;
+                if let Some((key, _)) = state.wake.take() {
+                    let _ = tx.send(EngineEvent::ContinuationWithdrawn { key });
+                }
                 state.cancel_unread(&tx);
                 state.idle_probe = None;
                 state.requests.clear();
@@ -577,7 +586,7 @@ async fn pump(
                                 );
                                 state.cancel_unread(&tx);
                                 state.turn = None;
-                                state.requests.clear();
+                                state.requests.retain(|_, request| request.runless);
                                 state.custom.clear();
                                 for event in events {
                                     let _ = tx.send(event);
@@ -655,7 +664,7 @@ async fn pump(
                             let events = state.translator.translate(&settled, &turn);
                             state.cancel_unread(&tx);
                             state.turn = None;
-                            state.requests.clear();
+                            state.requests.retain(|_, request| request.runless);
                             state.custom.clear();
                             for event in events {
                                 let _ = tx.send(event);
@@ -664,10 +673,32 @@ async fn pump(
                         continue;
                     }
                 }
-                if state.turn.is_none()
-                    && record.get("type").and_then(Value::as_str) == Some("agent_start")
-                {
+                let record_type = record.get("type").and_then(Value::as_str).unwrap_or("");
+                let dialog = record_type == "extension_ui_request"
+                    && record
+                        .get("method")
+                        .and_then(Value::as_str)
+                        .is_some_and(|method| {
+                            matches!(method, "confirm" | "select" | "input" | "editor")
+                        });
+                if state.turn.is_none() && record_type == "agent_start" && state.wake.is_none() {
+                    let key = client.next_id();
                     state.unowned = true;
+                    state.wake = Some((key.clone(), vec![record]));
+                    let _ = tx.send(EngineEvent::ContinuationRequested {
+                        key,
+                        text: "Pi background activity".into(),
+                    });
+                    continue;
+                }
+                if state.turn.is_none()
+                    && state.wake.is_some()
+                    && !dialog
+                    && record_type != "response"
+                    && !record_type.starts_with("t3.")
+                {
+                    state.wake.as_mut().expect("wake").1.push(record);
+                    continue;
                 }
                 if state.turn.is_none()
                     && record.get("type").and_then(Value::as_str) == Some("extension_ui_request")
@@ -679,20 +710,12 @@ async fn pump(
                     }
                     continue;
                 }
-                if state.turn.is_none()
-                    && record.get("type").and_then(Value::as_str) == Some("extension_ui_request")
-                    && record
-                        .get("method")
-                        .and_then(Value::as_str)
-                        .is_some_and(|method| {
-                            matches!(method, "confirm" | "select" | "input" | "editor")
-                        })
+                let runless = state.turn.is_none() && dialog;
+                if let Some(turn) = state
+                    .turn
+                    .clone()
+                    .or_else(|| runless.then(|| "session".into()))
                 {
-                    let _ = tx.send(EngineEvent::Exited { reason: "Pi requested a dialog outside a host-owned turn; a continuation is required".into() });
-                    client.conn.close_input().await;
-                    return;
-                }
-                if let Some(turn) = state.turn.clone() {
                     if record.get("type").and_then(Value::as_str) == Some("message_start")
                         && record.pointer("/message/role").and_then(Value::as_str) == Some("user")
                         && let Some(input_ids) = state.unread_steers.pop_front()
@@ -736,6 +759,9 @@ async fn pump(
                         )
                         && matches!(method, "select" | "input" | "editor" | "confirm")
                     {
+                        if state.requests.contains_key(id) {
+                            continue;
+                        }
                         if method == "input"
                             && record.get("placeholder").and_then(Value::as_str) == Some("")
                         {
@@ -805,6 +831,7 @@ async fn pump(
                         state.requests.insert(
                             id.to_owned(),
                             UiRequest {
+                                runless,
                                 method: method.to_owned(),
                                 approval_key,
                                 token: token.clone(),
@@ -839,12 +866,33 @@ async fn pump(
                             }
                         }
                     }
-                    let output = state.translator.translate(&record, &turn);
+                    let output = if runless {
+                        state.translator.session_request(&record)
+                    } else {
+                        state.translator.translate(&record, &turn)
+                    };
                     for event in output {
+                        let event = match event {
+                            EngineEvent::RequestOpened {
+                                key,
+                                item_id,
+                                kind,
+                                summary,
+                                item,
+                                ..
+                            } if runless => EngineEvent::SessionRequestOpened {
+                                key,
+                                item_id,
+                                kind,
+                                summary,
+                                item,
+                            },
+                            other => other,
+                        };
                         if matches!(event, EngineEvent::TurnFinished { .. }) {
                             state.cancel_unread(&tx);
                             state.turn = None;
-                            state.requests.clear();
+                            state.requests.retain(|_, request| request.runless);
                             state.custom.clear();
                         }
                         let _ = tx.send(event);
@@ -995,28 +1043,20 @@ impl EngineFactory for PiFactory {
                 "Pi resumed a different session file".into(),
             ));
         }
-        if state.get("isStreaming").and_then(Value::as_bool) == Some(true) {
-            process.shutdown().await;
-            return Err(EngineError::StartFailed(
-                "Pi session already has unowned native activity".into(),
-            ));
-        }
+        let mut startup = VecDeque::new();
         while let Ok(event) = inbound.try_recv() {
             match event {
-                Inbound::Record(record)
-                    if record.get("type").and_then(Value::as_str) == Some("agent_start") =>
-                {
-                    process.shutdown().await;
-                    return Err(EngineError::StartFailed(
-                        "Pi emitted unowned native activity during startup".into(),
-                    ));
-                }
                 Inbound::Closed(reason) => {
                     process.shutdown().await;
                     return Err(EngineError::StartFailed(reason));
                 }
-                _ => {}
+                event => startup.push_back(event),
             }
+        }
+        if state.get("isStreaming").and_then(Value::as_bool) == Some(true)
+            && !startup.iter().any(|event| matches!(event, Inbound::Record(record) if record.get("type").and_then(Value::as_str) == Some("agent_start")))
+        {
+            startup.push_front(Inbound::Record(json!({"type":"agent_start"})));
         }
         let baseline_model = state.get("model").and_then(|m| {
             Some((
@@ -1036,6 +1076,7 @@ impl EngineFactory for PiFactory {
             turn: None,
             last_turn: None,
             unowned: false,
+            wake: None,
             requests: HashMap::new(),
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
@@ -1061,6 +1102,7 @@ impl EngineFactory for PiFactory {
         }));
         tokio::spawn(pump(
             inbound,
+            startup,
             Arc::clone(&shared),
             tx.clone(),
             Arc::clone(&client),
@@ -1256,6 +1298,55 @@ impl EngineSession for PiSession {
         watch_start_ack(self.shared.clone(), self.events.clone(), id);
         if compact.is_none() {
             *preamble = None;
+        }
+        TurnStartResult::Accepted { turn_id: turn }
+    }
+    async fn start_continuation(
+        &self,
+        key: &str,
+        _inputs: Vec<EngineInput>,
+        _settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let _guard = self.command_lock.lock().await;
+        let mut state = self.shared.lock().await;
+        if state.turn.is_some() || state.wake.as_ref().is_none_or(|(held, _)| held != key) {
+            return TurnStartResult::Declined {
+                reason: "continuation no longer available".into(),
+            };
+        }
+        let (_, records) = state.wake.take().expect("held wake");
+        let turn = format!(
+            "{}-{}",
+            self.turn_prefix,
+            self.next_turn.fetch_add(1, Ordering::Relaxed)
+        );
+        state.unowned = false;
+        state.translator.start_turn();
+        state.turn = Some(turn.clone());
+        state.last_turn = Some(turn.clone());
+        state.saw_activity = true;
+        state.settled = None;
+        state.idle_probe = None;
+        state.command_candidate = false;
+        state.compacting = false;
+        state.abort_pending = false;
+        for record in records {
+            if record.get("type").and_then(Value::as_str) == Some("agent_settled") {
+                state.settled = Some(record);
+            } else {
+                for event in state.translator.translate(&record, &turn) {
+                    let _ = self.events.send(event);
+                }
+            }
+        }
+        if state.settled.is_some() {
+            start_probe(
+                &mut state,
+                self.shared.clone(),
+                self.client.clone(),
+                self.events.clone(),
+            )
+            .await;
         }
         TurnStartResult::Accepted { turn_id: turn }
     }
@@ -1472,6 +1563,9 @@ impl EngineSession for PiSession {
     }
     async fn shutdown(&self) {
         let mut state = self.shared.lock().await;
+        if let Some((key, _)) = state.wake.take() {
+            let _ = self.events.send(EngineEvent::ContinuationWithdrawn { key });
+        }
         state.idle_probe = None;
         state.pending_prompts.clear();
         state.requests.clear();
@@ -1713,6 +1807,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -1772,6 +1867,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -1817,6 +1913,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -1856,6 +1953,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -1878,6 +1976,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, _) = mpsc::unbounded_channel();
         let task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -1904,6 +2003,7 @@ mod dialog_lifecycle_tests {
             let (event_tx, _) = mpsc::unbounded_channel();
             let task = tokio::spawn(pump(
                 in_rx,
+                VecDeque::new(),
                 session.shared.clone(),
                 event_tx,
                 session.client.clone(),
@@ -1959,6 +2059,7 @@ mod dialog_lifecycle_tests {
             turn: Some("turn".into()),
             last_turn: None,
             unowned: false,
+            wake: None,
             requests: HashMap::new(),
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
@@ -2003,6 +2104,7 @@ mod dialog_lifecycle_tests {
 
     fn request(expiry: Option<tokio::task::AbortHandle>) -> UiRequest {
         UiRequest {
+            runless: false,
             method: "select".into(),
             approval_key: (String::new(), String::new()),
             token: "token".into(),
@@ -2080,6 +2182,7 @@ mod dialog_lifecycle_tests {
         let (event_tx, mut events) = mpsc::unbounded_channel();
         let pump_task = tokio::spawn(pump(
             in_rx,
+            VecDeque::new(),
             session.shared.clone(),
             event_tx,
             session.client.clone(),
@@ -2139,6 +2242,7 @@ mod dialog_lifecycle_tests {
             turn: Some("turn".into()),
             last_turn: None,
             unowned: false,
+            wake: None,
             requests: HashMap::new(),
             approvals: HashSet::new(),
             custom: CustomAnswers::default(),
@@ -2172,7 +2276,13 @@ mod dialog_lifecycle_tests {
         assert!(shared.lock().await.pending_prompts.is_empty());
         let (in_tx, in_rx) = mpsc::unbounded_channel();
         let (event_tx, mut events) = mpsc::unbounded_channel();
-        let task = tokio::spawn(pump(in_rx, shared.clone(), event_tx, client.clone()));
+        let task = tokio::spawn(pump(
+            in_rx,
+            VecDeque::new(),
+            shared.clone(),
+            event_tx,
+            client.clone(),
+        ));
         in_tx
             .send(Inbound::Record(
                 json!({"type":"response","id":"steer","success":true}),
@@ -2224,6 +2334,7 @@ mod dialog_lifecycle_tests {
             state.requests.insert(
                 "dialog".into(),
                 UiRequest {
+                    runless: false,
                     method: "input".into(),
                     approval_key: (String::new(), String::new()),
                     token: "token".into(),

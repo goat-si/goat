@@ -1210,7 +1210,7 @@ async fn rejected_abort_does_not_claim_interruption() {
 }
 
 #[tokio::test]
-async fn background_dialog_fails_visibly_when_there_is_no_owned_turn() {
+async fn background_dialog_is_session_scoped_and_answered() {
     let mut h = start("pi-background-dialog").await;
     accepted(
         h.session
@@ -1219,7 +1219,100 @@ async fn background_dialog_fails_visibly_when_there_is_no_owned_turn() {
     );
     assert_eq!(text(&finished(&mut h).await), "done");
     assert!(
-        matches!(next(&mut h).await, EngineEvent::Exited { reason } if reason.contains("outside a host-owned turn"))
+        matches!(next(&mut h).await, EngineEvent::SessionRequestOpened { key, .. } if key == "background-1")
     );
+    accepted(h.session.start_turn(input("ordinary"), &settings()).await);
+    assert_eq!(text(&finished(&mut h).await), "echo: ordinary");
+    h.session
+        .answer_request(
+            "background-1",
+            RequestAnswer {
+                outcome: RequestOutcome::Accept,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(next(&mut h).await, EngineEvent::RequestClosed { key } if key == "background-1")
+    );
+    accepted(
+        h.session
+            .start_turn(input("verify-background-answer"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "background answer: true");
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn background_wake_is_adopted_once() {
+    let mut h = start("pi-background-wake").await;
+    accepted(
+        h.session
+            .start_turn(input("background-wake"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "done");
+    let key = match next(&mut h).await {
+        EngineEvent::ContinuationRequested { key, .. } => key,
+        event => panic!("expected continuation, got {event:?}"),
+    };
+    accepted(
+        h.session
+            .start_continuation(&key, input("wake"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "native wake");
+    assert!(matches!(
+        h.session
+            .start_continuation(&key, input("wake"), &settings())
+            .await,
+        TurnStartResult::Declined { .. }
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn background_wake_is_withdrawn_when_process_exits() {
+    let mut h = start("pi-background-wake-drop").await;
+    accepted(
+        h.session
+            .start_turn(input("background-wake-drop"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "done");
+    let key = match next(&mut h).await {
+        EngineEvent::ContinuationRequested { key, .. } => key,
+        event => panic!("expected continuation, got {event:?}"),
+    };
+    assert!(
+        matches!(next(&mut h).await, EngineEvent::SessionRequestOpened { key, .. } if key == "drop-wake")
+    );
+    h.session
+        .answer_request(
+            "drop-wake",
+            RequestAnswer {
+                outcome: RequestOutcome::Accept,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        next(&mut h).await,
+        EngineEvent::RequestClosed { .. }
+    ));
+    assert!(
+        matches!(next(&mut h).await, EngineEvent::ContinuationWithdrawn { key: withdrawn } if withdrawn == key)
+    );
+    assert!(matches!(
+        h.session
+            .start_continuation(&key, input("wake"), &settings())
+            .await,
+        TurnStartResult::Declined { .. }
+    ));
     h.session.shutdown().await;
 }

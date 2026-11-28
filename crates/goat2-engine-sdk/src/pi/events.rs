@@ -37,6 +37,7 @@ pub(super) struct Translator {
     tools: HashMap<String, Tool>,
     command_output_bytes: HashMap<String, u64>,
     pending: HashSet<String>,
+    session_pending: HashSet<String>,
     compaction: Option<String>,
     interrupted: bool,
     failure: Option<String>,
@@ -220,6 +221,7 @@ impl Translator {
             tools: HashMap::new(),
             command_output_bytes: HashMap::new(),
             pending: HashSet::new(),
+            session_pending: HashSet::new(),
             compaction: None,
             interrupted: false,
             failure: None,
@@ -240,7 +242,6 @@ impl Translator {
         self.streams.clear();
         self.tools.clear();
         self.command_output_bytes.clear();
-        self.pending.clear();
         self.compaction = None;
         self.interrupted = false;
         self.failure = None;
@@ -277,11 +278,21 @@ impl Translator {
     }
     /// Call after a request has been resolved or expires. The driver owns RPC replies and timeouts.
     pub(super) fn close_request(&mut self, key: &str) -> Option<EngineEvent> {
-        self.pending
-            .remove(key)
-            .then(|| EngineEvent::RequestClosed {
+        (self.pending.remove(key) || self.session_pending.remove(key)).then(|| {
+            EngineEvent::RequestClosed {
                 key: key.to_owned(),
-            })
+            }
+        })
+    }
+    pub(super) fn session_request(&mut self, record: &Value) -> Vec<EngineEvent> {
+        let mut events = Vec::new();
+        self.request(&mut events, record, "session");
+        if let Some(key) = s(record, "id")
+            && self.pending.remove(key)
+        {
+            self.session_pending.insert(key.to_owned());
+        }
+        events
     }
     fn item_id(turn: &str, native: &str) -> ItemId {
         ItemId::new(format!("pi:{}:{}:{}", turn.len(), turn, native))

@@ -53,6 +53,7 @@ fn main() {
     let mut tier = "default".to_owned();
     let mut recover_compaction = 0;
     let mut background = "";
+    let mut background_answer = "missing";
     let mut usage_case = false;
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
@@ -91,6 +92,16 @@ fn main() {
                 } else if background == "dialog" {
                     emit(
                         json!({"type":"extension_ui_request","id":"background-1","method":"confirm","title":"Background approval"}),
+                    );
+                    background = "";
+                } else if background == "wake" {
+                    emit(json!({"type":"agent_start"}));
+                    finish("native wake", false);
+                    background = "";
+                } else if background == "wake-drop" {
+                    emit(json!({"type":"agent_start"}));
+                    emit(
+                        json!({"type":"extension_ui_request","id":"drop-wake","method":"confirm","title":"Drop wake"}),
                     );
                     background = "";
                 }
@@ -393,6 +404,20 @@ fn main() {
                         active = false;
                         background = "dialog";
                     }
+                    "background-wake" => {
+                        finish("done", false);
+                        active = false;
+                        background = "wake";
+                    }
+                    "background-wake-drop" => {
+                        finish("done", false);
+                        active = false;
+                        background = "wake-drop";
+                    }
+                    "verify-background-answer" => {
+                        finish(&format!("background answer: {background_answer}"), false);
+                        active = false;
+                    }
                     "inspect-launch" => {
                         let extension = args
                             .windows(2)
@@ -436,6 +461,17 @@ fn main() {
                 }
             }
             "extension_ui_response" => {
+                if request["id"] == "drop-wake" {
+                    std::process::exit(0);
+                }
+                if request["id"] == "background-1" {
+                    background_answer = if request["confirmed"] == true {
+                        "true"
+                    } else {
+                        "false"
+                    };
+                    continue;
+                }
                 if request["id"] == "compact-ack" {
                     if let Some(compact) = pending_compact.take() {
                         response(&compact, json!({}));
