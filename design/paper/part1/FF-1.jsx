@@ -65,7 +65,7 @@
             </div>
           </div>
         </div>
-        <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px', paddingBottom: '8px', paddingRight: '8px' }}>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px' }}>
           <div style={{ alignItems: 'center', backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '4px', overflow: 'visible', paddingBottom: '10px', paddingTop: '6px', width: '44px', zIndex: '3' }}>
             <div style={{ alignItems: 'center', backgroundColor: '#F3F3F3', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '30px', justifyContent: 'center', position: 'relative', width: '30px' }}>
               <div style={{ boxSizing: 'border-box', flexShrink: '0', height: '17px', width: '17px' }}>
@@ -173,7 +173,7 @@
               </svg>
             </div>
           </div>
-          <div style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderRadius: '14px', borderTopColor: '#E2E2E2', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+          <div style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
             <div style={{ backgroundColor: '#FFFFFF', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', minWidth: '0px' }}>
               <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px' }}>
                 <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
