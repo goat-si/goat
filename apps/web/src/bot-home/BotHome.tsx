@@ -4,7 +4,8 @@
 // and the Overview "Runtime" section.
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { AvatarWithChip, ProviderGlyph } from "@goat2/provider-icons";
-import { bots, selectedRuntime, type BotRow } from "./placeholder.ts";
+import { bots, catalog, initialRuntimes, type BotRow, type BotRuntime } from "./placeholder.ts";
+import { RuntimePicker } from "./RuntimePicker.tsx";
 
 const ink = "#111113";
 const muted = "#5E5E64";
@@ -22,7 +23,7 @@ function Face({ color }: { color: string }) {
   );
 }
 
-function RosterRow({ bot, selected, onSelect }: { bot: BotRow; selected: boolean; onSelect: () => void }) {
+function RosterRow({ bot, driver, selected, onSelect }: { bot: BotRow; driver: string; selected: boolean; onSelect: () => void }) {
   return (
     <button
       type="button"
@@ -38,7 +39,7 @@ function RosterRow({ bot, selected, onSelect }: { bot: BotRow; selected: boolean
         background: selected ? "#E9E9EC" : "transparent",
       }}
     >
-      <AvatarWithChip driver={bot.driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"} ringColor={selected ? "#E9E9EC" : "#F7F7F8"}>
+      <AvatarWithChip driver={driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"} ringColor={selected ? "#E9E9EC" : "#F7F7F8"}>
         <Face color={bot.color} />
       </AvatarWithChip>
       <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
@@ -52,7 +53,7 @@ function RosterRow({ bot, selected, onSelect }: { bot: BotRow; selected: boolean
   );
 }
 
-function Roster({ selectedId, onSelect, folded, onToggle }: { selectedId: string; onSelect: (id: string) => void; folded: boolean; onToggle: () => void }) {
+function Roster({ selectedId, onSelect, folded, onToggle, runtimes }: { selectedId: string; onSelect: (id: string) => void; folded: boolean; onToggle: () => void; runtimes: Record<string, BotRuntime> }) {
   const [main, ...rest] = bots;
   return (
     <aside style={{ width: folded ? 64 : 288, flexShrink: 0, background: "#F7F7F8", borderRight: `1px solid ${line}`, padding: "16px 12px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -63,17 +64,17 @@ function Roster({ selectedId, onSelect, folded, onToggle }: { selectedId: string
       {folded ? (
         bots.map((bot) => (
           <button key={bot.id} type="button" onClick={() => onSelect(bot.id)} style={{ all: "unset", cursor: "pointer" }}>
-            <AvatarWithChip driver={bot.driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"}>
+            <AvatarWithChip driver={runtimes[bot.id]?.driver ?? bot.driver} working={bot.status === "working"} needsYou={bot.status === "needs-you"}>
               <Face color={bot.color} />
             </AvatarWithChip>
           </button>
         ))
       ) : (
         <>
-          {main ? <RosterRow bot={main} selected={selectedId === main.id} onSelect={() => onSelect(main.id)} /> : null}
+          {main ? <RosterRow bot={main} driver={runtimes[main.id]?.driver ?? main.driver} selected={selectedId === main.id} onSelect={() => onSelect(main.id)} /> : null}
           <div style={{ borderTop: `1px solid ${line}` }} />
           {rest.map((bot) => (
-            <RosterRow key={bot.id} bot={bot} selected={selectedId === bot.id} onSelect={() => onSelect(bot.id)} />
+            <RosterRow key={bot.id} bot={bot} driver={runtimes[bot.id]?.driver ?? bot.driver} selected={selectedId === bot.id} onSelect={() => onSelect(bot.id)} />
           ))}
           <div style={{ marginTop: "auto", borderTop: `1px solid ${line}`, paddingTop: 12, fontSize: 14, color: "#3A3A3F", display: "flex", flexDirection: "column", gap: 10 }}>
             <span>+ New bot</span>
@@ -100,7 +101,7 @@ function Fold({ title, meta, children, defaultOpen = false }: { title: string; m
   );
 }
 
-function Chat({ bot }: { bot: BotRow }) {
+function Chat({ bot, runtime, onRuntime }: { bot: BotRow; runtime: BotRuntime; onRuntime: (r: BotRuntime) => void }) {
   return (
     <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       <header style={{ height: 64, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -108,12 +109,9 @@ function Chat({ bot }: { bot: BotRow }) {
           <strong style={{ fontSize: 14 }}>{bot.name}</strong>
         </span>
       </header>
-      {/* Runtime bar: chip + model only. Click expands to Overview → Runtime. */}
+      {/* Runtime bar: chip + model only. Opens the same picker as the composer. */}
       <div style={{ display: "flex", justifyContent: "center", paddingBottom: 8 }}>
-        <span style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 12px", borderRadius: 10, background: "#F7F7F8" }}>
-          <ProviderGlyph driver={bot.driver} size={14} />
-          <span style={{ ...mono, color: muted }}>{selectedRuntime.model}</span>
-        </span>
+        <RuntimePicker value={runtime} onChange={onRuntime} placement="below" variant="bar" />
       </div>
       <section style={{ flex: 1, overflow: "auto", display: "flex", justifyContent: "center", padding: "8px 40px" }}>
         <div style={{ width: 640, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -121,7 +119,7 @@ function Chat({ bot }: { bot: BotRow }) {
           <div style={{ alignSelf: "flex-start", maxWidth: 560, padding: "12px 16px", borderRadius: 18, background: "#F2F2F3", fontSize: 15, lineHeight: "24px" }}>
             Finished reviewing opencodex #7712. Tests pass. One concern: an account-list failure shows an empty list; keeping the last list looks safer.
           </div>
-          <Fold title="Worker thread · 23 steps" meta="gpt-6.1-sol · 4:12">
+          <Fold title="Worker thread · 23 steps" meta={`${runtime.model} · 4:12`}>
             Steps load from the CLI's own session log when opened (not stored in GOAT's DB).
           </Fold>
           <div style={{ border: `1px solid ${line}`, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -137,17 +135,15 @@ function Chat({ bot }: { bot: BotRow }) {
       <footer style={{ display: "flex", justifyContent: "center", padding: "12px 40px 20px" }}>
         <div style={{ width: 640, display: "flex", gap: 10, alignItems: "center", padding: "8px 8px 8px 16px", borderRadius: 9999, border: "1px solid #E0E0E4" }}>
           <input placeholder={`Message ${bot.name}`} style={{ flex: 1, border: 0, outline: 0, fontSize: 15 }} />
-          <span style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 10px", borderRadius: 9999, background: "#F2F2F3" }}>
-            <ProviderGlyph driver={bot.driver} size={12} />
-            <span style={{ ...mono }}>gpt-6.1-sol</span>
-          </span>
+          <RuntimePicker value={runtime} onChange={onRuntime} placement="above" variant="composer" />
         </div>
       </footer>
     </main>
   );
 }
 
-function Overview({ bot, folded, onToggle }: { bot: BotRow; folded: boolean; onToggle: () => void }) {
+function Overview({ bot, runtime, folded, onToggle }: { bot: BotRow; runtime: BotRuntime; folded: boolean; onToggle: () => void }) {
+  const cli = catalog.find((c) => c.driver === runtime.driver);
   if (folded) {
     return (
       <aside style={{ width: 48, borderLeft: `1px solid ${line}`, padding: 8 }}>
@@ -156,12 +152,12 @@ function Overview({ bot, folded, onToggle }: { bot: BotRow; folded: boolean; onT
     );
   }
   const rows: Array<[string, string]> = [
-    ["CLI", selectedRuntime.cli],
-    ["Model", selectedRuntime.model],
-    ["Machine", selectedRuntime.machine],
-    ["Account", selectedRuntime.account],
-    ["Permissions", selectedRuntime.permissions],
-    ["Workspace", selectedRuntime.workspace],
+    ["CLI", cli ? `${cli.label} ${cli.version}` : runtime.driver],
+    ["Model", `${runtime.model} · ${runtime.effort}`],
+    ["Machine", runtime.machine],
+    ["Account", runtime.account],
+    ["Permissions", runtime.permissions],
+    ["Workspace", runtime.workspace],
   ];
   return (
     <aside style={{ width: 340, flexShrink: 0, borderLeft: `1px solid ${line}`, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 20 }}>
@@ -191,12 +187,15 @@ export function BotHome() {
   const [selectedId, setSelectedId] = useState("reviewer");
   const [rosterFolded, setRosterFolded] = useState(false);
   const [overviewFolded, setOverviewFolded] = useState(false);
+  const [runtimes, setRuntimes] = useState(initialRuntimes);
   const bot = bots.find((b) => b.id === selectedId) ?? bots[0]!;
+  const runtime = runtimes[bot.id]!;
+  const setRuntime = (r: BotRuntime) => setRuntimes((m) => ({ ...m, [bot.id]: r }));
   return (
     <div style={{ display: "flex", height: "100vh", fontFamily: "Inter, 'Noto Sans KR', system-ui, sans-serif", color: ink, background: "#fff" }}>
-      <Roster selectedId={selectedId} onSelect={setSelectedId} folded={rosterFolded} onToggle={() => setRosterFolded(!rosterFolded)} />
-      <Chat bot={bot} />
-      <Overview bot={bot} folded={overviewFolded} onToggle={() => setOverviewFolded(!overviewFolded)} />
+      <Roster selectedId={selectedId} onSelect={setSelectedId} folded={rosterFolded} onToggle={() => setRosterFolded(!rosterFolded)} runtimes={runtimes} />
+      <Chat bot={bot} runtime={runtime} onRuntime={setRuntime} />
+      <Overview bot={bot} runtime={runtime} folded={overviewFolded} onToggle={() => setOverviewFolded(!overviewFolded)} />
     </div>
   );
 }

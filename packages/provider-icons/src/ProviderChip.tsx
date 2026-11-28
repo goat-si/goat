@@ -12,7 +12,7 @@ export function ProviderChip(props: {
   ringColor?: string;
   size?: number;
 }) {
-  const size = props.size ?? 20;
+  const size = props.size ?? 16;
   const ring = props.ringColor ?? "#F7F7F8";
   return (
     <span
@@ -24,14 +24,16 @@ export function ProviderChip(props: {
         width: size,
         height: size,
         borderRadius: 9999,
-        background: "#fff",
+        // Knockout: the chip takes the surface color, so it reads as transparent but still separates
+        // the mark from the avatar body (non-text contrast, WCAG 1.4.11).
+        background: ring,
         boxShadow: `0 0 0 2px ${ring}`,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
       }}
     >
-      <ProviderGlyph driver={props.driver} size={Math.round(size * 0.6)} />
+      <ProviderGlyph driver={props.driver} size={Math.round(size * 0.65)} />
       {props.working ? (
         <>
           <style>{SPIN_KEYFRAMES}</style>
@@ -44,7 +46,7 @@ export function ProviderChip(props: {
               position: "absolute",
               left: -4,
               top: -4,
-              animation: "goat2-chip-spin 1s linear infinite",
+              animation: "goat2-chip-spin 1.2s linear infinite",
             }}
           >
             <circle

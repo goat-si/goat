@@ -28,3 +28,46 @@ export const selectedRuntime = {
   permissions: "Full access",
   workspace: "opencodex · codex/pr-7712",
 };
+
+/** What a bot runs on. The picker writes this; every surface reads it. */
+export interface BotRuntime {
+  driver: string;
+  model: string;
+  effort: string;
+  machine: string;
+  account: string;
+  permissions: string;
+  workspace: string;
+}
+
+/** Placeholder provider catalog. Real data: ServerProvider list (driver, displayName, installedVersion, models). */
+export const catalog: Array<{ driver: string; label: string; version: string; models: string[] }> = [
+  { driver: "codex", label: "Codex CLI", version: "0.142.0", models: ["gpt-6.1-sol", "gpt-6-luna"] },
+  { driver: "claudeAgent", label: "Claude Code", version: "2.4.1", models: ["claude-opus-5-5", "claude-sonnet-5"] },
+  { driver: "antigravity", label: "Antigravity", version: "2.33.0", models: ["gemini-4", "gemini-4-flash"] },
+  { driver: "opencode", label: "OpenCode", version: "1.6.2", models: ["grok-5", "kimi-k3.1"] },
+  { driver: "pi", label: "Pi", version: "0.9.4", models: ["kimi-k3.1", "qwen-4"] },
+];
+
+export const initialRuntimes: Record<string, BotRuntime> = Object.fromEntries(
+  bots.map((b) => {
+    const c = catalog.find((x) => x.driver === b.driver) ?? catalog[0]!;
+    return [b.id, {
+      driver: c.driver, model: c.models[0]!, effort: "high",
+      machine: b.driver === "codex" || b.driver === "pi" ? "Wicked · local" : "M5 Max · local",
+      account: "",
+      permissions: "Full access", workspace: "opencodex · codex/pr-7712",
+    }];
+  }),
+);
+
+/** Placeholder: the signed-in account per CLI. Real data: ServerProviderAuth.label + masked email. */
+export const accountFor: Record<string, string> = {
+  codex: "ChatGPT Pro · j***@lidgeai.com",
+  claudeAgent: "Claude Max · j***@lidgeai.com",
+  antigravity: "Google AI Ultra · b***7@gmail.com",
+  opencode: "OpenCodex · local",
+  pi: "Kimi · j***@lidgeai.com",
+};
+
+for (const r of Object.values(initialRuntimes)) r.account = accountFor[r.driver] ?? "";
