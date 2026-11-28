@@ -113,13 +113,6 @@ const platformReason = Effect.fn("LocalDeviceHost.platformReason")(function* (
   const sdk = yield* androidSdk;
   if (!sdk.root)
     return "Android SDK Platform-Tools were not found. Install them with Android Studio or set ANDROID_HOME to your SDK directory.";
-  if (!sdk.emulator)
-    return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
-  if (!sdk.avdmanager) {
-    if (sdk.legacyAvdmanager)
-      return `The Android SDK command-line tools in ${sdk.root} appear to be an older, unsupported version. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager under SDK Tools.`;
-    return `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
-  }
   return null;
 });
 
@@ -915,6 +908,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       run,
       platformAvailable: (platform) =>
         platformAvailability(platform).pipe(Effect.map((availability) => availability.available)),
+      avdsAvailable: currentSdk.pipe(Effect.map((sdk) => sdk.emulator)),
     }),
     nodePath: running.hub.nodePath,
     run,
