@@ -381,6 +381,13 @@ pub struct RequestOpened {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub recommended: Option<String>,
+    /// The waiting approval/question item itself, for a request with no run (`runId` null,
+    /// from `EngineEvent::SessionRequestOpened`): it cannot be an `item.completed` line, which
+    /// needs a run, so the request carries its own card, including a question's choices. A request
+    /// inside a run references its item through `itemId` instead and leaves this unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub item: Option<Box<crate::TurnItem>>,
 }
 
 /// One choice of a `decision` request.

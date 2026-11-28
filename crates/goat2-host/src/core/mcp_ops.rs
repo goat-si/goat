@@ -731,6 +731,7 @@ impl McpHost for Host {
                 .map(|d| clamp_chars(d, goat2_contracts::limits::REQUEST_CONTEXT_MAX_CHARS)),
             options: (kind == RequestKind::Decision).then(|| args.options.clone()),
             recommended: None,
+            item: None,
         };
         if let Err(e) = self.append(&caller.thread_id, vec![LogEvent::RequestOpened(opened)]) {
             return internal(e);

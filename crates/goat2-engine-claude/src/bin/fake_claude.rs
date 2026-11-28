@@ -536,7 +536,13 @@ fn main() {
             exit(0);
         }
         if args.first().map(String::as_str) == Some("auth") {
-            let logged_in = std::env::var("GOAT2_FAKE_CLAUDE_LOGGED_IN").is_ok();
+            // Signed in by env, or (per-instance homes) by a marker file in CLAUDE_CONFIG_DIR.
+            let logged_in = std::env::var("GOAT2_FAKE_CLAUDE_LOGGED_IN").is_ok()
+                || std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|dir| {
+                    std::path::Path::new(&dir)
+                        .join("goat2-fake-signed-in")
+                        .exists()
+                });
             println!(
                 "{}",
                 json!({"loggedIn": logged_in, "authMethod": if logged_in {"claude.ai"} else {"none"}, "apiProvider": "firstParty"})
