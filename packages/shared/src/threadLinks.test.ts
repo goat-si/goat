@@ -205,6 +205,17 @@ describe("thread links", () => {
     }
   });
 
+  it.each(["\r", "\r\n", "\n"])("keeps fenced examples literal with %j line endings", (eol) => {
+    for (const fence of ["~~~", "```"]) {
+      const text = [fence, "[hidden](goat-thread://v1/hidden)", fence].join(eol);
+      const input = `${text}${eol}[after](goat-thread://v1/after)`;
+      expect(threadLinkIds(input)).toEqual(["after"]);
+      expect(relabelThreadLinks(input, () => "Task")).toBe(
+        `${text}${eol}[Task](goat-thread://v1/after)`,
+      );
+    }
+  });
+
   it("writes the thread id verbatim so the link opens that exact thread", () => {
     const link = formatThreadLink("thread:delegated-task:mcp%3A1", "Fix");
     expect(link).toBe("[Fix](goat-thread://v1/thread:delegated-task:mcp%3A1)");
