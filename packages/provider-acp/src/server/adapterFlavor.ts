@@ -19,6 +19,7 @@ import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
+import type { ElicitationQuestionForm } from "./elicitationForm.ts";
 import type { AcpSessionModeState, AcpToolCallState } from "./runtimeModel.ts";
 import type { AcpPermissionDisposition } from "./clientPolicy.ts";
 import type * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
@@ -191,14 +192,13 @@ export interface AcpAdapterV2Flavor {
     readonly url: string;
     readonly message: string;
   }) => Effect.Effect<boolean>;
-  readonly extractElicitationForm?: (request: EffectAcpSchema.CreateElicitationRequest) =>
-    | {
-        readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.CreateElicitationResponse;
-      }
-    | undefined;
+  /**
+   * The adapter applies the schema's `required` list to the returned form, so `respond` gets no
+   * entry for a single choice the user skipped and leaves that field out of its content.
+   */
+  readonly extractElicitationForm?: (
+    request: EffectAcpSchema.CreateElicitationRequest,
+  ) => ElicitationQuestionForm | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
   readonly resolveSessionLaunch?: (

@@ -194,7 +194,11 @@ import {
   setToolOutputText,
   appendToolOutputText,
 } from "./toolOutputText.ts";
-import { parseElicitationForm } from "./elicitationForm.ts";
+import {
+  parseElicitationForm,
+  withOptionalChoices,
+  type ElicitationQuestionForm,
+} from "./elicitationForm.ts";
 import * as AdvertisedCommands from "./advertisedCommands.ts";
 import {
   appendToolCallContentChunk,
@@ -5461,21 +5465,20 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                       allowOther: unknownRecord(params._meta)?.["cognition.ai/allowOther"] === true,
                     })
                   : undefined;
-              const form =
-                nativeForm ??
-                (parsedForm === undefined
-                  ? undefined
-                  : {
-                      questions: parsedForm.questions,
-                      respond: (
-                        answers: ProviderUserInputAnswers,
-                      ): EffectAcpSchema.CreateElicitationResponse => {
-                        const content = parsedForm.content(answers);
-                        return content === undefined
-                          ? { action: "cancel" }
-                          : { action: "accept", content };
-                      },
-                    });
+              const form: ElicitationQuestionForm | undefined =
+                nativeForm !== undefined
+                  ? withOptionalChoices(nativeForm, params.requestedSchema)
+                  : parsedForm === undefined
+                    ? undefined
+                    : {
+                        questions: parsedForm.questions,
+                        respond: (answers) => {
+                          const content = parsedForm.content(answers);
+                          return content === undefined
+                            ? { action: "cancel" }
+                            : { action: "accept", content };
+                        },
+                      };
               if (form === undefined) return { action: "decline" } as const;
               const elicitationScopeId =
                 "sessionId" in params ? params.sessionId : `request:${params.requestId}`;
