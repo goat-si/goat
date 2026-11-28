@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Slice the Paper SSOT JSX export (get_jsx, includeNodeIds:false) into React parts.
 
-Usage: scripts/paper-to-parts.py <ssot.jsx> > apps/web/src/bot-home/ssotParts.tsx
+Usage: scripts/paper-to-parts.py <ssot-2R-1.jsx> <thread-panel-25E-0.jsx> > apps/web/src/bot-home/ssotParts.tsx
 
-Line numbers are 1-based against the 2026-11-28 (single model picker) export of artboard "봇 홈 — SSOT".
+Line numbers are 1-based against the 2026-11-28 (single picker, chat = messages + decisions) export of artboard "봇 홈 — SSOT".
 Re-export from Paper and re-check the ranges when the artboard changes (docs/PAPER.md).
 """
 import re, sys
 
 L = open(sys.argv[1]).read().split("\n")
+TH = open(sys.argv[2]).read().split("\n") if len(sys.argv) > 2 else None
 def seg(a, b, repl=None):
     out = []
     for n in range(a, b + 1):
@@ -50,11 +51,24 @@ r = {**drop(234, 238), 234: '<BotBody id={botId} size={24} />', 240: "{botName}"
 comp("ChatHeader", "{ botId, botName }: { botId: string; botName: string }", seg(231, 250, r))
 comp("RoutineEvent", "", seg(253, 261))
 comp("BotBubble", "", seg(262, 266))
-comp("EvidenceCard", "", seg(286, 329))
-comp("ApprovalCard", "", seg(362, 388))
-r = {**drop(396, 408), 394: "{`Message ${botName}`}", 396: "{picker}"}
-comp("Composer", "{ botName, picker }: { botName: string; picker: ReactNode }", seg(391, 415, r))
-r = {**drop(420, 424), 420: '<BotBody id={botId} size={44} />', 427: "{botName}",
-     434: L[433].replace("<div ", "<div role=\"button\" aria-label=\"Fold overview\" onClick={onFold} ", 1)}
-comp("OverviewHeader", "{ botId, botName, onFold }: { botId: string; botName: string; onFold: () => void }", seg(418, 440, r))
-comp("ThreadsBody", "", "<>\n" + seg(510, 538) + "\n</>")
+comp("ApprovalCard", "", seg(267, 293))
+r = {**drop(301, 313), 299: "{`Message ${botName}`}", 301: "{picker}"}
+comp("Composer", "{ botName, picker }: { botName: string; picker: ReactNode }", seg(296, 320, r))
+r = {**drop(325, 329), 325: '<BotBody id={botId} size={44} />', 332: "{botName}",
+     339: L[338].replace("<div ", "<div role=\"button\" aria-label=\"Fold overview\" onClick={onFold} ", 1)}
+comp("OverviewHeader", "{ botId, botName, onFold }: { botId: string; botName: string; onFold: () => void }", seg(323, 345, r))
+def clickable(n, handler, label):
+    line = L[n - 1]
+    return line.replace("<div ", f'<div role="button" tabIndex={{0}} aria-label="{label}" onClick={{{handler}}} ', 1)
+r = {415: clickable(415, "() => onOpen(\"7712\")", "Open thread Review #7712"),
+     423: clickable(423, "() => onOpen(\"7709\")", "Open thread Review #7709"),
+     431: clickable(431, "() => onOpen(\"fix\")", "Open thread Fix empty list fallback")}
+comp("ThreadsBody", "{ onOpen }: { onOpen: (id: string) => void }", "<>\n" + seg(415, 443, r) + "\n</>")
+
+# Thread panel (Paper state board 25D-0, panel 25E-0): replaces the Overview when a thread is open.
+if TH:
+    t = TH[1:190]   # lines 2..190 of the panel export (outer div closed)
+    t[3] = t[3].replace("<div ", '<div role="button" tabIndex={0} aria-label="Back to Overview" onClick={onBack} ', 1)   # line 5
+    t[11] = t[11].replace("<div ", '<div role="button" tabIndex={0} aria-label="Close thread" onClick={onClose} ', 1)    # line 13
+    t[106] = t[106].replace("<div ", '<div role="button" tabIndex={0} aria-label="Show all steps" onClick={onShowAll} ', 1) # line 108
+    comp("ThreadPanel", "{ onBack, onClose, onShowAll }: { onBack: () => void; onClose: () => void; onShowAll: () => void }", "\n".join(t))

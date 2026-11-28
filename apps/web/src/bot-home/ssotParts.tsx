@@ -156,55 +156,6 @@ export function BotBubble() {
   );
 }
 
-export function EvidenceCard() {
-  return (
-            <div style={{ alignSelf: 'start', backgroundColor: '#FFFFFF', borderColor: '#ECECEE', borderRadius: '16px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', width: '560px' }}>
-              <div style={{ alignItems: 'center', borderBottomColor: '#F0F0F2', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBlock: '14px', paddingInline: '16px' }}>
-                <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 700, lineHeight: '18px' }}>
-                  Evidence · PR #7712
-                </div>
-                <div style={{ boxSizing: 'border-box', color: '#8A8A90', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                  Codex CLI 0.142 · Wicked
-                </div>
-              </div>
-              <div style={{ boxSizing: 'border-box', display: 'flex', gap: '32px', paddingBlock: '14px', paddingInline: '16px' }}>
-                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px' }}>
-                    81/81
-                  </div>
-                  <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                    Tests passed
-                  </div>
-                </div>
-                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px' }}>
-                    <span style={{ color: '#1A7F4B' }}>+42</span> <span style={{ color: '#C8333A' }}>−7</span>
-                  </div>
-                  <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                    3 files
-                  </div>
-                </div>
-                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px' }}>
-                    12
-                  </div>
-                  <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                    Comments
-                  </div>
-                </div>
-                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px' }}>
-                    4:12
-                  </div>
-                  <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
-                    Duration
-                  </div>
-                </div>
-              </div>
-            </div>
-  );
-}
-
 export function ApprovalCard() {
   return (
             <div style={{ alignSelf: 'start', backgroundColor: '#FFFFFF', borderColor: '#ECECEE', borderRadius: '16px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '14px', padding: '16px', width: '560px' }}>
@@ -279,10 +230,10 @@ export function OverviewHeader({ botId, botName, onFold }: { botId: string; botN
   );
 }
 
-export function ThreadsBody() {
+export function ThreadsBody({ onOpen }: { onOpen: (id: string) => void }) {
   return (
 <>
-          <div style={{ backgroundColor: '#F7F7F8', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
+          <div role="button" tabIndex={0} aria-label="Open thread Review #7712" onClick={() => onOpen("7712")} style={{ backgroundColor: '#F7F7F8', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
             <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '16px' }}>
               Review #7712
             </div>
@@ -290,7 +241,7 @@ export function ThreadsBody() {
               Wicked · done 4:12
             </div>
           </div>
-          <div style={{ borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
+          <div role="button" tabIndex={0} aria-label="Open thread Review #7709" onClick={() => onOpen("7709")} style={{ borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
             <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '16px' }}>
               Review #7709
             </div>
@@ -298,7 +249,7 @@ export function ThreadsBody() {
               M5 Max · done yesterday
             </div>
           </div>
-          <div style={{ borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
+          <div role="button" tabIndex={0} aria-label="Open thread Fix empty list fallback" onClick={() => onOpen("fix")} style={{ borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', paddingBlock: '8px', paddingInline: '10px' }}>
             <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '16px' }}>
               Fix empty list fallback
             </div>
@@ -312,6 +263,200 @@ export function ThreadsBody() {
             </div>
           </div>
 </>
+  );
+}
+
+export function ThreadPanel({ onBack, onClose, onShowAll }: { onBack: () => void; onClose: () => void; onShowAll: () => void }) {
+  return (
+    <div style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#ECECEE', borderLeftStyle: 'solid', borderLeftWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', fontSize: '12px', fontSynthesis: 'none', gap: '16px', height: '100%', lineHeight: '16px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', paddingBlock: '16px', paddingInline: '20px', WebkitFontSmoothing: 'antialiased', width: '340px' }}>
+      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between' }}>
+          <div role="button" tabIndex={0} aria-label="Back to Overview" onClick={onBack} style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '4px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M15 5l-7 7 7 7" fill="none" stroke="#6B6B70" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <div style={{ boxSizing: 'border-box', color: '#6B6B70', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+              Overview
+            </div>
+          </div>
+          <div role="button" tabIndex={0} aria-label="Close thread" onClick={onClose} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="#6B6B70" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '17px', fontWeight: 700, lineHeight: '22px' }}>
+            Review #7712
+          </div>
+          <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
+            <div style={{ backgroundColor: '#1A9E5C', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', flexShrink: 0, height: '7px', width: '7px' }} />
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+              Done · 23 steps · 4:12
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+            gpt-6.1-sol · Codex CLI 0.142 · Wicked
+          </div>
+        </div>
+      </div>
+      <div style={{ borderTopColor: '#F0F0F2', borderTopStyle: 'solid', borderTopWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', paddingTop: '6px' }}>
+        <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '6px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#1A9E5C', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'center', marginTop: '1px', width: '16px' }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M5 12l5 5 9-10" fill="none" stroke="#FFFFFF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+              Checked out codex/pr-7712
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+              git · 0:04
+            </div>
+          </div>
+        </div>
+        <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '6px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#1A9E5C', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'center', marginTop: '1px', width: '16px' }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M5 12l5 5 9-10" fill="none" stroke="#FFFFFF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+              Read 3 changed files
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+              +42 −7 · 0:21
+            </div>
+          </div>
+        </div>
+        <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '6px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#1A9E5C', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'center', marginTop: '1px', width: '16px' }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M5 12l5 5 9-10" fill="none" stroke="#FFFFFF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+              Ran tests: 81/81 passed
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+              pnpm test · 2:48
+            </div>
+          </div>
+        </div>
+        <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '6px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#E5484D', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'center', marginTop: '1px', width: '16px' }}>
+            <div style={{ backgroundColor: '#FFFFFF', borderRadius: '1px', boxSizing: 'border-box', flexShrink: 0, height: '7px', width: '2px' }} />
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+              Empty list if the account list fails to load
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+              concern · 0:12
+            </div>
+          </div>
+        </div>
+        <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '6px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#1A9E5C', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '16px', justifyContent: 'center', marginTop: '1px', width: '16px' }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
+              <path d="M5 12l5 5 9-10" fill="none" stroke="#FFFFFF" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexGrow: '1', gap: '2px', minWidth: '0px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
+              Wrote review, 12 comments
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '11px', lineHeight: '14px' }}>
+              gh · 0:18
+            </div>
+          </div>
+        </div>
+        <div role="button" tabIndex={0} aria-label="Show all steps" onClick={onShowAll} style={{ boxSizing: 'border-box', paddingLeft: '26px', paddingTop: '2px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#6B6B70', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+            Show all 23 steps
+          </div>
+        </div>
+      </div>
+      <div style={{ alignSelf: 'stretch', backgroundColor: '#FFFFFF', borderColor: '#ECECEE', borderRadius: '16px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', width: '100%' }}>
+        <div style={{ alignItems: 'start', borderBottomColor: '#F0F0F2', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '2px', justifyContent: 'space-between', paddingBlock: '14px', paddingInline: '16px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 700, lineHeight: '18px', whiteSpace: 'pre' }}>
+            Evidence · PR #7712
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#8A8A90', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+            Codex CLI 0.142 · Wicked
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexWrap: 'wrap', paddingBlock: '14px', paddingInline: '16px', rowGap: '14px' }}>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '4px', width: '128px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px', whiteSpace: 'pre' }}>
+              81/81
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+              Tests passed
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '4px', width: '128px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px', whiteSpace: 'pre' }}>
+              <span style={{ color: '#1A7F4B' }}>+42</span> <span style={{ color: '#C8333A' }}>−7</span>
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+              3 files
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '4px', width: '128px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px', whiteSpace: 'pre' }}>
+              12
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+              Comments
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '4px', width: '128px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '20px', fontWeight: 500, lineHeight: '24px', whiteSpace: 'pre' }}>
+              4:12
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+              Duration
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ alignSelf: 'stretch', borderColor: '#ECECEE', borderRadius: '12px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', width: '100%' }}>
+        <div style={{ alignItems: 'center', borderBottomColor: '#F0F0F2', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '10px', paddingInline: '14px' }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+            <path d="M6 9l6 6 6-6" fill="none" stroke="#3A3A3F" strokeWidth="2.4" strokeLinecap="round" />
+          </svg>
+          <div style={{ boxSizing: 'border-box', color: '#111113', display: 'inline-block', flexGrow: '1', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '16px', whiteSpace: 'pre' }}>
+            Asked CI Watch to check
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'none', flexBasis: '0%', flexGrow: '1' }}>
+            <svg width="12" height="12" viewBox="0 0 256 257" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', width: '12px', height: '12px' }}>
+              <path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" fill="#D97757" />
+            </svg>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', display: 'inline-block', fontFamily: '"Geist Mono", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+              sonnet-5
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#5E5E64', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', whiteSpace: 'pre' }}>
+            Done · 0:38
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px', paddingBottom: '12px', paddingLeft: '36px', paddingRight: '14px', paddingTop: '10px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#3A3A3F', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+            ✓ Rebuilt on latest main
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#3A3A3F', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+            ✓ Merge dry run: no conflicts
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#3A3A3F', display: 'inline-block', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+            ✓ Reply: "No impact on main"
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

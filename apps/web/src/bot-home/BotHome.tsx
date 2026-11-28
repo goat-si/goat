@@ -1,14 +1,15 @@
 // GOAT 2 bot home. Matches the Paper SSOT 1:1 (docs/PAPER.md):
 // static markup comes from ./ssotParts.tsx (generated from the Paper export); this file only adds
-// the parts that move or respond: roster selection and folding, the runtime picker, worker-thread
-// folds, and overview section folds. Style values below are copied from the same export.
+// the parts that move or respond: roster selection and folding, the model picker (composer only),
+// overview section folds, and opening a thread in the right panel. The chat shows messages and
+// decisions only; threads open in the right panel (Paper state board "봇 홈 — 스레드 열림"). Style values below are copied from the same export.
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { ProviderGlyph } from "@goat2/provider-icons";
 import { bots, catalog, initialRuntimes, type BotRow, type BotRuntime } from "./placeholder.ts";
 import { RuntimePicker } from "./RuntimePicker.tsx";
 import {
-  ApprovalCard, BotBody, BotBubble, ChatHeader, Composer, EvidenceCard, OverviewHeader,
-  RosterFooter, RosterTop, RoutineEvent, ThreadsBody,
+  ApprovalCard, BotBody, BotBubble, ChatHeader, Composer, OverviewHeader,
+  RosterFooter, RosterTop, RoutineEvent, ThreadPanel, ThreadsBody,
 } from "./ssotParts.tsx";
 
 const INTER = '"Inter", "Noto Sans KR", system-ui, sans-serif';
@@ -17,16 +18,6 @@ const PANEL = "#F7F7F8";
 const SELECTED = "#E9E9EC";
 const EASE = "cubic-bezier(0.23, 1, 0.32, 1)";
 const GLYPH_PX: Record<string, number> = { codex: 10, claudeAgent: 10, antigravity: 11, pi: 9, opencode: 9 };
-
-function Chevron({ open, dir = "right" }: { open: boolean; dir?: "right" | "down" }) {
-  const base = dir === "right" ? 0 : 90;
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"
-      style={{ flexShrink: 0, transform: `rotate(${open ? base + 90 : base}deg)`, transition: `transform 200ms ${EASE}` }}>
-      <path d="M9 6l6 6-6 6" fill="none" stroke="#3A3A3F" strokeWidth="2.4" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 function SectionChevron({ open }: { open: boolean }) {
   return (
@@ -112,31 +103,6 @@ function Roster({ selectedId, onSelect, folded, onToggle, runtimes }: {
   );
 }
 
-/** A worker thread in the transcript: one line folded (Paper "Run fold (collapsed)"), steps when open. */
-function RunFold(props: { title: string; driver: string; model: string; right: ReactNode; steps: string[]; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(props.defaultOpen ?? false);
-  const head: CSSProperties = { alignItems: "center", display: "flex", gap: 10, padding: "10px 14px", cursor: "pointer" };
-  return (
-    <div style={{ alignSelf: "flex-start", border: "1px solid #ECECEE", borderRadius: 12, boxSizing: "border-box", display: "flex", flexDirection: "column", width: 560 }}>
-      <div role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen(!open)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), setOpen(!open))}
-        style={{ ...head, borderBottom: open ? "1px solid #F0F0F2" : "1px solid transparent" }}>
-        <Chevron open={open} />
-        <div style={{ color: "#111113", fontFamily: INTER, fontSize: 13, fontWeight: 500, lineHeight: "16px" }}>{props.title}</div>
-        <div style={{ alignItems: "center", display: "flex", flexGrow: 1, gap: 6 }}>
-          <ProviderGlyph driver={props.driver} size={12} />
-          <div style={{ color: "#8A8A90", fontFamily: MONO, fontSize: 12, lineHeight: "16px" }}>{props.model}</div>
-        </div>
-        {props.right}
-      </div>
-      {open && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "10px 14px 12px 36px" }}>
-          {props.steps.map((s) => <div key={s} style={{ color: "#3A3A3F", fontFamily: INTER, fontSize: 13, lineHeight: "16px" }}>{s}</div>)}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Chat({ bot, runtime, onRuntime }: { bot: BotRow; runtime: BotRuntime; onRuntime: (r: BotRuntime) => void }) {
   return (
     <main style={{ backgroundColor: "#FFFFFF", display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, height: "100%", minWidth: 0 }}>
@@ -146,17 +112,6 @@ function Chat({ bot, runtime, onRuntime }: { bot: BotRow; runtime: BotRuntime; o
         <div style={{ display: "flex", flexDirection: "column", gap: 14, width: 640, paddingBottom: 16 }}>
           <RoutineEvent />
           <BotBubble />
-          <RunFold
-            title="Worker thread · 23 steps" driver={runtime.driver} model={`${runtime.model} · 4:12`}
-            right={<span style={{ color: "#3A3A3F", fontFamily: INTER, fontSize: 13, lineHeight: "16px", textDecoration: "underline 1px" }}>Open thread</span>}
-            steps={["✓ Checked out codex/pr-7712 on Wicked", "✓ Ran 81 tests: 81 passed", "✓ Wrote 12 review comments"]}
-          />
-          <EvidenceCard />
-          <RunFold
-            title="Asked CI Watch to check" driver="claudeAgent" model="sonnet-5" defaultOpen
-            right={<span style={{ color: "#5E5E64", fontFamily: INTER, fontSize: 12, lineHeight: "16px" }}>Done · 0:38</span>}
-            steps={["✓ Rebuilt on latest main", "✓ Merge dry run: no conflicts", '✓ Reply: "No impact on main"']}
-          />
           <ApprovalCard />
         </div>
       </div>
@@ -181,7 +136,7 @@ function FoldRow({ label, hint, children }: { label: string; hint: string; child
   );
 }
 
-function Overview({ bot, runtime, folded, onToggle }: { bot: BotRow; runtime: BotRuntime; folded: boolean; onToggle: () => void }) {
+function Overview({ bot, runtime, folded, onToggle, onOpenThread }: { bot: BotRow; runtime: BotRuntime; folded: boolean; onToggle: () => void; onOpenThread: (id: string) => void }) {
   const [runtimeOpen, setRuntimeOpen] = useState(true);
   const [threadsOpen, setThreadsOpen] = useState(true);
   if (folded) {
@@ -227,7 +182,7 @@ function Overview({ bot, runtime, folded, onToggle }: { bot: BotRow; runtime: Bo
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         <div style={{ paddingBottom: 4 }}>{header(<>Threads <span style={{ color: "#8A8A90", fontWeight: 400 }}>3</span></>, threadsOpen, () => setThreadsOpen(!threadsOpen))}</div>
-        {threadsOpen && <ThreadsBody />}
+        {threadsOpen && <ThreadsBody onOpen={onOpenThread} />}
       </div>
       <FoldRow label="Computer" hint="Wicked · asleep">The bot's machine is asleep. Opening it wakes Wicked and shows its screen here.</FoldRow>
       <FoldRow label="Routines" hint="On PR opened">On PR opened → review on Wicked with this bot's runtime.</FoldRow>
@@ -236,10 +191,12 @@ function Overview({ bot, runtime, folded, onToggle }: { bot: BotRow; runtime: Bo
 }
 
 export function BotHome() {
-  const [selectedId, setSelectedId] = useState("reviewer");
+  const [selectedId, setSelectedIdRaw] = useState("reviewer");
+  const setSelectedId = (id: string) => { setSelectedIdRaw(id); setOpenThread(null); };
   const [rosterFolded, setRosterFolded] = useState(false);
   const [overviewFolded, setOverviewFolded] = useState(false);
   const [runtimes, setRuntimes] = useState(initialRuntimes);
+  const [openThread, setOpenThread] = useState<string | null>(null);
   const bot = bots.find((b) => b.id === selectedId) ?? bots[0]!;
   const runtime = runtimes[bot.id]!;
   const setRuntime = (r: BotRuntime) => setRuntimes((m) => ({ ...m, [bot.id]: r }));
@@ -248,7 +205,11 @@ export function BotHome() {
       <style>{"@keyframes goat2-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion: reduce){[aria-label=Working]{animation:none!important}}"}</style>
       <Roster selectedId={selectedId} onSelect={setSelectedId} folded={rosterFolded} onToggle={() => setRosterFolded(!rosterFolded)} runtimes={runtimes} />
       <Chat bot={bot} runtime={runtime} onRuntime={setRuntime} />
-      <Overview bot={bot} runtime={runtime} folded={overviewFolded} onToggle={() => setOverviewFolded(!overviewFolded)} />
+      {openThread && !overviewFolded ? (
+        <ThreadPanel onBack={() => setOpenThread(null)} onClose={() => setOpenThread(null)} onShowAll={() => {}} />
+      ) : (
+        <Overview bot={bot} runtime={runtime} folded={overviewFolded} onToggle={() => setOverviewFolded(!overviewFolded)} onOpenThread={setOpenThread} />
+      )}
     </div>
   );
 }
