@@ -12,7 +12,9 @@ use goat2_contracts::{
     ProviderOptionDescriptor, ProviderProbeResult, ServerProviderAuthStatus, ServerProviderCli,
     ServerProviderState,
 };
-use goat2_engine_acp::agents::{antigravity::Antigravity, fx::Fx, grok::Grok};
+use goat2_engine_acp::agents::antigravity::Antigravity;
+use goat2_engine_acp::agents::antigravity_auth::{AntigravityAuthConfig, AntigravityAuthMethod};
+use goat2_engine_acp::agents::{fx::Fx, grok::Grok};
 use goat2_engine_acp::probe::ProbeConfig;
 use goat2_engine_acp::probe::antigravity::{AUTH_UNCHECKED_MESSAGE, AntigravityProbeSettings};
 use goat2_engine_acp::probe::minimax::{
@@ -768,7 +770,7 @@ async fn grok_initialize_failure_is_a_warning() {
 // ---- fx -------------------------------------------------------------------------------------
 
 fn fx() -> AcpEngineFactory {
-    AcpEngineFactory::new(Arc::new(Fx))
+    AcpEngineFactory::new(Arc::new(Fx::default()))
 }
 
 async fn fx_with(dir: &Path, status: &str, models: &str) -> ProviderProbeResult {
@@ -888,19 +890,26 @@ async fn antigravity_resolves_without_starting() {
             .starts_with("The custom Antigravity executable is missing")
     );
 
-    let key = || {
+    // The flavor carries the key it launches with (synthetic here); the probe sees only whether
+    // the settings hold one.
+    let key = |api_key: &str| {
         AcpEngineFactory::new(Arc::new(Antigravity {
-            auth_method: Some("gemini-api-key".into()),
+            auth: AntigravityAuthConfig {
+                auth_method: AntigravityAuthMethod::GeminiApiKey,
+                api_key: api_key.into(),
+                ..Default::default()
+            },
+            ..Default::default()
         }))
     };
-    let unset = probe(key(), cli_config(dir.path(), MOCK, &[])).await;
+    let unset = probe(key(""), cli_config(dir.path(), MOCK, &[])).await;
     assert_eq!(unset.status, ServerProviderState::Error);
     assert_eq!(
         unset.message.as_deref(),
         Some("Enter a Gemini API key in the Antigravity provider settings.")
     );
     let set = probe(
-        key(),
+        key("test-key"),
         ProbeConfig {
             antigravity: AntigravityProbeSettings {
                 api_key_set: true,
