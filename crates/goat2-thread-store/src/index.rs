@@ -194,7 +194,8 @@ impl Index {
         self.set_sync(true)?;
         let result = self.conn.execute(
             "INSERT INTO cards (id, dirty, creating) VALUES (?1, ?2, ?3)
-             ON CONFLICT(id) DO UPDATE SET dirty = excluded.dirty, creating = excluded.creating",
+             ON CONFLICT(id) DO UPDATE SET dirty = excluded.dirty, creating = excluded.creating,
+               doc = CASE WHEN excluded.creating = 1 THEN NULL ELSE doc END",
             params![id, dirty as i64, creating as i64],
         );
         self.set_sync(false)?;

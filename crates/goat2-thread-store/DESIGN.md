@@ -75,7 +75,10 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    after that and with the thread lock held. Delete: row dirty=1 -> rename the folder to
    `threads/.trash-<id>-<hex>`; from the rename on the delete always completes in memory (card removed,
    subscribers told, callers waiting on the thread get ThreadMissing) and a failed directory sync or row
-   delete is returned afterwards; the dirty row lets the next start finish it.
+   delete is returned afterwards. The row is removed only after the rename is synced; otherwise the dirty
+   row stays so the next start decides from what is on disk (folder gone: finish the delete; folder back
+   after a power loss: keep the thread). Marking a create clears any cached card left on the row, and a
+   `creating` row is never loaded from a cached card.
 
 Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread
 map is never held while a thread lock is taken.

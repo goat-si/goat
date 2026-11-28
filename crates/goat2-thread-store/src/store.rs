@@ -677,7 +677,13 @@ impl Store {
     ) -> Result<()> {
         let id = ThreadId::new(row.id.clone());
         let needs_check = row.dirty || row.creating || row.active_run;
-        let doc = row.doc.as_deref().and_then(index::decode_doc);
+        // A create in progress never trusts a cached card: the row may still hold the card of an
+        // earlier thread with the same id.
+        let doc = if row.creating {
+            None
+        } else {
+            row.doc.as_deref().and_then(index::decode_doc)
+        };
         match doc {
             Some(file) if !needs_check => {
                 self.insert_slot(self.new_slot(id, file.card, file.fold, Health::Unverified));
@@ -2047,7 +2053,12 @@ impl Store {
         }
         {
             let mut shared = lock(&self.shared);
-            let removed = if self.faults().fail_delete_index {
+            // Remove the row only once the rename is durable. If the directory sync failed, a power
+            // loss could undo the rename; the dirty row then lets the next start find the folder
+            // again instead of hiding it behind a complete index.
+            let removed = if first_error.is_some() {
+                Ok(())
+            } else if self.faults().fail_delete_index {
                 Err(StoreError::Io(injected("delete index row")))
             } else {
                 shared.index.delete(id.as_str())

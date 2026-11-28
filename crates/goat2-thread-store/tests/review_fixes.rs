@@ -830,3 +830,74 @@ fn a_delete_whose_index_delete_fails_is_finished_at_the_next_start() {
     assert_eq!(report.removed_deleted, vec!["t"]);
     assert!(store.find(&Default::default()).is_empty());
 }
+
+// Review round 7.
+#[test]
+fn a_delete_whose_rename_was_not_synced_keeps_the_row_for_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = tid("t");
+    let thread_dir = dir.path().join("threads/t");
+    let backup = dir.path().join("rollback-copy");
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(t.clone()), created("survivor", "/w"))
+            .unwrap();
+        store.append(&t, vec![renamed("survivor 2")]).unwrap();
+        std::fs::create_dir(&backup).unwrap();
+        for name in ["goat.jsonl", "card.json"] {
+            std::fs::copy(thread_dir.join(name), backup.join(name)).unwrap();
+        }
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_dir_sync: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&t).is_err());
+        testing::crash(store);
+    }
+    // Power loss rolled the unsynced rename back: the folder is where it was.
+    std::fs::rename(&backup, &thread_dir).unwrap();
+    let (store, _) = open(dir.path());
+    let card = store
+        .card(&t)
+        .unwrap()
+        .expect("the folder is visible again, not hidden");
+    assert_eq!(card.title, "survivor 2");
+}
+
+#[test]
+fn an_interrupted_recreation_after_a_failed_index_delete_shows_no_old_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = tid("t");
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(t.clone()), created("old", "/w"))
+            .unwrap();
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_index: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&t).is_err());
+        testing::set_faults(&store, Faults::default());
+        // Recreate the id and stop right after mkdir.
+        assert!(
+            testing::create_thread_stopping_after(&store, t.clone(), created("new", "/w"), 2)
+                .is_err()
+        );
+        testing::crash(store);
+    }
+    let (store, report) = open(dir.path());
+    assert_eq!(report.abandoned_creates, vec!["t"]);
+    assert!(
+        store.find(&Default::default()).is_empty(),
+        "the old card came back"
+    );
+    assert!(report.corrupt.is_empty(), "{:?}", report.corrupt);
+}
