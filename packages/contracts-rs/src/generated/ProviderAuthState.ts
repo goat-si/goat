@@ -5,4 +5,7 @@ import type { ProviderAuthMethod } from "./ProviderAuthMethod.ts";
 import type { ProviderAuthPhase } from "./ProviderAuthPhase.ts";
 import type { ProviderInstanceId } from "./ProviderInstanceId.ts";
 
+/**
+ * v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.
+ */
 export type ProviderAuthState = { instanceId: ProviderInstanceId, phase: ProviderAuthPhase, flowId: string | null, authorizationUrl: string | null, expiresAt: string | null, message: string | null, methods?: Array<ProviderAuthMethod>, interaction?: ProviderAuthInteraction | null, credentialOwner?: CredentialOwner, };
