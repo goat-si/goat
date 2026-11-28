@@ -6546,7 +6546,14 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
           }
           yield* reportAgentModeChanges(context.input.threadId);
-          const turn = providerTurnPayload(context, settledStatus, now);
+          const executedModel =
+            flavor.executedModel === undefined
+              ? undefined
+              : yield* flavor.executedModel(context.nativeThreadId);
+          const turn: OrchestrationV2ProviderTurn = {
+            ...providerTurnPayload(context, settledStatus, now),
+            ...(executedModel === undefined ? {} : { model: executedModel }),
+          };
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver,

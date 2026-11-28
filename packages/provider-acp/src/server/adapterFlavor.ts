@@ -334,6 +334,8 @@ export interface AcpAdapterV2Flavor {
   readonly deferFinalizeForBackgroundWork?: AcpNegotiatedFlag;
   readonly replyEndsWithUsageUpdate?: boolean;
   readonly hasPendingReply?: (sessionId: string) => Effect.Effect<boolean>;
+  /** The model the agent ran the session's latest reply on, when ACP does not report it. */
+  readonly executedModel?: (sessionId: string) => Effect.Effect<string | undefined>;
   readonly wakeOnDetachedRequest?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
