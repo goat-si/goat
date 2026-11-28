@@ -2,6 +2,7 @@ import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextRef
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   CommandId,
+  TextGenerationError,
   type ChatAttachment,
   type MessageId,
   type OrchestrationV2AppThread,
@@ -60,6 +61,7 @@ type Outcome =
 // Only sentences the server wrote reach the thread: a provider CLI's raw output can hold
 // anything (request ids, key fragments, echoed conversation), so it stays in the server log.
 const GENERATION_FAILED_MESSAGE = "Title generation failed.";
+const isTextGenerationError = Schema.is(TextGenerationError);
 const isProjectionStoreThreadNotFoundError = Schema.is(ProjectionStoreThreadNotFoundError);
 // An auth, permission or quota refusal fails the same way on every attempt.
 const PROVIDER_REFUSAL = /\b(?:40[13]|forbidden|unauthori[sz]ed|quota|usage limit)\b/iu;
