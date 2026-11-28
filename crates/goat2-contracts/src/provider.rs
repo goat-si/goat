@@ -93,6 +93,8 @@ pub struct ProviderAuthMethod {
     #[ts(optional)]
     pub can_remove: Option<bool>,
     pub name: String,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub description: Option<String>,
     pub r#type: ProviderAuthMethodType,
 }
@@ -172,17 +174,23 @@ pub enum CredentialOwner {
 pub struct ProviderAuthState {
     pub instance_id: ProviderInstanceId,
     pub phase: ProviderAuthPhase,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub flow_id: Option<String>,
     /// v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.
-    #[serde(default, with = "crate::serde_util::sign_in_url_opt")]
+    #[serde(with = "crate::serde_util::sign_in_url_opt")]
     #[ts(as = "Option<String>")]
     #[schemars(
-        with = "Option<String>",
+        with = "crate::serde_util::Nullable<String>",
         length(min = 1, max = 16384),
         regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
     )]
     pub authorization_url: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub expires_at: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -205,17 +213,23 @@ pub struct ProviderAuthState {
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInstallState {
     pub driver: String,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub operation_id: Option<String>,
     pub phase: ProviderInstallPhase,
     #[serde(with = "crate::serde_util::safe_u64")]
     #[ts(as = "u64")]
     #[schemars(with = "u64")]
     pub downloaded_bytes: u64,
-    #[serde(default, with = "crate::serde_util::safe_u64_opt")]
+    #[serde(with = "crate::serde_util::safe_u64_opt")]
     #[ts(as = "Option<u64>")]
-    #[schemars(with = "Option<u64>")]
+    #[schemars(with = "crate::serde_util::Nullable<u64>")]
     pub total_bytes: Option<u64>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub version: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub installed_version: Option<String>,
     #[serde(
         default,
@@ -234,6 +248,8 @@ pub struct ProviderInstallState {
     #[schemars(with = "Option<ProviderInstallSource>")]
     pub source: Option<Option<ProviderInstallSource>>,
     pub can_remove: bool,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub message: Option<String>,
 }
 
@@ -246,9 +262,17 @@ pub struct AcpRegistrySearchAgent {
     pub version: String,
     pub description: String,
     pub authors: Vec<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub license: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub website: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub repository: Option<String>,
+    #[serde(deserialize_with = "crate::serde_util::required_nullable")]
+    #[schemars(with = "crate::serde_util::Nullable<String>")]
     pub icon: Option<String>,
     pub distribution: AcpRegistryDistribution,
     pub integrity: AcpRegistryIntegrity,

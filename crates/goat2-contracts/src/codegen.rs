@@ -163,6 +163,7 @@ pub fn render_limits() -> String {
         };
     }
     constant!(
+        BOT_INSTRUCTIONS_MAX_CHARS,
         BOT_INSTRUCTIONS_MAX_BYTES,
         REQUEST_CONTEXT_MAX_CHARS,
         LOG_FORMAT_VERSION,
