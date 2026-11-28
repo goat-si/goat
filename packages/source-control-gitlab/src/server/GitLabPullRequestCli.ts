@@ -24,6 +24,7 @@ import { makeGitLabListReads } from "./gitLabListReads.ts";
 import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
 import {
   GitLabMergeRequestReadError,
+  GitLabMutationRefusedError,
   GitLabViewerUnavailableError,
   GitLabDiffCursorError,
   GitLabDiffCommitError,

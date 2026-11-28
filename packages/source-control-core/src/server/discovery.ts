@@ -299,7 +299,7 @@ export function probeSourceControlProvider(input: {
         ),
       );
   const retryArgs = spec.authRetryArgs;
-  const auth =
+  const auth = () =>
     retryArgs === undefined
       ? runAuth(spec.authArgs)
       : runAuth(spec.authArgs).pipe(
@@ -329,7 +329,7 @@ export function probeSourceControlProvider(input: {
     ),
     Effect.flatMap((item): Effect.Effect<SourceControlProviderDiscoveryItem> =>
       item.status === "available"
-        ? Effect.map(auth, (auth) => ({ ...item, auth }))
+        ? Effect.map(Effect.suspend(auth), (auth) => ({ ...item, auth }))
         : Effect.succeed({ ...item, auth: unknownAuth(item.installHint) }),
     ),
   );

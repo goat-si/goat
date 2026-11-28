@@ -1,3 +1,4 @@
+import { VcsProcessSpawnError } from "@goat/contracts";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import {
   parseGitRemoteHost,
