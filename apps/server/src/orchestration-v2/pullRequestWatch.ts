@@ -222,7 +222,9 @@ export function evaluatePullRequestWatch(
     if (passedNow && (!passed || gateGrew)) {
       sort(
         { kind: "checks-passed", count: gate.length, required: required.length > 0 },
-        checksMode(policy.checksPassed),
+        checksBaseline && watch.checksPending === true && settled
+          ? policy.checksPassed
+          : checksMode(policy.checksPassed),
       );
       owedChecks =
         required.length > 0
