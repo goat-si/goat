@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "kind": "ack",
+  "runId": null,
+  "seq": 1,
+  "text": "example",
+  "type": "user.notified",
+  "v": 1
+}

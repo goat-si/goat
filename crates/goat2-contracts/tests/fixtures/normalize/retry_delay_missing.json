@@ -1,0 +1,30 @@
+{
+  "root": "turn_item_body",
+  "input": {
+    "type": "error",
+    "failure": {
+      "class": "provider_error",
+      "message": "upstream 503",
+      "code": null,
+      "retryable": true
+    },
+    "retry": {
+      "attempt": 1,
+      "maxAttempts": null
+    }
+  },
+  "output": {
+    "type": "error",
+    "failure": {
+      "class": "provider_error",
+      "message": "upstream 503",
+      "code": null,
+      "retryable": true
+    },
+    "retry": {
+      "attempt": 1,
+      "maxAttempts": null,
+      "retryDelayMs": null
+    }
+  }
+}

@@ -1547,6 +1547,8 @@
           ]
         },
         "retryDelayMs": {
+          "default": null,
+          "description": "v1 `NullOr`: written as `null` when unknown; a missing field reads as `null`.",
           "format": "uint64",
           "maximum": 9007199254740991,
           "minimum": 0,

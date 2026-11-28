@@ -239,5 +239,144 @@ pub fn render_json_schemas() -> Files {
 pub fn render_all() -> Result<Files, String> {
     let mut files = render_typescript()?;
     files.extend(render_json_schemas());
+    files.insert(FIXTURE_TS.into(), render_fixture_module(&load_fixtures()?));
     Ok(files)
+}
+
+/// Generated compile-time TypeScript checks for canonical and derived fixtures.
+pub const FIXTURE_TS: &str = "packages/contracts-rs/test/fixtures.gen.ts";
+
+/// A named JSON fixture. Names are snake_case and unique within each root.
+#[derive(Debug, Clone)]
+pub struct Fixture {
+    pub root: String,
+    pub name: String,
+    pub value: serde_json::Value,
+}
+
+/// Load canonical fixtures and derive the nested root fixtures in a deterministic order.
+pub fn load_fixtures() -> Result<Vec<Fixture>, String> {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let mut files = Files::new();
+    for root in [
+        "log_line",
+        "log_header",
+        "client_frame",
+        "host_frame",
+        "provider_capabilities",
+        "thread_card",
+        "card_file",
+        "bot_profile",
+    ] {
+        read_tree(&base, &base.join(root), &mut files)?;
+    }
+    let mut fixtures = Vec::new();
+    for (path, text) in files {
+        let (root, file) = path
+            .split_once('/')
+            .ok_or_else(|| format!("invalid fixture path: {path}"))?;
+        let name = file
+            .strip_suffix(".json")
+            .ok_or_else(|| format!("invalid fixture path: {path}"))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+        fixtures.push(Fixture {
+            root: root.into(),
+            name: name.into(),
+            value: value.clone(),
+        });
+        if root == "log_line" {
+            let mut event = value.clone();
+            for key in ["v", "seq", "at"] {
+                event
+                    .as_object_mut()
+                    .ok_or("line is not an object")?
+                    .remove(key);
+            }
+            fixtures.push(Fixture {
+                root: "log_event".into(),
+                name: name.into(),
+                value: event,
+            });
+            if value["type"] == "item.completed" {
+                let item = value["item"].clone();
+                let mut body = item.clone();
+                for key in [
+                    "id",
+                    "threadId",
+                    "runId",
+                    "providerThreadId",
+                    "providerTurnId",
+                    "nativeItemRef",
+                    "parentItemId",
+                    "ordinal",
+                    "status",
+                    "title",
+                    "startedAt",
+                    "completedAt",
+                    "updatedAt",
+                ] {
+                    body.as_object_mut()
+                        .ok_or("item is not an object")?
+                        .remove(key);
+                }
+                fixtures.push(Fixture {
+                    root: "turn_item".into(),
+                    name: name.into(),
+                    value: item,
+                });
+                fixtures.push(Fixture {
+                    root: "turn_item_body".into(),
+                    name: name.into(),
+                    value: body,
+                });
+            }
+            if value["type"] == "checkpoint" {
+                for root in ["fold", "thread_card"] {
+                    let key = if root == "fold" { "fold" } else { "card" };
+                    fixtures.push(Fixture {
+                        root: root.into(),
+                        name: format!("checkpoint_{name}"),
+                        value: value[key].clone(),
+                    });
+                }
+            }
+        }
+    }
+    fixtures.sort_by(|a, b| (&a.root, &a.name).cmp(&(&b.root, &b.name)));
+    Ok(fixtures)
+}
+
+fn fixture_type(root: &str) -> String {
+    root.split('_')
+        .map(|part| {
+            let mut c = part.chars();
+            c.next()
+                .map(|first| first.to_ascii_uppercase().to_string() + c.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Render named fixture constants with TypeScript compile-time wire shape checks.
+pub fn render_fixture_module(fixtures: &[Fixture]) -> String {
+    let mut roots = std::collections::BTreeSet::new();
+    for fixture in fixtures {
+        roots.insert(fixture_type(&fixture.root));
+    }
+    let mut out = String::from(HEADER);
+    out.push_str(&format!(
+        "import type {{ {} }} from \"../src/index.ts\";\n\n",
+        roots.into_iter().collect::<Vec<_>>().join(", ")
+    ));
+    for fixture in fixtures {
+        out.push_str(&format!(
+            "export const {}__{} = {} satisfies {};\n\n",
+            fixture.root,
+            fixture.name,
+            serde_json::to_string_pretty(&fixture.value).expect("fixture JSON"),
+            fixture_type(&fixture.root)
+        ));
+    }
+    out
 }

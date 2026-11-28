@@ -1,0 +1,8 @@
+{
+  "clientRequestId": "example",
+  "outcome": "approved",
+  "reqId": "example",
+  "requestId": "example",
+  "threadId": "example",
+  "type": "resolve_request"
+}

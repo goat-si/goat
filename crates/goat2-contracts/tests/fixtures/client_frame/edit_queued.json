@@ -1,0 +1,8 @@
+{
+  "clientRequestId": "example",
+  "inputId": "example",
+  "reqId": "example",
+  "text": "example",
+  "threadId": "example",
+  "type": "edit_queued"
+}

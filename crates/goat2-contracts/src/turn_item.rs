@@ -335,7 +335,8 @@ pub struct ProviderFailure {
 pub struct ProviderRetry {
     pub attempt: u32,
     pub max_attempts: Option<u32>,
-    #[serde(with = "crate::serde_util::safe_u64_opt")]
+    /// v1 `NullOr`: written as `null` when unknown; a missing field reads as `null`.
+    #[serde(default, with = "crate::serde_util::safe_u64_opt")]
     #[schemars(with = "Option<u64>")]
     #[ts(as = "Option<u64>")]
     pub retry_delay_ms: Option<u64>,

@@ -1,0 +1,10 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "engineRef": null,
+  "generation": 1,
+  "inputIds": [],
+  "runId": "example",
+  "seq": 1,
+  "type": "run.started",
+  "v": 1
+}

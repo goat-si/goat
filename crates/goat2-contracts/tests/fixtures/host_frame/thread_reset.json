@@ -1,0 +1,7 @@
+{
+  "epoch": "example",
+  "reason": "epoch_changed",
+  "subId": "example",
+  "threadId": "example",
+  "type": "thread_reset"
+}

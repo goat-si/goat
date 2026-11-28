@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use goat2_contracts::codegen::{self, Files, OWNED_DIRS, ROOTS, SCHEMA_DIR, TS_DIR};
+use goat2_contracts::codegen::{self, FIXTURE_TS, Files, OWNED_DIRS, ROOTS, SCHEMA_DIR, TS_DIR};
 
 fn repo_root() -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -18,6 +18,13 @@ fn committed(root: &Path) -> Files {
     let mut files = Files::new();
     for dir in OWNED_DIRS {
         codegen::read_tree(root, &root.join(dir), &mut files).expect("read owned dir");
+    }
+    let fixture = root.join(FIXTURE_TS);
+    if fixture.is_file() {
+        files.insert(
+            FIXTURE_TS.into(),
+            std::fs::read_to_string(fixture).expect("read fixture module"),
+        );
     }
     files
 }

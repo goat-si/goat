@@ -1,0 +1,6 @@
+{
+  "epoch": "example",
+  "reason": "epoch_changed",
+  "subId": "example",
+  "type": "cards_reset"
+}

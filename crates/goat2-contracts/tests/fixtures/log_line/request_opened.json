@@ -1,0 +1,19 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "itemId": null,
+  "kind": "decision",
+  "requestId": "example",
+  "runId": null,
+  "seq": 1,
+  "summary": "example",
+  "type": "request.opened",
+  "v": 1,
+  "options": [
+    {
+      "id": "yes",
+      "label": "Proceed",
+      "consequence": "Continue"
+    }
+  ],
+  "recommended": "yes"
+}

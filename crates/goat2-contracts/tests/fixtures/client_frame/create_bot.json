@@ -1,0 +1,17 @@
+{
+  "clientRequestId": "example",
+  "engine": {
+    "driver": "codex",
+    "model": "example",
+    "runtimeMode": "example"
+  },
+  "face": {
+    "color": "example",
+    "goat": true,
+    "shape": "example"
+  },
+  "name": "example",
+  "purpose": "example",
+  "reqId": "example",
+  "type": "create_bot"
+}

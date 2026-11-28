@@ -1,0 +1,31 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "engineLocator": null,
+  "item": {
+    "completedAt": null,
+    "failure": {
+      "class": "usage_limit",
+      "code": null,
+      "message": "example",
+      "retryable": null,
+      "resetAt": null
+    },
+    "id": "example",
+    "nativeItemRef": null,
+    "ordinal": 1,
+    "parentItemId": null,
+    "providerThreadId": null,
+    "providerTurnId": null,
+    "runId": null,
+    "startedAt": null,
+    "status": "completed",
+    "threadId": "example",
+    "title": null,
+    "type": "error",
+    "updatedAt": "2026-11-28T10:00:00Z"
+  },
+  "runId": "example",
+  "seq": 1,
+  "type": "item.completed",
+  "v": 1
+}
