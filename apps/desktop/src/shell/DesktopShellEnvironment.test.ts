@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   DesktopShellEnvironment,
+  discoverWithRetries,
   installPosixEnvironment,
+  LiveShellProbes,
   runCommandOutput,
   type CommandRunner,
 } from "./DesktopShellEnvironment.ts";
@@ -164,6 +166,15 @@ describe("DesktopShellEnvironment", () => {
 });
 
 describe("login shell probe, for real", () => {
+  it("counts a probe as live until its exit is seen, killed ones included", async () => {
+    const probes = new LiveShellProbes();
+    const pending = runCommandOutput("/bin/sh", ["-c", "sleep 5"], { env: { PATH: "/usr/bin:/bin" }, timeoutMs: 300, probes });
+    assert.equal(probes.allGone, false);
+    assert.equal(await pending, "");
+    for (let i = 0; i < 40 && !probes.allGone; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(probes.allGone, true);
+  });
+
   for (const shell of ["/bin/zsh", "/bin/bash"]) {
     it(`${shell} -ilc answers with its PATH through the v1 capture command`, async () => {
       const out = await runCommandOutput(shell, ["-ilc", buildEnvironmentCaptureCommand(shell, ["PATH", "HOME"])], {
@@ -198,5 +209,48 @@ describe("login shell probe, for real", () => {
     };
     for (let i = 0; i < 40 && !gone(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(gone(), "the shell's child outlived the probe");
+  });
+});
+
+describe("retries (v1 discoverWithRetries)", () => {
+  it("retries with v1's growing gaps until an answer, POSIX only", async () => {
+    const slept: number[] = [];
+    const results = [false, false, true];
+    const answered = await discoverWithRetries(async () => results.shift() ?? false, "darwin", () => true, {
+      sleep: async (ms) => void slept.push(ms),
+    });
+    assert.equal(answered, true);
+    assert.deepEqual(slept, [30_000, 120_000]);
+
+    let calls = 0;
+    assert.equal(await discoverWithRetries(async () => (calls++, false), "win32", () => true, { sleep: async () => {} }), false);
+    assert.equal(calls, 1);
+  });
+
+  it("stops when an earlier probe is not known to have exited, and after the last gap", async () => {
+    let calls = 0;
+    assert.equal(await discoverWithRetries(async () => (calls++, false), "darwin", () => false, { sleep: async () => {} }), false);
+    assert.equal(calls, 1);
+    calls = 0;
+    assert.equal(await discoverWithRetries(async () => (calls++, false), "darwin", () => true, { sleep: async () => {} }), false);
+    assert.equal(calls, 4, "one discovery + three retries");
+  });
+
+  it("startDiscovery settles first with the first answer; a later answer updates the host env and is reported", async () => {
+    let call = 0;
+    const run: CommandRunner = async (command) => {
+      if (command === "/bin/launchctl") return "";
+      call += 1;
+      return call >= 2 ? "__GOAT_ENV_PATH_START__\n/late/bin:/usr/bin\n__GOAT_ENV_PATH_END__\n" : "";
+    };
+    const inherited = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    const target: NodeJS.ProcessEnv = { ...inherited };
+    const environment = new DesktopShellEnvironment(inherited, options(run));
+    let late = 0;
+    const discovery = environment.startDiscovery(target, { onLateAnswer: () => void late++, sleep: async () => {} });
+    assert.equal(await discovery.first, false);
+    assert.equal(await discovery.settled, true);
+    assert.equal(late, 1);
+    assert.equal(target.PATH, "/late/bin:/usr/bin" + WELL_KNOWN);
   });
 });

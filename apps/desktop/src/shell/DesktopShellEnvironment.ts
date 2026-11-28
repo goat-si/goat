@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { appendWellKnownCliDirs, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "./cliPath.ts";
+import { appendWellKnownCliDirs, LOGIN_SHELL_RETRY_DELAYS_MS, POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS } from "./cliPath.ts";
 import { buildEnvironmentCaptureCommand, extractEnvironmentValues } from "./shellEnvironmentCapture.ts";
 import { listLoginShellCandidates, mergePathValues } from "./shellPath.ts";
 
@@ -78,8 +78,25 @@ type Env = NodeJS.ProcessEnv;
 export type CommandRunner = (
   command: string,
   args: ReadonlyArray<string>,
-  options: { readonly env: Env; readonly timeoutMs: number },
+  options: { readonly env: Env; readonly timeoutMs: number; readonly probes?: LiveShellProbes },
 ) => Promise<string>;
+
+/**
+ * v1 loginShellRetry LiveShellProbes, adapted: a probe process counts from its spawn until its exit
+ * is observed (a killed shell stuck in the kernel never exits), so a retry starts only when every
+ * earlier probe is known to be gone.
+ */
+export class LiveShellProbes {
+  readonly #running = new Set<object>();
+  track(child: { once(event: "exit", listener: () => void): unknown }): void {
+    const token = {};
+    this.#running.add(token);
+    child.once("exit", () => this.#running.delete(token));
+  }
+  get allGone(): boolean {
+    return this.#running.size === 0;
+  }
+}
 
 const trimmed = (value: string | undefined): string | undefined => {
   const t = value?.trim();
@@ -107,6 +124,7 @@ export const runCommandOutput: CommandRunner = (command, args, options) =>
       resolve("");
       return;
     }
+    if (child.pid !== undefined) options.probes?.track(child);
     const chunks: Buffer[] = [];
     let size = 0;
     child.stdout?.on("data", (chunk: Buffer) => {
@@ -134,6 +152,8 @@ export interface ShellEnvironmentOptions {
   readonly loginShellTimeoutMs?: number;
   /** v1 readUserLoginShell (os.userInfo().shell); injectable for tests. */
   readonly userShell?: string;
+  /** Counts this environment's probe processes (set by DesktopShellEnvironment). */
+  readonly probes?: LiveShellProbes;
 }
 
 /**
@@ -150,6 +170,7 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
     const output = await run(shell, ["-ilc", buildEnvironmentCaptureCommand(shell, LOGIN_SHELL_ENV_NAMES)], {
       env,
       timeoutMs: options.loginShellTimeoutMs ?? POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS,
+      ...(options.probes ? { probes: options.probes } : {}),
     });
     if (output === "") options.log?.(`shell environment: login shell ${shell} gave no answer`);
     Object.assign(shellEnvironment, extractEnvironmentValues(output, LOGIN_SHELL_ENV_NAMES));
@@ -161,7 +182,11 @@ export async function installPosixEnvironment(env: Env, options: ShellEnvironmen
 
   let launchctlPath: string | undefined;
   if (platform === "darwin" && !shellEnvironment.PATH) {
-    const value = (await run("/bin/launchctl", ["getenv", "PATH"], { env, timeoutMs: LAUNCHCTL_TIMEOUT_MS })).replace(
+    const value = (await run("/bin/launchctl", ["getenv", "PATH"], {
+      env,
+      timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+      ...(options.probes ? { probes: options.probes } : {}),
+    })).replace(
       /\r?\n$/,
       "",
     );
@@ -232,6 +257,37 @@ function decodeCache(text: string): { key: string; environment: Record<string, s
 }
 
 /**
+ * v1 loginShellRetry discoverWithRetries: one discovery, then a fixed number of further ones with
+ * growing gaps until one succeeds. A further one starts only when every earlier probe process is
+ * known to have exited; otherwise the retries end there. POSIX only.
+ */
+export async function discoverWithRetries(
+  discover: () => Promise<boolean>,
+  platform: NodeJS.Platform,
+  earlierProbesGone: () => boolean,
+  options: {
+    readonly delays?: ReadonlyArray<number>;
+    readonly sleep?: (ms: number) => Promise<void>;
+    readonly log?: (line: string) => void;
+  } = {},
+): Promise<boolean> {
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms).unref?.()));
+  if (await discover()) return true;
+  if (platform !== "darwin" && platform !== "linux") return false;
+  for (const delay of options.delays ?? LOGIN_SHELL_RETRY_DELAYS_MS) {
+    await sleep(delay);
+    if (!earlierProbesGone()) {
+      options.log?.("shell environment: a login shell probe is not known to have exited; no further probes");
+      return false;
+    }
+    if (await discover()) return true;
+  }
+  options.log?.("shell environment: the login shell never answered with a PATH; no further probes");
+  return false;
+}
+
+/**
  * The host's environment from the person's login shell (v1 DesktopShellEnvironment, adapted).
  * target is the object the host is spawned with: installCached() fills it from the last answer at
  * once; refresh() asks the login shell and rewrites the shell-owned names in place, so the next host
@@ -244,8 +300,10 @@ export class DesktopShellEnvironment {
   /** v1 `latest`: a snapshot (cached or answered) is in target; a failed refresh must not replace it. */
   #hasSnapshot = false;
 
+  readonly #probes = new LiveShellProbes();
+
   constructor(inherited: Env, options: ShellEnvironmentOptions) {
-    this.#options = options;
+    this.#options = { ...options, probes: options.probes ?? this.#probes };
     this.#inherited = { ...inherited };
     this.#key = JSON.stringify([options.platform, options.homeDirectory, inherited.SHELL ?? "", inherited.ZDOTDIR ?? ""]);
   }
@@ -276,6 +334,43 @@ export class DesktopShellEnvironment {
     this.#publish(target, baseline);
     this.#hasSnapshot = true;
     return true;
+  }
+
+  /**
+   * The first discovery and v1's bounded retries (30 s, 2 min, 10 min). first settles with the first
+   * probe's result (what a waiting host start needs); a later success rewrites target, which the next
+   * host start reads, and calls onLateAnswer so the shell can say a restart picks it up.
+   */
+  startDiscovery(
+    target: Env,
+    options: {
+      readonly onLateAnswer?: () => void;
+      readonly delays?: ReadonlyArray<number>;
+      readonly sleep?: (ms: number) => Promise<void>;
+    } = {},
+  ): { readonly first: Promise<boolean>; readonly settled: Promise<boolean> } {
+    let resolveFirst!: (answered: boolean) => void;
+    const first = new Promise<boolean>((resolve) => (resolveFirst = resolve));
+    let attempts = 0;
+    const discover = async () => {
+      let answered = false;
+      try {
+        answered = await this.refresh(target);
+      } catch (error) {
+        this.#options.log?.(`shell environment: ${String(error)}`);
+      }
+      attempts += 1;
+      if (attempts === 1) resolveFirst(answered);
+      else if (answered) options.onLateAnswer?.();
+      return answered;
+    };
+    const probes = this.#options.probes ?? this.#probes;
+    const settled = discoverWithRetries(discover, this.#options.platform, () => probes.allGone, {
+      ...(options.delays ? { delays: options.delays } : {}),
+      ...(options.sleep ? { sleep: options.sleep } : {}),
+      ...(this.#options.log ? { log: this.#options.log } : {}),
+    });
+    return { first, settled };
   }
 
   /** Asks the login shell; true when the person's own shell answered with a PATH. */

@@ -1,9 +1,12 @@
-// Lifted from GOAT v1 packages/shared/src/cliPath.ts (origin/dev 916b5ccc1b2): verbatim except the retry delays and
-// the "PATH not read yet" provider note (no provider messages in the shell).
+// Lifted from GOAT v1 packages/shared/src/cliPath.ts (origin/dev 916b5ccc1b2): verbatim except the
+// "PATH not read yet" provider note (no provider messages in the shell).
 const POSIX_PATH_DELIMITER = ":";
 
 /** VS Code's default for the same probe (application.shellEnvironmentResolutionTimeout). */
 export const POSIX_LOGIN_SHELL_PROBE_TIMEOUT_MS = 10_000;
+
+/** Gaps before each further login-shell probe after one fails; the length bounds the retries. */
+export const LOGIN_SHELL_RETRY_DELAYS_MS: ReadonlyArray<number> = [30_000, 120_000, 600_000];
 
 
 // Never trimmed: a folder name may end in a space.

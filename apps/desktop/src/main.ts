@@ -11,7 +11,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, screen, shell } from "electron";
 import { HostSupervisor, type HostState } from "./hostSupervisor.ts";
 import {
   getDesktopScheme,
@@ -506,22 +506,39 @@ if (!app.requestSingleInstanceLock()) {
     // Without one (first launch, new shell), every host start waits for the probe, the menu's Start
     // Host included: started from Finder the host would otherwise not find codex & co, and a running
     // host cannot take the answer later (review shellenv-4).
+    // v1 retries a login shell that does not answer (30 s, 2 min, 10 min, review shellenv2-1); a later
+    // answer reaches the next host start, and Restart Host… applies it to the running one.
     const cached = shellEnvironment.installCached(hostEnv);
-    const refreshed = shellEnvironment
-      .refresh(hostEnv)
-      .then((answered) => {
-        log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer"}`);
-      })
-      .catch((error: unknown) => {
-        log(`shell environment: ${String(error)}`);
-      });
+    const discovery = shellEnvironment.startDiscovery(hostEnv, {
+      onLateAnswer: () => {
+        log("shell environment: the login shell answered on a retry; Restart Host… gives the running host its PATH");
+      },
+    });
+    void discovery.first.then((answered) => {
+      log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer (retrying)"}`);
+    });
     log(`shell environment: ${cached ? "cached answer applied" : "no cached answer, waiting for the login shell"}`);
-    const hostEnvironmentReady: Promise<void> = cached ? Promise.resolve() : refreshed;
+    const hostEnvironmentReady: Promise<unknown> = cached ? Promise.resolve() : discovery.first;
     const startHost = () => void hostEnvironmentReady.then(() => supervisor.start());
+    const restartHost = () => {
+      const win = mainWindow();
+      const options = {
+        type: "warning" as const,
+        message: "Restart the host?",
+        detail: "Work that is running ends, as when the app quits.",
+        buttons: ["Restart Host", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+      };
+      void (win ? dialog.showMessageBox(win, options) : dialog.showMessageBox(options)).then(({ response }) => {
+        if (response === 0) void hostEnvironmentReady.then(() => supervisor.restart());
+      });
+    };
     configureApplicationMenu({
       displayName: DISPLAY_NAME,
       platform: process.platform,
       startHost,
+      restartHost,
       zoomMain,
       runMainContentsCommand,
     });

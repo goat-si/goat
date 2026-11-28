@@ -168,6 +168,8 @@ export class HostSupervisor {
       this.#restartTimer = null;
     }
     this.#stopPromise = (async () => {
+      // A restart in progress is ending the old group; it sees #stopping and starts nothing new.
+      if (this.#restartInProgress !== null) await this.#restartInProgress;
       const child = this.#child;
       if (child?.pid !== undefined) {
         this.#set({ phase: "stopping" });
@@ -181,6 +183,40 @@ export class HostSupervisor {
       this.#set({ phase: "stopped", pid: null });
     })();
     return this.#stopPromise;
+  }
+
+  #restartInProgress: Promise<void> | null = null;
+
+  /**
+   * Ends the running host and its whole group on purpose, then starts a fresh one (menu "Restart
+   * Host…", e.g. to pick up a login-shell PATH that arrived after the host started). Not a crash:
+   * the old host's exit is ignored and the recovery budget is reset as by start().
+   */
+  restart(): Promise<void> {
+    if (this.#stopping) return Promise.resolve();
+    if (this.#restartInProgress !== null) return this.#restartInProgress;
+    this.#restartInProgress = (async () => {
+      if (this.#restartTimer !== null) {
+        clearTimeout(this.#restartTimer);
+        this.#restartTimer = null;
+      }
+      const child = this.#child;
+      // A new generation first, so the old host's exit is not taken for a crash.
+      this.#generation += 1;
+      this.#child = null;
+      this.#log("host restart requested");
+      this.#set({ phase: "restarting", pid: null, announce: null });
+      if (child?.pid !== undefined) {
+        const empty = await killGroup(child.pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
+        if (!empty) this.#log(`host group ${child.pid} still has processes after SIGKILL`);
+      }
+      await this.#recovering;
+      if (this.#stopping) return;
+      this.start();
+    })().finally(() => {
+      this.#restartInProgress = null;
+    });
+    return this.#restartInProgress;
   }
 
   #recovering: Promise<void> = Promise.resolve();

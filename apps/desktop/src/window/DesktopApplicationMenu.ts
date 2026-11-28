@@ -1,7 +1,8 @@
 // Lifted from GOAT v1 apps/desktop/src/window/DesktopApplicationMenu.ts (adapted): same template,
 // order, labels and accelerators, without the items whose features GOAT 2 does not have yet
 // (Check for Updates, Settings..., Paste as Text, "Let GOAT Use a Browser Tab…"). v1's
-// "Server recovery..." is "Start Host" here: it leaves the host's crash-loop pause.
+// "Server recovery..." is "Start Host" (leaves the host's crash-loop pause) and "Restart Host…"
+// (asks first, then ends the running host and starts a fresh one) here.
 import { Menu, webContents, type MenuItemConstructorOptions } from "electron";
 
 export type MainWindowZoomDirection = "in" | "out" | "reset";
@@ -11,6 +12,7 @@ export interface DesktopApplicationMenuActions {
   readonly displayName: string;
   readonly platform: NodeJS.Platform;
   readonly startHost: () => void;
+  readonly restartHost: () => void;
   readonly zoomMain: (direction: MainWindowZoomDirection) => void;
   readonly runMainContentsCommand: (command: MainWindowContentsCommand) => void;
 }
@@ -46,6 +48,7 @@ export function buildApplicationMenuTemplate(
       label: "File",
       submenu: [
         { label: "Start Host", click: actions.startHost },
+        { label: "Restart Host…", click: actions.restartHost },
         {
           label: "Close Developer Tools",
           accelerator: "CmdOrCtrl+W",

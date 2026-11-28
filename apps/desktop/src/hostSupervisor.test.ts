@@ -236,6 +236,40 @@ test("a host that announced but never passed /health and exits 0 is not restarte
   await h.supervisor.stop();
 });
 
+test("restart() replaces the host and its whole group, and is not a crash", async () => {
+  const h = await harness("grandchild,ignore-term");
+  h.supervisor.start();
+  await h.reached("ready");
+  await until(() => h.pids("agent").length === 1);
+  const [oldHost] = h.pids("host");
+  const [oldAgent] = h.pids("agent");
+  assert.ok(oldHost !== undefined && oldAgent !== undefined);
+  await h.supervisor.restart();
+  await h.reached("ready");
+  assert.equal(h.pids("host").length, 2);
+  assert.equal(alive(oldHost), false);
+  assert.equal(alive(oldAgent), false, "the old host's agent survived the restart");
+  assert.equal(h.supervisor.state.restarts, 0);
+  assert.equal(h.supervisor.state.lastExit, null, "the old host's exit was taken for a crash");
+  await h.supervisor.stop();
+});
+
+test("stop() during restart() ends the old group and starts nothing", async () => {
+  const h = await harness("grandchild,ignore-term");
+  h.supervisor.start();
+  await h.reached("ready");
+  await until(() => h.pids("agent").length === 1);
+  const restarting = h.supervisor.restart();
+  await h.supervisor.stop();
+  // Quitting ends the work: when stop() returns, the old group must already be gone.
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false, "stop() returned before the old group was gone");
+  await restarting;
+  await settle(300);
+  assert.equal(h.pids("host").length, 1);
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+  assert.equal(h.supervisor.state.phase, "stopped");
+});
+
 test("a /health redirect to a 200 page is not ready", async () => {
   const h = await harness("health-redirect");
   h.supervisor.start();
