@@ -98,6 +98,8 @@ pub struct AcpEngineFactory {
     mcp_bridge: Option<McpBridgeCommand>,
     /// A provider probe: never sign in when the agent asks (v1 probe.ts `authenticateOnAuthRequired: false`).
     probe: bool,
+    /// Instance settings for [EngineFactory::probe] (see [crate::probe::ProbeConfig]).
+    pub(crate) probe_config: Arc<crate::probe::ProbeConfig>,
 }
 
 impl AcpEngineFactory {
@@ -109,6 +111,7 @@ impl AcpEngineFactory {
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             mcp_bridge: McpBridgeCommand::locate(),
             probe: false,
+            probe_config: Arc::default(),
         }
     }
 
@@ -1512,6 +1515,13 @@ impl EngineFactory for AcpEngineFactory {
 
     fn capabilities(&self) -> ProviderCapabilities {
         self.flavor.capabilities()
+    }
+
+    /// v1's status check for the flavor's driver kind (see [crate::probe::probe_provider]): Grok
+    /// and fx read their CLIs, Antigravity resolves its runtime without starting it, registry
+    /// agents open a probe session. Failures are reported in the result, as v1 snapshots do.
+    async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        Ok(crate::probe::probe_provider(self).await)
     }
 }
 
