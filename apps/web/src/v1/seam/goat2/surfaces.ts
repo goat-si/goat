@@ -17,3 +17,10 @@ export type { Goat2ProviderEntry } from "./providerPort";
 // The host's entries are validated where they enter v1 (toServerProvider decodes with v1's ServerProvider schema),
 // so the boundary accepts the plain GOAT 2 shape.
 export const installProviderPort: typeof Api.installProviderPort = (port) => installPort(port as ProviderPort | null);
+
+import { SettingsNavFrame } from "./SettingsNavFrame";
+export const SettingsSidebarNav: typeof Api.SettingsSidebarNav = SettingsNavFrame;
+
+import { setGoat2Location, setGoat2Navigator } from "../npm/tanstack-react-router";
+export const setSettingsLocation: typeof Api.setSettingsLocation = setGoat2Location;
+export const setSettingsNavigator: typeof Api.setSettingsNavigator = setGoat2Navigator;

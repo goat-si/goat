@@ -53,3 +53,19 @@ export interface ProviderPortShape {
 
 /** Installs (or with null removes) the port the lifted provider screens read through. */
 export declare const installProviderPort: (port: ProviderPortShape | null) => void;
+
+/** Settings sections and provider search, rendered inside v1's sidebar context. */
+export declare const SettingsSidebarNav: ComponentType<{ pathname: string; placement?: "page" | "app-sidebar" }>;
+
+/** Connect v1 navigation to the GOAT 2 Settings frame. */
+export interface SettingsNavigationOptions {
+  readonly to?: string;
+  readonly hash?: string;
+  readonly search?: Record<string, unknown> | ((previous: Record<string, unknown>) => Record<string, unknown>);
+  readonly replace?: boolean;
+  readonly state?: { readonly settingsTargetHighlight?: boolean };
+  readonly hashScrollIntoView?: boolean;
+  readonly resetScroll?: boolean;
+}
+export declare const setSettingsLocation: (location: { readonly pathname: string; readonly hash: string; readonly search: Record<string, unknown>; readonly state: { readonly settingsTargetHighlight?: boolean } }) => void;
+export declare const setSettingsNavigator: (navigate: (options: SettingsNavigationOptions) => void) => void;

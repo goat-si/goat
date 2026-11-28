@@ -1,0 +1,14 @@
+apps/web/src/components/settings/SettingsSidebarNav.tsx
+apps/web/src/components/settings/settingsNav.ts
+apps/web/src/components/settings/settingsSectionNavigation.ts
+apps/web/src/components/settings/SettingsSearchShortcut.tsx
+apps/web/src/components/settings/settingsScope.ts
+apps/web/src/components/ui/sidebar.tsx
+apps/web/src/components/ui/sheet.tsx
+apps/web/src/components/ui/sidebarState.ts
+apps/web/src/hooks/useResizeDrag.ts
+apps/web/src/lib/accessibilityAnnouncements.ts
+apps/web/src/cloud/publicConfig.ts
+apps/web/src/hooks/useLocalStorage.ts
+packages/shared/src/relayAuth.ts
+packages/shared/src/relayUrl.ts

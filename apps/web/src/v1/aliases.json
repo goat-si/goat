@@ -100,6 +100,8 @@
   "@goat/shared/path": "apps/web/src/v1/packages/shared/src/path.ts",
   "@goat/shared/projectFavicon": "apps/web/src/v1/packages/shared/src/projectFavicon.ts",
   "@goat/shared/projectScripts": "apps/web/src/v1/packages/shared/src/projectScripts.ts",
+  "@goat/shared/relayAuth": "apps/web/src/v1/packages/shared/src/relayAuth.ts",
+  "@goat/shared/relayUrl": "apps/web/src/v1/packages/shared/src/relayUrl.ts",
   "@goat/shared/searchRanking": "apps/web/src/v1/packages/shared/src/searchRanking.ts",
   "@goat/shared/semver": "apps/web/src/v1/packages/shared/src/semver.ts",
   "@goat/shared/serverSettings": "apps/web/src/v1/packages/shared/src/serverSettings.ts",

@@ -308,6 +308,12 @@
       "@goat/shared/projectScripts": [
         "./src/v1/packages/shared/src/projectScripts.ts"
       ],
+      "@goat/shared/relayAuth": [
+        "./src/v1/packages/shared/src/relayAuth.ts"
+      ],
+      "@goat/shared/relayUrl": [
+        "./src/v1/packages/shared/src/relayUrl.ts"
+      ],
       "@goat/shared/searchRanking": [
         "./src/v1/packages/shared/src/searchRanking.ts"
       ],
