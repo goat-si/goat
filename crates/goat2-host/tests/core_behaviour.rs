@@ -3211,3 +3211,52 @@ async fn an_engine_closed_keyed_signin_closes_and_is_never_answered() {
         "the engine is never answered for a key it closed"
     );
 }
+
+#[tokio::test]
+async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: turn.clone(),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    // A is replaced by B while declines fail: A waits for a retry.
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-8902"));
+    eventually("A decline failed", || answers("KEY-A-8901") == 1).await;
+    t.fake.fail_answers(false);
+    // The engine closes A itself; a repeat of A and the run end never answer it again.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-A-8901".into(),
+        },
+    );
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B declined at run end", || answers("KEY-B-8902") == 1).await;
+    assert_eq!(
+        answers("KEY-A-8901"),
+        1,
+        "A is not retried after the engine closed it"
+    );
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "a closed key opens no new request"
+    );
+}

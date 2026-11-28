@@ -982,6 +982,10 @@ impl Actor {
                     self.settled_signin_keys.insert(key.clone());
                     self.host.forget_signin_link(&request_id);
                     request = Some(request_id);
+                } else if request.is_none() && self.undeclined_signin_keys.contains(&key) {
+                    // A replaced key whose decline failed: the engine closed it, so no retry.
+                    self.undeclined_signin_keys.retain(|k| *k != key);
+                    self.settled_signin_keys.insert(key.clone());
                 }
                 if let Some(request_id) = request
                     && self.is_open(&request_id)
