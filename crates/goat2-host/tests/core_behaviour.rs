@@ -1732,7 +1732,7 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
     .await;
     let opened = signins(&t, &id);
     assert_eq!(opened.len(), 1);
-    assert_eq!(opened[0].summary, "Sign in to Codex at the sign-in link");
+    assert_eq!(opened[0].summary, "Sign in to continue");
     assert_eq!(opened[0].run_id.as_ref(), last_run(&t, &id).as_ref());
     // The full link is held in memory for the providers module, never written to disk.
     let links = t.host.signin_links();
@@ -1786,7 +1786,8 @@ async fn a_sign_in_for_an_ended_turn_is_dropped_and_run_end_closes_the_current_o
         1,
         "only the running turn's sign-in: {opened:?}"
     );
-    assert_eq!(opened[0].summary, "fresh");
+    assert_eq!(opened[0].summary, "Sign in to continue");
+    assert_eq!(t.host.signin_links()[0].url, "https://fresh.invalid/login");
     assert_eq!(opened[0].run_id.as_ref(), last_run(&t, &id).as_ref());
     // A repeat in the same run refreshes the link without a second request.
     t.fake.emit(
@@ -1845,25 +1846,32 @@ async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
 }
 
 #[tokio::test]
-async fn a_sign_in_url_only_in_the_message_stays_out_of_the_log() {
-    let t = setup(manual()).await;
-    let id = start_user_thread(&t, "auth-message", Some("hello")).await;
-    eventually("running", || running(&t, &id)).await;
-    t.fake.emit(
-        &id,
-        goat2_host::engine::EngineEvent::AuthRequired {
-            turn_id: t.fake.active_turn(&id),
-            url: None,
-            message: "Open https://host.invalid/device/SECRET-PATH to sign in".into(),
-        },
-    );
-    eventually("needs you: signin", || signins(&t, &id).len() == 1).await;
-    assert_eq!(
-        signins(&t, &id)[0].summary,
-        "Open the sign-in link to sign in"
-    );
-    assert!(t.host.signin_links().is_empty(), "no url field, no link");
-    assert!(!data_contains(&t, "SECRET-PATH"));
+async fn a_sign_in_message_never_reaches_the_log() {
+    // Secrets in forms a redaction would miss: a URL only in the message, a mailto: link, a
+    // bracket inside a URL path, and a bare code.
+    let messages = [
+        "Open https://host.invalid/device/SECRET-PATH to sign in",
+        "Mail mailto:auth@host.invalid?body=SECRET-MAIL to sign in",
+        "Open https://host.invalid/a_(b)/SECRET-PAREN to sign in",
+        "Enter code SECRET-CODE at the device page",
+    ];
+    for (n, message) in messages.into_iter().enumerate() {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, &format!("auth-message-{n}"), Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                turn_id: t.fake.active_turn(&id),
+                url: None,
+                message: message.into(),
+            },
+        );
+        eventually("needs you: signin", || signins(&t, &id).len() == 1).await;
+        assert_eq!(signins(&t, &id)[0].summary, "Sign in to continue");
+        assert!(t.host.signin_links().is_empty(), "no url field, no link");
+        assert!(!data_contains(&t, "SECRET"), "{message}");
+    }
 }
 
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {

@@ -969,7 +969,7 @@ impl Actor {
                     run_id: run_id.clone(),
                     item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
                     kind: RequestKind::Signin,
-                    summary: signin_summary(&message, url.as_deref()),
+                    summary: SIGNIN_SUMMARY.to_owned(),
                     options: None,
                     recommended: None,
                 })]);
@@ -1455,55 +1455,11 @@ impl Actor {
     }
 }
 
-/// The bounded `request.opened` summary of a sign-in: the engine's message with the sign-in URL
-/// and every other URL in it (any `scheme://`) replaced by "the sign-in link", since codes and
-/// tokens can sit in the path as well as the query. The full link stays in memory
-/// ([crate::core::SigninLink]).
-fn signin_summary(message: &str, url: Option<&str>) -> String {
-    let text = match url.map(str::trim).filter(|u| !u.is_empty()) {
-        Some(url) => message.replace(url, SIGNIN_LINK),
-        None => message.to_owned(),
-    };
-    let text = redact_urls(&text);
-    let text = text.trim();
-    let text = if text.is_empty() {
-        "Sign in to continue"
-    } else {
-        text
-    };
-    goat2_contracts::text::clamp_chars(text, goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS)
-}
-
-const SIGNIN_LINK: &str = "the sign-in link";
-
-/// `text` with every `scheme://…` URL replaced by [SIGNIN_LINK]. A URL runs to the next
-/// whitespace or closing bracket or quote; trailing sentence punctuation stays in the text.
-fn redact_urls(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(sep) = rest.find("://") {
-        // The scheme: letters, digits, `+`, `-`, `.` directly before `://`.
-        let start = rest[..sep]
-            .char_indices()
-            .rev()
-            .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-            .last()
-            .map_or(sep, |(i, _)| i);
-        out.push_str(&rest[..start]);
-        let url = &rest[start..];
-        let mut end = url
-            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | ']' | '"' | '\''))
-            .unwrap_or(url.len());
-        let min_end = sep - start + "://".len();
-        while end > min_end && url[..end].ends_with(['.', ',', ';', ':', '!', '?']) {
-            end -= 1;
-        }
-        out.push_str(SIGNIN_LINK);
-        rest = &url[end..];
-    }
-    out.push_str(rest);
-    out
-}
+/// The persisted `request.opened` summary of a sign-in. It is constant: an engine message can
+/// carry codes or tokens in forms no redaction reliably finds (URL paths, `mailto:`, brackets in
+/// a path, bare codes), so none of it goes to `goat.jsonl`. The message and link stay in memory
+/// only ([crate::core::SigninLink]).
+const SIGNIN_SUMMARY: &str = "Sign in to continue";
 
 /// The parent's wake input for a child result. The clientRequestId names (child, child run).
 pub(crate) fn wake_input(outcome: &ChildOutcome, child_title: &str) -> NewInput {
@@ -1552,52 +1508,4 @@ fn take_batch(pending: &[QueuedInput]) -> Vec<QueuedInput> {
         .take_while(|q| same(head, q))
         .cloned()
         .collect()
-}
-
-#[cfg(test)]
-mod signin_summary_tests {
-    use super::signin_summary;
-    use goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS;
-
-    #[test]
-    fn every_url_stays_out_of_the_summary() {
-        let url = "https://auth.example.invalid/device?user_code=SECRET-1&state=s2";
-        let message = format!(
-            "Open {url} to sign in, or see (https://docs.example.invalid/help?token=SECRET-2#frag)."
-        );
-        let summary = signin_summary(&message, Some(url));
-        assert_eq!(
-            summary,
-            "Open the sign-in link to sign in, or see (the sign-in link)."
-        );
-        assert!(!summary.contains("SECRET"));
-    }
-
-    #[test]
-    fn urls_are_redacted_without_a_url_field_and_with_tokens_in_the_path() {
-        let summary = signin_summary(
-            "Visit https://host.invalid/device/SECRET-PATH. Then return to vscode://auth/cb/SECRET-CB, done",
-            None,
-        );
-        assert_eq!(
-            summary,
-            "Visit the sign-in link. Then return to the sign-in link, done"
-        );
-        assert!(!summary.contains("SECRET"));
-        // A URL field that is not in the message changes nothing else.
-        assert_eq!(
-            signin_summary("Sign in", Some("https://elsewhere.invalid/x")),
-            "Sign in"
-        );
-    }
-
-    #[test]
-    fn a_long_message_is_bounded_and_an_empty_one_gets_a_default() {
-        let long = "x".repeat(NEEDS_YOU_SUMMARY_MAX_CHARS * 3);
-        let summary = signin_summary(&long, Some("https://example.invalid/login"));
-        assert!(summary.chars().count() <= NEEDS_YOU_SUMMARY_MAX_CHARS);
-        let url = "https://example.invalid/login?code=1";
-        assert_eq!(signin_summary(url, Some(url)), "the sign-in link");
-        assert_eq!(signin_summary("  ", None), "Sign in to continue");
-    }
 }
