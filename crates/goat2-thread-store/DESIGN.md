@@ -81,8 +81,8 @@ unsupported: append / read / read_page / settle return `UnsupportedEvent`; `read
 
 | Call | Condition | Result |
 |---|---|---|
-| read(None) | latest eligible checkpoint C (its fold has every Fold field) with suffix after it <= 128 lines and <= 1 MiB | snapshot C + suffix |
-| read(None) | no checkpoint and whole log within limits | all lines |
+| read(None) | latest checkpoint C with suffix after it <= 128 lines and <= 1 MiB (only once the full contract Fold lands; before that no checkpoint is ever selected) | snapshot C + suffix |
+| read(None) | no selectable checkpoint and whole log within limits | all lines |
 | read(None) | otherwise | snapshot of the current {card, fold} at head, no lines (history via read_page) |
 | read(c) | folder missing | reset ThreadMissing |
 | read(c) | epoch differs / seq > head | reset EpochChanged / InvalidCursor + read(None) |
@@ -112,8 +112,9 @@ following symlinks.
 activeRunReachedEngine, queuedInputIds, heldInputs, openRequests, runningChildIds, lastRunOutcome,
 counters. Until lane C merges the added fields, `src/contract.rs` defines that exact shape as
 `StoreFold` (used in card.json) and re-exports everything else from `goat2-contracts`. Until then the
-store writes no checkpoint lines (a lossy line would stay in the log forever); reads that need a
-snapshot get the current {card, fold} from memory instead. The store never restores its own state
+store neither writes nor selects checkpoint lines (a lossy line would stay in the log forever);
+checkpoint lines written by other builds are plain history. Reads that need a snapshot get the current
+{card, fold} from memory in `ThreadRead.snapshot`. The store never restores its own state
 from a checkpoint. `input.changed` (15th SSOT event) is treated as unknown until the contract has it.
 Rules: input.accepted -> queue; input.delivered
 accepted -> leaves the queue; declined -> stays queued and leaves activeRunInputIds; unknown -> held
