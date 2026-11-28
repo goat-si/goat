@@ -12,9 +12,7 @@ pub(super) async fn probe(
     binary: &Path,
     profile: PiProfile,
 ) -> Result<ProviderProbeResult, EngineError> {
-    let checked_at = time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|e| EngineError::Transport(e.to_string()))?;
+    let checked_at = super::events::now();
     let mut command = tokio::process::Command::new(binary);
     command.arg("--version").kill_on_drop(true);
     for (key, _) in std::env::vars_os() {

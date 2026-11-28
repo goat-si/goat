@@ -115,11 +115,11 @@ impl Connection {
                 }
                 if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&line) {
                     let record = Value::Object(map);
-                    match dialect.response(&record) {
-                        Some((id, result)) => self.complete(&id, result.map_err(CallError::Remote)),
-                        None => {
-                            let _ = tx.send(Inbound::Record(record));
-                        }
+                    let delivered = dialect.response(&record).is_some_and(|(id, result)| {
+                        self.complete(&id, result.map_err(CallError::Remote))
+                    });
+                    if !delivered {
+                        let _ = tx.send(Inbound::Record(record));
                     }
                 }
             }
@@ -128,10 +128,13 @@ impl Connection {
         }
     }
 
-    fn complete(&self, id: &str, result: Result<Value, CallError>) {
+    fn complete(&self, id: &str, result: Result<Value, CallError>) -> bool {
         let sender = self.pending.lock().ok().and_then(|mut map| map.remove(id));
         if let Some(sender) = sender {
             let _ = sender.send(result);
+            true
+        } else {
+            false
         }
     }
 
