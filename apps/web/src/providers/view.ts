@@ -28,8 +28,10 @@ export function providerState(e: ServerProviderEntry): ProviderState {
   if (!p.installed || p.cli === "missing") {
     return e.setup?.canInstall ? { dot: "blue", word: "Not installed", need: "install", busy: null } : { dot: "red", word: "Not found on this Mac", need: "install", busy: null };
   }
-  if (p.status === "error") return { dot: "red", word: "Needs repair", need: "repair", busy: null };
+  // Not signed in comes before a failure: a driver that cannot start without sign-in reports both (Claude:
+  // status error + unauthenticated, "Run `claude auth login`"); signing in is the next step.
   if (p.auth.status === "unauthenticated" || p.auth.action) return { dot: "blue", word: "Needs sign-in", need: "sign-in", busy: null };
+  if (p.status === "error") return { dot: "red", word: "Needs repair", need: "repair", busy: null };
   if (p.status === "ready") return { dot: "green", word: "Ready", need: "none", busy: null };
   if (p.status === "disabled") return { dot: "grey", word: "Unavailable", need: "unknown", busy: null };
   // The host keeps a turned-on provider listed while its probe runs (lane E: "Checking status…").

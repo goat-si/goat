@@ -29,6 +29,9 @@ describe("state", () => {
     expect(providerState(byId(list, "claudeAgent"))).toMatchObject({ dot: "blue", word: "Needs sign-in", need: "sign-in" });
     expect(providerState(byId(list, "antigravity"))).toMatchObject({ dot: "blue", need: "sign-in" }); // pending engine sign-in link
     expect(providerState(byId(list, "omo"))).toMatchObject({ dot: "red", word: "Needs repair", need: "repair" });
+    // Real host, Claude without sign-in: status error + unauthenticated -> sign in first.
+    expect(providerState({ ...byId(list, "claudeAgent"), probe: { ...byId(list, "claudeAgent").probe, status: "error", message: "Claude Code is not authenticated. Run `claude auth login` and try again." } }))
+      .toMatchObject({ dot: "blue", need: "sign-in" });
     expect(providerState(byId(list, "muse"))).toMatchObject({ dot: "grey", word: "Off" });
     expect(providerState({ ...byId(list, "muse"), enabled: true })).toMatchObject({ dot: "blue", word: "Not installed", need: "install" });
     expect(providerState(byId(list, "acp-kilo"))).toMatchObject({ busy: "installing", word: "Installing · 62%" });
