@@ -236,7 +236,8 @@ export class HostSupervisor {
       this.#generation += 1;
       this.#child = null;
       this.#log("host restart requested");
-      this.#set({ phase: "restarting", pid: null, announce: null });
+      // A crash cleanup holding a group that survived SIGKILL keeps showing "stuck" until it is gone.
+      this.#set({ phase: this.#state.phase === "stuck" ? "stuck" : "restarting", pid: null, announce: null });
       if (child?.pid !== undefined) {
         await this.#endGroup(child.pid);
       }

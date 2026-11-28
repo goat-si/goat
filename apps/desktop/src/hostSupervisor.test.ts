@@ -357,6 +357,27 @@ test("stop() while an old group is stuck returns without waiting out the retry i
   process.kill(-oldHost, "SIGKILL");
 });
 
++test("restart() during a stuck crash cleanup keeps showing the stuck state", async () => {
+  const h = await harness("grandchild,crash-first-after-ready", { killGroup: survivesFirstKill(), stuckRetryMs: 400 });
+  h.supervisor.start();
+  await h.reached("stuck");
+  const stuckGroup = h.supervisor.state.stuckGroup;
+  assert.notEqual(stuckGroup, null);
+  const restarting = h.supervisor.restart();
+  assert.equal(h.supervisor.state.phase, "stuck", "Restart Host hid the group that will not exit");
+  assert.equal(h.supervisor.state.stuckGroup, stuckGroup);
+  await settle(150);
+  assert.equal(h.supervisor.state.phase, "stuck");
+  assert.equal(h.pids("host").length, 1);
+  await restarting;
+  await h.reached("ready");
+  assert.equal(h.supervisor.state.stuckGroup, null);
+  await settle(200);
+  assert.equal(h.pids("host").length, 2, "restart after a stuck cleanup did not start exactly one host");
+  await h.supervisor.stop();
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
 test("stop() during restart() ends the old group and starts nothing", async () => {
   const h = await harness("grandchild,ignore-term");
   h.supervisor.start();
