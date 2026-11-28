@@ -6,7 +6,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NetService from "@goat/shared/Net";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { assert, describe, it } from "@effect/vitest";
+import { afterAll, assert, describe, it } from "@effect/vitest";
 import * as ByteSize from "effect/ByteSize";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
@@ -51,9 +51,13 @@ function mockProcess(exit: number | PlatformError.PlatformError) {
   });
 }
 
+// The runner locks its home on disk, so tests never point it at a shared path.
+const devServerHome = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-dev-runner-"));
+afterAll(() => NodeFS.rmSync(devServerHome, { recursive: true, force: true }));
+
 const devServerInput = {
   mode: "dev:server",
-  goatHome: "/tmp/goat-dev-runner",
+  goatHome: devServerHome,
   browser: undefined,
   autoBootstrapProjectFromCwd: undefined,
   logWebSocketEvents: undefined,
@@ -580,11 +584,11 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const path = yield* Path.Path;
           const root = yield* makeWorktree;
           const home = yield* spawnedHome({
-            goatHome: "/tmp/explicit-home",
+            goatHome: path.join(root, "explicit-home"),
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: path.join(root, "ambient-home"),
           });
-          assert.equal(home, path.resolve("/tmp/explicit-home"));
+          assert.equal(home, path.join(path.resolve(root), "explicit-home"));
         }).pipe(Effect.scoped),
       );
 
@@ -595,7 +599,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const home = yield* spawnedHome({
             goatHome: "   ",
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: path.join(root, "ambient-home"),
           });
           assert.equal(home, path.join(path.resolve(root), ".goat"));
         }).pipe(Effect.scoped),
@@ -611,7 +615,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const home = yield* spawnedHome({
             goatHome: undefined,
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: path.join(root, "ambient-home"),
           });
           assert.equal(home, path.join(path.resolve(root), ".t3"));
         }).pipe(Effect.scoped),
@@ -643,6 +647,8 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
                 Effect.provideService(HostProcess.WorkingDirectory, root),
                 Effect.provideService(HostProcess.HomeDirectory, home),
                 Effect.provideService(HostProcess.Environment, {}),
+                // Each run is its own runner process, which releases the state directory lock.
+                Effect.scoped,
               );
               return spawned.filter((args) =>
                 args.some((arg) => arg.endsWith("migrate-dev-db.ts")),
@@ -840,13 +846,15 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       it.effect("falls back to an ambient GOAT_HOME outside a worktree", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;
+          const root = yield* makeWorktree;
+          const ambientHome = path.join(root, "ambient-home");
           const home = yield* spawnedHome({
             goatHome: undefined,
             cwd: NodeOS.tmpdir(),
-            ambientHome: "/home/user/.t3",
+            ambientHome,
           });
-          assert.equal(home, path.resolve("/home/user/.t3"));
-        }),
+          assert.equal(home, path.resolve(ambientHome));
+        }).pipe(Effect.scoped),
       );
 
       it.effect("prefers the worktree home over an ambient GOAT_HOME", () =>
@@ -856,7 +864,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           const home = yield* spawnedHome({
             goatHome: undefined,
             cwd: root,
-            ambientHome: "/home/user/.t3",
+            ambientHome: path.join(root, "ambient-home"),
           });
           assert.equal(home, path.join(path.resolve(root), ".goat"));
         }).pipe(Effect.scoped),
