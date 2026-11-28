@@ -331,3 +331,20 @@ Per-slice detail and known gaps: crates/goat2-engine-acp/provenance/*.md, crates
 | crates/goat2-host/src/engine/acp.rs (`antigravity_factory`) | apps/server/src/provider/antigravityAuthSupport.ts:183-200 (profile layout), :370-396 (browser helper via `resolveNodeExecutable`), :471-495 (profile preparation); AntigravityInstallation.ts:272-308 (resolution order, through the crate's `resolve_antigravity_executable`) | adapted: `GOAT2_ANTIGRAVITY_BIN`; `node` on the host's PATH runs the browser helper (v1 Electron-as-Node); the browser preflight and managed releases are not carried |
 | crates/goat2-host/src/engine/acp.rs (`registry_catalog`, `registry_agent_factory`) | packages/provider-acp-registry/src/server/AcpRegistrySupport.ts:443-466 (catalog options under the data dir) | adapted: built on the crate's `CatalogOptions::under` and `AcpRegistryCatalog::launch`; not registered until provider targets carry `acpAgentId` |
 | crates/goat2-host/src/server.rs (`grok`, `fx`, `antigravity` in `built_in_factories`), tests/acp_host_token.rs | v1 ProviderDriverKind slugs (apps/web/src/components/settings/providerDriverMeta.ts) | written new (GOAT 2 factory registry; host token rule as lane B / P2-A) |
+## P2-S engine-sdk core (lane goat2_engine_sdk, v1 goat origin/dev 916b5ccc1b2)
+
+| GOAT 2 path | Source | How |
+|---|---|---|
+| crates/goat2-engine-sdk/src/process.rs | GOAT 2 crates/goat2-engine-codex/src/process.rs at origin/goat2_engine_codex c297ed6ee1b | verbatim copy (drivers may not depend on each other, structure/40_deps.md); candidate for a shared crate |
+| crates/goat2-engine-sdk/src/jsonl.rs | packages/provider-pi/src/server/rpc.ts:1,104-133,239-289 | ported to Rust: LF-only framing, trailing CR strip, oversized-record drop, id-matched responses, pending calls fail when the transport goes down |
+| crates/goat2-engine-sdk/src/capabilities/cursor.json | packages/provider-cursor/src/server/capabilities.ts:3-101 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/opencode.json | packages/provider-opencode/src/server/adapterProtocol.ts:27-122 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/muse.json | packages/provider-muse/src/server/capabilities.ts:3-97 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/pi.json | packages/provider-pi/src/server/piToolOutput.ts:7-103 | verbatim; v1 returns it for Pi and OmO (provider-pi/src/server/adapter.ts:138-139) |
+| apps/engine-helper/src/sdkLoader.ts | packages/provider-cursor/src/server/sdk.ts:1-17 | adapted: createRequire loading kept, fake-SDK override is new |
+| apps/engine-helper/src/rejections.ts | packages/provider-cursor/src/server/CursorSdk.ts:14-45 (containRejections use) | adapted: classifier registry; unclassified rejections end only this helper |
+| apps/engine-helper/src/main.ts | packages/provider-pi/src/server/rpc.ts:1 | LF-only framing rule (readline splits U+2028/U+2029) |
+| apps/engine-helper (protocol, server, fake engine, items), crates/goat2-engine-sdk/src/helper.rs | - | new: v1 runs these SDKs in-process in its server; GOAT 2's host is Rust, so one Node helper per thread carries them (crash isolation = process isolation, same as one Codex app-server per thread) |
+
+Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
+
