@@ -1,4 +1,7 @@
-import { EnvironmentRegistry } from "@goat/client-runtime/connection";
+import {
+  EnvironmentRegistry,
+  type SupervisorConnectionState,
+} from "@goat/client-runtime/connection";
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
 import {
   EnvironmentRpcSubscriptionObserver,
@@ -14,6 +17,8 @@ import {
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -198,39 +203,104 @@ export const layer = Layer.effectDiscard(
       }
     };
     const passiveListenerOptions = { passive: true } as const;
+    let disposed = false;
     const inFlight = new Set<EnvironmentId>();
+    const pendingFollowUp = new Set<EnvironmentId>();
+    const stateWatchers = new Map<EnvironmentId, Fiber.Fiber<void, never>>();
+
+    const reportEnvironment: (environmentId: EnvironmentId) => Effect.Effect<void> = Effect.fn(
+      "web.backgroundActivity.reportEnvironment",
+    )(function* (environmentId: EnvironmentId) {
+      if (disposed) return;
+      const entries = yield* SubscriptionRef.get(registry.entries);
+      const entry = entries.get(environmentId);
+      if (entry === undefined || entry.enabled === false) {
+        pendingFollowUp.delete(environmentId);
+        return;
+      }
+      const state = yield* registry.state(environmentId).pipe(Effect.option);
+      if (Option.isNone(state) || state.value.phase !== "connected") {
+        pendingFollowUp.delete(environmentId);
+        return;
+      }
+      if (inFlight.has(environmentId)) {
+        pendingFollowUp.add(environmentId);
+        return;
+      }
+      // Mark in-flight synchronously before forking so overlapping passes never issue duplicate RPCs
+      // and stalled peers cannot delay healthy environment lease renewals.
+      inFlight.add(environmentId);
+      pendingFollowUp.delete(environmentId);
+      const observedAtMs = yield* Clock.currentTimeMillis;
+      yield* registry
+        .run(
+          environmentId,
+          request(
+            WS_METHODS.serverReportClientActivity,
+            createActivityReport(environmentId, lastInteractionAtMs, observedAtMs),
+          ),
+        )
+        // Not `ignore`: tearing down an environment mid-request interrupts its report,
+        // and an interrupt leaking out here would end the reporting loop for good.
+        // The timeout covers a live connection that never answers, which would stall it.
+        .pipe(
+          Effect.timeout(`${REPORT_TIMEOUT_MS} millis`),
+          Effect.ignoreCause,
+          Effect.onExit((exit) =>
+            Effect.suspend(() => {
+              inFlight.delete(environmentId);
+              if (Exit.isSuccess(exit) && !disposed && pendingFollowUp.delete(environmentId)) {
+                return reportEnvironment(environmentId);
+              }
+              return Effect.void;
+            }),
+          ),
+          Effect.forkIn(scope),
+        );
+    });
+
+    const syncStateWatchers = Effect.fn("web.backgroundActivity.syncStateWatchers")(function* (
+      entries: ReadonlyMap<EnvironmentId, { readonly enabled?: boolean }>,
+    ) {
+      if (disposed) return;
+      for (const [environmentId, fiber] of stateWatchers) {
+        const entry = entries.get(environmentId);
+        if (entry === undefined || entry.enabled === false) {
+          stateWatchers.delete(environmentId);
+          pendingFollowUp.delete(environmentId);
+          yield* Fiber.interrupt(fiber);
+        }
+      }
+      if (typeof registry.stateChanges !== "function") return;
+      for (const [environmentId, entry] of entries) {
+        if (entry.enabled === false || stateWatchers.has(environmentId)) continue;
+        let previousPhase: SupervisorConnectionState["phase"] | undefined;
+        const fiber = yield* registry.stateChanges(environmentId).pipe(
+          Stream.runForEach((state) =>
+            Effect.suspend(() => {
+              const becameConnected =
+                previousPhase !== undefined &&
+                previousPhase !== "connected" &&
+                state.phase === "connected";
+              previousPhase = state.phase;
+              return becameConnected ? reportEnvironment(environmentId) : Effect.void;
+            }),
+          ),
+          Effect.ignoreCause,
+          Effect.forkIn(scope),
+        );
+        stateWatchers.set(environmentId, fiber);
+      }
+    });
 
     const report = Effect.gen(function* () {
-      const observedAtMs = yield* Clock.currentTimeMillis;
       const entries = yield* SubscriptionRef.get(registry.entries);
       for (const [environmentId, entry] of entries) {
-        if (entry.enabled === false || inFlight.has(environmentId)) continue;
-        const state = yield* registry.state(environmentId).pipe(Effect.option);
-        if (Option.isNone(state) || state.value.phase !== "connected") continue;
-        // Mark in-flight synchronously before forking so overlapping passes never issue duplicate RPCs
-        // and stalled peers cannot delay healthy environment lease renewals.
-        inFlight.add(environmentId);
-        yield* registry
-          .run(
-            environmentId,
-            request(
-              WS_METHODS.serverReportClientActivity,
-              createActivityReport(environmentId, lastInteractionAtMs, observedAtMs),
-            ),
-          )
-          // Not `ignore`: tearing down an environment mid-request interrupts its report,
-          // and an interrupt leaking out here would end the reporting loop for good.
-          // The timeout covers a live connection that never answers, which would stall it.
-          .pipe(
-            Effect.timeout(`${REPORT_TIMEOUT_MS} millis`),
-            Effect.ignoreCause,
-            Effect.ensuring(
-              Effect.sync(() => {
-                inFlight.delete(environmentId);
-              }),
-            ),
-            Effect.forkIn(scope),
-          );
+        if (entry.enabled === false) {
+          pendingFollowUp.delete(environmentId);
+          continue;
+        }
+        yield* reportEnvironment(environmentId);
       }
     }).pipe(Effect.withSpan("web.backgroundActivity.report"));
 
@@ -247,7 +317,12 @@ export const layer = Layer.effectDiscard(
         window.addEventListener("touchstart", recordInteraction, passiveListenerOptions);
       }),
       () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          disposed = true;
+          pendingFollowUp.clear();
+          const watchers = [...stateWatchers.values()];
+          stateWatchers.clear();
+          yield* Effect.forEach(watchers, Fiber.interrupt, { discard: true });
           retainedScopeListeners.delete(requestReport);
           document.removeEventListener("visibilitychange", requestReport);
           window.removeEventListener("focus", requestReport);
@@ -260,8 +335,11 @@ export const layer = Layer.effectDiscard(
         }),
     );
 
+    yield* SubscriptionRef.get(registry.entries).pipe(Effect.flatMap(syncStateWatchers));
     yield* SubscriptionRef.changes(registry.entries).pipe(
-      Stream.runForEach(() => Effect.sync(requestReport)),
+      Stream.runForEach((entries) =>
+        syncStateWatchers(entries).pipe(Effect.andThen(Effect.sync(requestReport))),
+      ),
       Effect.forkScoped,
     );
     yield* Stream.fromQueue(reportRequests).pipe(
