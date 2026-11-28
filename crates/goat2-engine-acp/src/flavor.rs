@@ -274,9 +274,7 @@ pub fn default_model_write(selection: &ModelSelection, setup: &SessionSetup) -> 
         if current == Some(model) {
             return ModelWrite::Keep;
         }
-        let config_id = option
-            .get("id")
-            .and_then(Value::as_str)
+        let config_id = crate::wire::config_option_id(option)
             .unwrap_or("model")
             .to_owned();
         if select_values(option)

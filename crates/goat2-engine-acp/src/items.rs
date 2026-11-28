@@ -627,16 +627,20 @@ impl TurnProjector {
                     .unwrap_or_else(|| PlanId::new(format!("{}:plan", self.turn_id)));
                 self.plan = Some((plan_id, steps));
             }
+            // v1 acpNoticeContent (noticeProjection.ts:14-24): title, then the description after a
+            // blank line; severities other than info keep the warning treatment.
             "notice" => {
+                let Some(title) = text_field(update, "title") else {
+                    return;
+                };
                 self.close_segments(out);
-                let title = text_field(update, "title").unwrap_or_default();
                 let message = match text_field(update, "description") {
-                    Some(description) => format!("{title}: {description}"),
+                    Some(description) => format!("{title}\n\n{description}"),
                     None => title,
                 };
                 let severity = match update.get("severity").and_then(Value::as_str) {
-                    Some("warning" | "error") => Some(NoticeSeverity::Warning),
-                    _ => Some(NoticeSeverity::Info),
+                    Some("info") => Some(NoticeSeverity::Info),
+                    _ => Some(NoticeSeverity::Warning),
                 };
                 let id = self.new_item_id("notice");
                 let item = self.item(

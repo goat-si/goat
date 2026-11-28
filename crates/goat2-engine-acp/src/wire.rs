@@ -217,6 +217,11 @@ pub fn find_model_config_option(options: &[Value]) -> Option<&Value> {
         })
 }
 
+/// A config option's id (`id`; ACP v2 drafts and v1 effect-acp fixtures say `configId`).
+pub fn config_option_id(option: &Value) -> Option<&str> {
+    str_field(option, "id").or_else(|| str_field(option, "configId"))
+}
+
 /// Every selectable value of a select config option, flattening groups (v1 `flattenSelectChoices`).
 pub fn select_values(option: &Value) -> Vec<(String, String)> {
     let mut out = Vec::new();

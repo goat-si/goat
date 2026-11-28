@@ -1693,7 +1693,9 @@ impl AcpEngineFactory {
             state.modes = setup.modes.clone().or_else(|| parse_modes(&setup.raw));
             state.config_options = setup.config_options.clone();
             state.setup = setup;
-            state.preamble = (!preamble_parts.is_empty()).then(|| preamble_parts.join("\n\n"));
+            // A resumed session already holds what its first prompt carried.
+            state.preamble = (resume_id.is_none() && !preamble_parts.is_empty())
+                .then(|| preamble_parts.join("\n\n"));
         }
         let settings = TurnSettings {
             model_selection: spec.engine.model_selection.clone(),
