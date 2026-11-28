@@ -67,7 +67,8 @@ struct State {
     /// Per-instance generation, bumped by a settings change and by the start of each refresh: a
     /// probe result is applied only if its instance's generation did not move meanwhile.
     gens: HashMap<String, u64>,
-    /// Set after the startup probes: before that nothing is published (no partial first list).
+    /// Set once every listed instance has a row (a probe result or a Checking row): before
+    /// that nothing is published (no partial first list). Probes start on demand.
     ready: bool,
 }
 
@@ -253,8 +254,17 @@ impl Providers {
                     state.auth.insert(id.clone(), idle_auth(&id, methods));
                 }
             }
-            if only.is_none() {
-                state.ready = true;
+            // Ready only when every listed instance has a row: the initial probe's results can
+            // be discarded by a newer refresh or setting, and an empty or partial first list
+            // would read as "no providers".
+            if !state.ready {
+                let factories = &self.factories;
+                let probes = &state.probes;
+                state.ready = state
+                    .instances
+                    .iter()
+                    .filter(|i| factories.contains_key(&i.driver))
+                    .all(|i| probes.contains_key(&i.instance_id));
             }
         }
         self.publish(host);
@@ -371,7 +381,10 @@ impl Providers {
     ) -> Result<ProviderInstallState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
         let state = bounded(factory.install_cancel(operation_id)).await?;
-        self.record_install(host, &instance.driver, state.clone())?;
+        // Cancelling an older operation never replaces the running one's state.
+        self.record_install_if(host, &instance.driver, state.clone(), |current| {
+            current.is_none_or(|i| i.operation_id.as_deref() == Some(operation_id))
+        })?;
         Ok(state)
     }
 
@@ -517,7 +530,8 @@ impl Providers {
     }
 
     /// Rebuild the list and push it when it changed. Built and sent under the state lock, so
-    /// an older list never replaces a newer one. Nothing is published before the startup probes.
+    /// an older list never replaces a newer one. Nothing is published before the first list
+    /// has a row for every listed instance.
     pub fn publish(&self, host: &Host) {
         // Order: providers state, then sign-in links, then store reads (no path takes them the
         // other way round), so the links match the state the list is built from.
@@ -774,7 +788,8 @@ fn valid_sign_in_url(url: &str) -> bool {
 }
 
 /// A driver's sign-in state with an unusable URL dropped (the phase stays): such a URL would
-/// not serialize and would stop the whole providers list and the command reply.
+/// not serialize and would stop the whole providers list and the command reply. A browser or
+/// device-code interaction with such a URL is dropped whole.
 fn clean_auth(instance_id: &str, mut state: ProviderAuthState) -> ProviderAuthState {
     if state
         .authorization_url
@@ -783,6 +798,17 @@ fn clean_auth(instance_id: &str, mut state: ProviderAuthState) -> ProviderAuthSt
     {
         tracing::warn!(instance = %instance_id, "a sign-in URL that is not a valid http(s) URL was dropped");
         state.authorization_url = None;
+    }
+    let bad_interaction = match &state.interaction {
+        Some(Some(
+            goat2_contracts::ProviderAuthInteraction::Browser { url, .. }
+            | goat2_contracts::ProviderAuthInteraction::DeviceCode { url, .. },
+        )) => !valid_sign_in_url(url),
+        _ => false,
+    };
+    if bad_interaction {
+        tracing::warn!(instance = %instance_id, "a sign-in interaction whose URL is not a valid http(s) URL was dropped");
+        state.interaction = None;
     }
     state
 }

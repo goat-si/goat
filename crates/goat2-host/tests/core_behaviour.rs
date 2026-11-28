@@ -2625,7 +2625,7 @@ fn steer_cancelled(turn: &str, ids: Vec<&str>) -> goat2_host::engine::EngineEven
 async fn providers_list_refresh_and_instance_settings() {
     let t = setup(manual()).await;
     t.fake.set_probe(Ok(ready_probe("0.167.0")));
-    // The startup probe may have run before the fake had a probe set: refresh once.
+    // The initial probe may have run before the fake had a probe set: refresh once.
     t.host.command(refresh("prov-0", None)).await.unwrap();
     let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
     assert!(codex.enabled);
@@ -3035,7 +3035,7 @@ async fn a_slow_probe_never_holds_other_commands() {
 
 #[tokio::test]
 async fn a_slow_probe_never_overwrites_a_newer_setting() {
-    // The startup probe is slow; the provider is turned off while it runs.
+    // The initial on-demand probe is slow; the provider is turned off while it runs.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_path_buf();
     let fake = FakeEngine::new(manual());
@@ -3187,6 +3187,45 @@ async fn turning_a_provider_back_on_never_sends_an_empty_list() {
         }
         assert_eq!(codex.probe.message.as_deref(), Some("Checking status…"));
     }
+}
+
+#[tokio::test]
+async fn a_refresh_during_the_initial_probe_never_sends_an_empty_first_list() {
+    // A UI subscribes (starting the initial probe) and refreshes at once: the refresh makes
+    // the initial probe's results stale, yet the first list must still list the provider.
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    let mut rx = t.host.watch_providers();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host.command(refresh("first-1", None)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), rx.changed())
+        .await
+        .expect("a first list")
+        .unwrap();
+    let list = rx.borrow_and_update().clone().unwrap();
+    let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+    assert!(codex.is_some(), "first published list: {list:?}");
+    assert_eq!(codex.unwrap().probe.version.as_deref(), Some("0.167.0"));
+}
+
+#[tokio::test]
+async fn providers_are_probed_on_demand_and_once() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(t.fake.probes(), 0, "no probe at startup");
+    // A full refresh before anyone subscribes is the initial probe.
+    t.host.command(refresh("once-1", None)).await.unwrap();
+    let _a = t.host.watch_providers();
+    let _b = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        t.fake.probes(),
+        1,
+        "subscriptions after a full refresh probe nothing more"
+    );
 }
 
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {

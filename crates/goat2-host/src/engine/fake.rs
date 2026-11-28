@@ -95,6 +95,8 @@ struct Shared {
     probe: Option<Result<goat2_contracts::ProviderProbeResult, EngineError>>,
     /// How long a probe takes.
     probe_delay: Duration,
+    /// How many probes ran.
+    probes: usize,
     /// Provider sign-in/install: `None` = Unsupported (the trait defaults).
     setup: Option<goat2_contracts::ProviderSetup>,
     auth: Option<(
@@ -183,6 +185,11 @@ impl FakeEngine {
     /// Make every probe take `delay`.
     pub fn set_probe_delay(&self, delay: Duration) {
         self.shared.lock().expect("fake").probe_delay = delay;
+    }
+
+    /// How many probes ran so far.
+    pub fn probes(&self) -> usize {
+        self.shared.lock().expect("fake").probes
     }
 
     /// Offer sign-in (`methods`, answering a start with `start`) and install (answering with
@@ -368,7 +375,8 @@ impl EngineFactory for FakeEngine {
 
     async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
         let (probe, delay) = {
-            let shared = self.shared.lock().expect("fake");
+            let mut shared = self.shared.lock().expect("fake");
+            shared.probes += 1;
             (shared.probe.clone(), shared.probe_delay)
         };
         tokio::time::sleep(delay).await;

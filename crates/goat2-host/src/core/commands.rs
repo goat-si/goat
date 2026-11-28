@@ -444,6 +444,10 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                     .providers
                     .check_listed(id)
                     .map_err(provider_refusal)?;
+            } else {
+                // A full refresh is the initial probe when it comes first: the first
+                // subscription must not probe every CLI again.
+                host.inner.providers.claim_initial_probe();
             }
             let probing = host.clone();
             let task = tokio::spawn(async move {
