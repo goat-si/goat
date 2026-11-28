@@ -129,11 +129,7 @@ fn invalid_inputs_are_rejected() {
         let root = path.split('/').nth(1).unwrap();
         let value: Value = serde_json::from_str(&text).unwrap();
         assert!(!validator(root).is_valid(&value), "schema accepted {path}");
-        if path.ends_with("unsafe_seq.json") {
-            assert!(decode(root, value).is_ok());
-        } else {
-            assert!(decode(root, value).is_err(), "serde accepted {path}");
-        }
+        assert!(decode(root, value).is_err(), "serde accepted {path}");
     }
 }
 
