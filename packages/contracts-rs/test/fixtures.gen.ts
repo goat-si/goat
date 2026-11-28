@@ -79,6 +79,23 @@ export const channel_attention_event__finished = {
   "threadId": "thr-worker-2"
 } satisfies ChannelAttentionEvent;
 
+export const channel_attention_event__handoff = {
+  "botId": "bot-goat",
+  "botName": "GOAT",
+  "eventId": "att-3",
+  "generation": -1,
+  "kind": "approval",
+  "occurredAt": "2026-11-28T13:06:00Z",
+  "request": {
+    "kind": "handoff",
+    "requestId": "handoff-3",
+    "threadId": "thr-worker-1"
+  },
+  "requestId": "handoff-3",
+  "sequence": 14,
+  "threadId": "thr-bot-1"
+} satisfies ChannelAttentionEvent;
+
 export const channel_attention_event__question = {
   "botId": "bot-goat",
   "botName": "GOAT",
@@ -86,6 +103,11 @@ export const channel_attention_event__question = {
   "generation": 3,
   "kind": "question",
   "occurredAt": "2026-11-28T13:00:00Z",
+  "request": {
+    "kind": "runtime",
+    "requestId": "req-7",
+    "threadId": "thr-worker-1"
+  },
   "requestId": "req-7",
   "sequence": 12,
   "threadId": "thr-worker-1"
@@ -2157,6 +2179,26 @@ export const provider_probe_result__grok_missing = {
   "models": [],
   "status": "error",
   "version": null
+} satisfies ProviderProbeResult;
+
+export const provider_probe_result__registry_signin = {
+  "auth": {
+    "action": {
+      "createdAt": "2026-11-28T13:00:00Z",
+      "elicitationId": "elic-1",
+      "expiresAt": "2026-11-28T13:10:00Z",
+      "message": "Open the link to sign in to Kimi",
+      "url": "https://auth.example.com/device?code=ABCD"
+    },
+    "status": "unauthenticated"
+  },
+  "checkedAt": "2026-11-28T13:00:00Z",
+  "cli": "present",
+  "installed": true,
+  "message": "Sign-in required",
+  "models": [],
+  "status": "warning",
+  "version": "0.4.2"
 } satisfies ProviderProbeResult;
 
 export const thread_card__checkpoint_checkpoint = {

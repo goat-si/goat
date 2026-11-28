@@ -49,6 +49,36 @@ pub mod safe_u64 {
     }
 }
 
+/// The signed counterpart of [safe_u64]: values stay within +/- [crate::limits::MAX_SAFE_WIRE_INTEGER].
+pub mod safe_i64 {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+
+    use crate::limits::MAX_SAFE_WIRE_INTEGER;
+
+    fn in_range(value: i64) -> bool {
+        value.unsigned_abs() <= MAX_SAFE_WIRE_INTEGER
+    }
+
+    pub fn serialize<S: Serializer>(value: &i64, serializer: S) -> Result<S::Ok, S::Error> {
+        if !in_range(*value) {
+            return Err(<S::Error as ser::Error>::custom(format!(
+                "{value} is outside the safe wire integer range"
+            )));
+        }
+        serializer.serialize_i64(*value)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
+        let value = i64::deserialize(deserializer)?;
+        if !in_range(value) {
+            return Err(<D::Error as de::Error>::custom(format!(
+                "{value} is outside the safe wire integer range"
+            )));
+        }
+        Ok(value)
+    }
+}
+
 /// [safe_u64] for `Option<u64>` fields (combine with `default` and `skip_serializing_if`).
 pub mod safe_u64_opt {
     use serde::{Deserialize, Deserializer, Serializer};
