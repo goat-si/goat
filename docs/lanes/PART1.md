@@ -5,6 +5,15 @@ Design source of truth (read first): https://goat-si.github.io/goat2-design/prd/
 Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `storage`, `runtime`,
 `mcp`, `plan` (decisions, "host is Rust", "GOAT v1 equal-behaviour port", lane table).
 
+## PRD repo
+- PRD source: `goat-si/goat2-design` (local `~/Developer/goat2-design`, pages in `prd-src/`, Part 1 in
+  `prd-src/part1/*.md`, decisions in `prd-src/decisions.md`, roadmap in `prd-src/roadmap.md`).
+- When your work shows the PRD is wrong, missing or out of date, **ask the design owner first**
+  (`aside session queue abQKPhrntOQV9jG1 "[goat2_<lane> thread <id>] PRD update: <page> - <what and why>"`).
+  Only after an OK: edit just those lines, `npm run build` must pass, commit only your files
+  (`git add <files>`, never `npm run ship` / `git add -A`, other agents edit the same repo),
+  `git pull --rebase origin main`, `git push origin HEAD:main`, then send the commit hash back.
+
 ## Fixed decisions (do not reopen; ask if you think one is wrong)
 - Host is Rust, UI stays TypeScript/React. Data dir `~/.goat2`.
 - Per-thread folder `threads/<id>/{goat.jsonl, card.json, blobs/}`; `goat.jsonl` is the only source,
