@@ -236,20 +236,35 @@ fn bot_instructions_limit_agrees_in_serde_and_schema() {
 
 #[test]
 fn sign_in_urls_are_http_only_in_serde_and_schema() {
-    let base = serde_json::json!({"elicitationId": "e1", "url": "https://auth.example.invalid/x", "message": "Sign in"});
+    let probe = common::fixtures()
+        .into_iter()
+        .find(|f| f.root == "provider_probe_result" && f.name == "registry_signin")
+        .unwrap()
+        .value;
     for (url, ok) in [
         ("https://auth.example.invalid/x", true),
         ("HTTP://auth.example.invalid/x", true),
+        ("https://auth.example.invalid/a b", true),
         ("javascript:alert(1)", false),
         ("vscode://auth/cb", false),
         (" https://padded.invalid", false),
+        ("https://padded.invalid ", false),
+        ("https://padded.invalid\t", false),
+        ("https://padded.invalid\n", false),
+        ("https://padded.invalid\u{3000}", false),
+        ("https://padded.invalid\u{feff}", false),
     ] {
-        let mut action = base.clone();
-        action["url"] = serde_json::json!(url);
+        let mut value = probe.clone();
+        value["auth"]["action"]["url"] = serde_json::json!(url);
         assert_eq!(
-            serde_json::from_value::<AcpRegistryUrlAuthAction>(action).is_ok(),
+            serde_json::from_value::<ProviderProbeResult>(value.clone()).is_ok(),
             ok,
-            "{url}"
+            "serde {url:?}"
+        );
+        assert_eq!(
+            validator("provider_probe_result").is_valid(&value),
+            ok,
+            "schema {url:?}"
         );
     }
 }
