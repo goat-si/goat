@@ -1,0 +1,9 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "outcome": "decided",
+  "requestId": "example",
+  "seq": 1,
+  "type": "request.resolved",
+  "v": 1,
+  "optionId": "yes"
+}

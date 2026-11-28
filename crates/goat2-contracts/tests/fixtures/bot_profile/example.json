@@ -1,0 +1,17 @@
+{
+  "botId": "example",
+  "engine": {
+    "driver": "codex",
+    "model": "example",
+    "runtimeMode": "example"
+  },
+  "face": {
+    "color": "example",
+    "goat": true,
+    "shape": "example"
+  },
+  "name": "example",
+  "purpose": "example",
+  "role": "main",
+  "threadId": "example"
+}

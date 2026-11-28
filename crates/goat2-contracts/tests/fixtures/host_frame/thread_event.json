@@ -1,0 +1,23 @@
+{
+  "line": {
+    "at": "2026-11-28T10:00:00Z",
+    "botId": null,
+    "engine": {
+      "cwd": "example",
+      "driver": "codex",
+      "model": "example",
+      "runtimeMode": "example"
+    },
+    "followUpMode": "steer",
+    "kind": "bot",
+    "parent": null,
+    "projectId": null,
+    "seq": 1,
+    "title": "example",
+    "type": "thread.created",
+    "v": 1
+  },
+  "subId": "example",
+  "threadId": "example",
+  "type": "thread_event"
+}

@@ -1,0 +1,113 @@
+{
+  "approvals": {
+    "approvalCallbacksAreLiveOnly": true,
+    "approvalsCanOriginateFromSubagents": true,
+    "approvalsHaveNativeRequestIds": true,
+    "supportsApplyPatchApproval": true,
+    "supportsCommandApproval": true,
+    "supportsFileChangeApproval": true,
+    "supportsFileReadApproval": true
+  },
+  "checkpointing": {
+    "appCanCheckpointFilesystem": true,
+    "providerCanReadConversationSnapshot": true,
+    "providerCanRollbackConversation": true,
+    "providerRollbackReturnsSnapshot": true,
+    "supportsNestedCheckpointScopes": true
+  },
+  "context": {
+    "acceptsDeveloperContext": true,
+    "acceptsSyntheticUserContext": true,
+    "acceptsSystemContext": true,
+    "canConsumeHandoffSummaries": true,
+    "canGenerateSummaries": true,
+    "maxRecommendedHandoffChars": 0,
+    "supportsDeltaHandoff": true,
+    "supportsFullThreadHandoff": true
+  },
+  "identity": {
+    "nativeItemIds": "strong",
+    "nativeRequestIds": "strong",
+    "nativeThreadIds": "strong",
+    "nativeTurnIds": "strong"
+  },
+  "planning": {
+    "emitsPlanUpdated": true,
+    "emitsProposedPlan": true,
+    "emitsTodoList": true,
+    "planDeltasHaveItemIds": true,
+    "supportsStructuredQuestions": true
+  },
+  "runtimePolicy": {
+    "enforcement": "client-boundary"
+  },
+  "sessions": {
+    "executionLocation": "local",
+    "followUp": {
+      "supported": true,
+      "reason": "available"
+    },
+    "pendingRequestsSurviveRestart": true,
+    "sourceRestriction": "published-ref",
+    "supportsModelSwitchInSession": true,
+    "supportsMultipleProviderThreadsPerSession": true,
+    "supportsProviderSwitchingViaHandoff": true,
+    "supportsRuntimeModeSwitchInSession": true,
+    "ownsProcess": true
+  },
+  "streaming": {
+    "emitsMessageCompleted": true,
+    "streamsAssistantText": true,
+    "streamsPlanText": true,
+    "streamsReasoning": true,
+    "streamsToolOutput": true
+  },
+  "subagents": {
+    "canCloseSubagents": true,
+    "canForkSubagentThread": true,
+    "canWaitForSubagents": true,
+    "emitsSubagentLifecycle": true,
+    "exposesSubagentThreadIds": true,
+    "supportsSubagents": true
+  },
+  "threads": {
+    "canCreateEmptyThread": true,
+    "canForkFromSubagentThread": true,
+    "canForkFromTurn": true,
+    "canForkThread": true,
+    "canReadThreadSnapshot": true,
+    "canRollbackThread": true,
+    "exposesNativeThreadId": true,
+    "canForkWhileSourceRunning": true,
+    "forkHonorsTargetCwd": true
+  },
+  "tools": {
+    "emitsToolCompleted": true,
+    "emitsToolOutput": true,
+    "emitsToolStarted": true,
+    "exposesToolItemIds": true,
+    "supportsDynamicToolCallbacks": true,
+    "supportsMcpTools": true
+  },
+  "turns": {
+    "emitsTurnCompleted": true,
+    "emitsTurnStarted": true,
+    "exposesNativeTurnId": true,
+    "supportsActiveSteering": true,
+    "supportsInterrupt": true,
+    "supportsQueuedMessages": true,
+    "supportsSteeringByInterruptRestart": true,
+    "terminalStatusQuality": "strong",
+    "supportsNativeGoals": true,
+    "supportsNativeResume": true,
+    "activeSteeringInterruptsTools": true,
+    "activeSteeringAcceptsAttachments": true,
+    "activeSteeringDuringCompaction": true
+  },
+  "memory": {
+    "snapshot": true,
+    "mcp": true,
+    "resolveMemoryConflict": true,
+    "generateMemorySummary": true
+  }
+}

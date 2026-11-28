@@ -1,0 +1,9 @@
+{
+  "cursor": {
+    "epoch": "example",
+    "seq": 1
+  },
+  "subId": "example",
+  "threadId": "example",
+  "type": "thread_caught_up"
+}

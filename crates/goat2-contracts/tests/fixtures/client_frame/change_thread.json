@@ -1,0 +1,6 @@
+{
+  "clientRequestId": "example",
+  "reqId": "example",
+  "threadId": "example",
+  "type": "change_thread"
+}

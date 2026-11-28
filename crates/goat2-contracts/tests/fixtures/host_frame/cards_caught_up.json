@@ -1,0 +1,8 @@
+{
+  "cursor": {
+    "cardSeq": 1,
+    "epoch": "example"
+  },
+  "subId": "example",
+  "type": "cards_caught_up"
+}

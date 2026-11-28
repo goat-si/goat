@@ -1,0 +1,7 @@
+{
+  "clientRequestId": "example",
+  "inputId": "example",
+  "reqId": "example",
+  "threadId": "example",
+  "type": "cancel_queued"
+}

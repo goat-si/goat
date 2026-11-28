@@ -1,0 +1,8 @@
+{
+  "itemId": "example",
+  "offset": 1,
+  "subId": "example",
+  "text": "example",
+  "threadId": "example",
+  "type": "text_append"
+}

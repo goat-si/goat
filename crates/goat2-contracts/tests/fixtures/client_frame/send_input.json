@@ -1,0 +1,8 @@
+{
+  "clientRequestId": "example",
+  "mode": "steer",
+  "reqId": "example",
+  "text": "example",
+  "threadId": "example",
+  "type": "send_input"
+}

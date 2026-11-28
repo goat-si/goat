@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "childCursor": {
+    "epoch": "example",
+    "seq": 1
+  },
+  "childRunId": null,
+  "childThreadId": "example",
+  "seq": 1,
+  "status": "done",
+  "summary": "example",
+  "type": "child.reported",
+  "v": 1
+}

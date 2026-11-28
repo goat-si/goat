@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "engineLocator": null,
+  "item": {
+    "completedAt": null,
+    "id": "example",
+    "input": null,
+    "nativeItemRef": null,
+    "ordinal": 1,
+    "parentItemId": null,
+    "providerThreadId": null,
+    "providerTurnId": null,
+    "runId": null,
+    "startedAt": null,
+    "status": "completed",
+    "threadId": "example",
+    "title": null,
+    "toolName": null,
+    "type": "dynamic_tool",
+    "updatedAt": "2026-11-28T10:00:00Z",
+    "output": null
+  },
+  "runId": "example",
+  "seq": 1,
+  "type": "item.completed",
+  "v": 1
+}

@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T10:00:00Z",
+  "from": {
+    "kind": "user"
+  },
+  "inputId": "example",
+  "mode": "steer",
+  "seq": 1,
+  "text": "example",
+  "type": "input.accepted",
+  "v": 1,
+  "wrong_clientRequestId": "example"
+}
