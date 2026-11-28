@@ -1042,9 +1042,18 @@ async fn a_steer_blocked_before_lifecycle_is_known_is_not_accepted_unwritten() {
 async fn an_old_frame_held_across_a_reopen_is_dropped() {
     let run = Run::new("wire/stale_frame_across_reopen.ndjson");
     let mut factory = run.factory();
-    factory.options.frame_hook = Some(std::sync::Arc::new(|generation, line: &str| {
+    // The hook reports when it holds the old frame and keeps it until the reopen is done.
+    let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let held_tx = std::sync::Mutex::new(held_tx);
+    let go_rx = std::sync::Mutex::new(go_rx);
+    factory.options.frame_hook = Some(std::sync::Arc::new(move |generation, line: &str| {
         if generation == 1 && line.contains("stale-marker") {
-            std::thread::sleep(std::time::Duration::from_millis(800));
+            let _ = held_tx.lock().unwrap().send(());
+            let _ = go_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10));
         }
     }));
     let mut handle = goat2_engine_api::EngineFactory::start(
@@ -1058,7 +1067,12 @@ async fn an_old_frame_held_across_a_reopen_is_dropped() {
         finished(&until_finished(&mut handle).await),
         TurnOutcome::Done
     );
+    tokio::task::spawn_blocking(move || held_rx.recv_timeout(std::time::Duration::from_secs(10)))
+        .await
+        .unwrap()
+        .expect("the old frame is held");
     turn(&handle, "two", MODEL, RuntimeMode::FullAccess).await;
+    go_tx.send(()).unwrap();
     let events = until_finished(&mut handle).await;
     let texts: Vec<String> = [
         AssistantMessagePhase::Commentary,

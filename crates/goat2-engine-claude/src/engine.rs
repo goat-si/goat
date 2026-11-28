@@ -1592,16 +1592,18 @@ impl Inner {
     }
 
     fn on_result(&self, state: &mut State, message: &Value) {
+        if state.turn.is_none() {
+            return;
+        }
+        // A uuid echo is Claude's acceptance and read of that steer (v1 markSteersAccepted): it
+        // goes through the same path as a lifecycle verdict, settling a waiting `steer` call.
+        let echoed = protocol::echoed_prompt_uuids(message);
+        for uuid in &echoed {
+            self.mark_steer(state, uuid, SteerPhase::Consumed);
+        }
         let Some(turn) = state.turn.as_mut() else {
             return;
         };
-        let turn_id = turn.id.clone();
-        let echoed = protocol::echoed_prompt_uuids(message);
-        for uuid in &echoed {
-            if let Some(steer) = turn.steers.get_mut(uuid) {
-                self.consume_steer(&turn_id, steer);
-            }
-        }
         let completed = !turn.interrupted
             && message.get("subtype").and_then(Value::as_str) == Some("success")
             && message.get("is_error").and_then(Value::as_bool) != Some(true);
