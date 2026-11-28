@@ -1,3 +1,4 @@
+import { addressedProjectOf, observeRead } from "./addressedProject.ts";
 import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
@@ -271,6 +272,9 @@ export class PullRequestService extends Context.Service<
     readonly changes: (input: PullRequestRef) => Stream.Stream<void>;
     /** Whether the provider has an event feed, so a capped number of feeds goes where one exists. */
     readonly followsChanges: (input: PullRequestRef) => Effect.Effect<boolean>;
+    readonly addressedProject: (
+      projectId: ProjectId,
+    ) => Effect.Effect<OrchestrationProjectShell | undefined, PullRequestError>;
     readonly threadComments: (
       input: PullRequestThreadCommentsInput,
     ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestError>;
@@ -345,6 +349,8 @@ export interface SupportedProject {
 }
 
 interface WorkspaceProjects {
+  /** Every project read, with its repository identity resolved. */
+  readonly projects: ReadonlyArray<OrchestrationProjectShell>;
   readonly supported: ReadonlyArray<SupportedProject>;
   readonly unimplemented: ReadonlyMap<
     string,
@@ -382,12 +388,6 @@ function parseListCursor(raw: string): ListCursor | null {
     ...(match[4] === undefined ? {} : { resumeAfter: match[4] }),
   };
 }
-
-// Capture before the provider read so a slow response keeps its original freshness through caches.
-const observeRead = Effect.fnUntraced(function* <A, E, R>(read: Effect.Effect<A, E, R>) {
-  const observedAt = yield* Clock.currentTimeMillis;
-  return { value: yield* read, observedAt };
-});
 
 export const make = Effect.gen(function* () {
   const mergedPullRequests = yield* PubSub.sliding<PullRequestMergeEvent>(64);
@@ -637,7 +637,7 @@ export const make = Effect.gen(function* () {
             upstream,
           });
         }
-        return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
+        return { projects, supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
       }),
     );
 
@@ -712,7 +712,7 @@ export const make = Effect.gen(function* () {
               return Effect.gen(function* () {
                 const publicHost = sourceControlDefinitions.findByPublicHost(host);
                 const api = publicHost === undefined ? null : registry.get(publicHost.kind);
-                if (api?.readsPublicHostWithoutCheckout) {
+                if (publicHost !== undefined && api?.readsPublicHostWithoutCheckout) {
                   const selected = yield* projects.getShell(ref.projectId).pipe(
                     Effect.mapError(
                       (cause) =>
@@ -769,6 +769,11 @@ export const make = Effect.gen(function* () {
       repository: project.repository,
     };
   });
+
+  const addressedProject: PullRequestService["Service"]["addressedProject"] = (projectId) =>
+    listWorkspaceProjects({ projectId }).pipe(
+      Effect.map((workspace) => addressedProjectOf(workspace, projectId)),
+    );
 
   // Access can change after page load; recheck every write.
   const viewerPermissionsOf = (
@@ -3688,6 +3693,7 @@ export const make = Effect.gen(function* () {
     activity: credentialCached(activity),
     changes,
     followsChanges,
+    addressedProject,
     preview: credentialCached(preview),
     threadComments,
     diff: credentialCached(diff),

@@ -448,6 +448,11 @@ it.effect("lists GitHub Enterprise PRs for a stored unknown repository after hos
       result.entries.map(({ host, number }) => [host, number]),
       [["code.example.test", 42]],
     );
+    const target = yield* resolveTarget(
+      { repository: "team/project", number: 42 },
+      yield* service.addressedProject("p1" as ProjectId),
+    );
+    assert.strictEqual(target.url, "https://code.example.test/team/project/pull/42");
   }),
 );
 

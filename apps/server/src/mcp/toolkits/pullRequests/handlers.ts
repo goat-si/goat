@@ -205,10 +205,9 @@ const make = Effect.gen(function* () {
     thread: OrchestrationV2ThreadShell,
     Failure: typeof PullRequestLinkFailedError | typeof PullRequestUnlinkFailedError,
   ) =>
-    projects.getShell(thread.projectId).pipe(
-      Effect.map(Option.getOrUndefined),
-      Effect.mapError((cause) => new Failure({ cause })),
-    );
+    pullRequests
+      .addressedProject(thread.projectId)
+      .pipe(Effect.mapError((cause) => new Failure({ cause })));
 
   const dispatchFailure =
     (Failure: typeof PullRequestLinkFailedError | typeof PullRequestUnlinkFailedError) =>
@@ -257,7 +256,12 @@ const make = Effect.gen(function* () {
     const known = yield* projects
       .listShells()
       .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
-    const callerProject = known.find((project) => project.id === callerThread?.projectId);
+    const callerProject =
+      callerThread === undefined
+        ? undefined
+        : yield* pullRequests
+            .addressedProject(callerThread.projectId)
+            .pipe(Effect.mapError((cause) => new PullRequestListFailedError({ cause })));
     // A pull request named by repository builds its URL through the project that holds it, which
     // need not be the caller's. Without a host, that is the one project whose remote matches.
     // Whether host names the project's repository host, under any spelling the normalizer folds
@@ -306,7 +310,9 @@ const make = Effect.gen(function* () {
       const [key] = keys.values();
       if (first === undefined || key === undefined) return { input, project: callerProject };
       const holder =
-        callerProject !== undefined && holders.includes(callerProject) ? callerProject : first;
+        callerProject !== undefined && holders.some((holder) => holder.id === callerProject.id)
+          ? callerProject
+          : first;
       // The holder's own host and full path, so a short Azure DevOps name builds its
       // org/project/_git URL.
       return { input: { ...input, host: key.host, repository: key.repository }, project: holder };

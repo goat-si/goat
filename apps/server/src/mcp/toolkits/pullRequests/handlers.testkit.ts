@@ -201,6 +201,7 @@ export const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function*
         ),
     }),
     Layer.mock(PullRequestService.PullRequestService)({
+      addressedProject: () => Effect.succeed(project ?? undefined),
       // Watch registration reads the pull request first; an open one lets it through.
       summary: (input) =>
         Effect.succeed({
