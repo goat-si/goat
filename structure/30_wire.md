@@ -11,12 +11,12 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `resync_item {subId, itemId}` | offset mismatch on streamed text |
 | `unsubscribe`, `pong` | |
 | `send_input {threadId, text, mode, attachments?}` | command |
-| `start_thread {kind, title?, botId?, parent?, engine, cwd?, text?, mode?: async\|wait}` | command |
+| `start_thread {kind, title?, botId?, parent?, modelSelection, cwd?, text?, mode?: async\|wait}` | command |
 | `stop_thread`, `resume_queue {threadId}` | command (next user send also releases a hold) |
 | `resolve_request {threadId, requestId, outcome, text?, answers?}` | command; unknown runs: kind `resend`, outcome `resend\|dropped` |
-| `archive_thread`, `rename_thread`, `create_bot {name, purpose, face, engine}` | command |
+| `archive_thread`, `rename_thread`, `create_bot {name, purpose, face, modelSelection}` | command |
 | `edit_queued`, `cancel_queued`, `reorder_queued {threadId, inputIds}`, `promote_to_steer` | command, only while the input is queued → `input.changed` (v1 queue parity) |
-| `change_thread {threadId, model?, runtimeMode?, followUpMode?}` | command → `thread.changed`, from the next run |
+| `change_thread {threadId, modelSelection?, runtimeMode?, followUpMode?}` | command → `thread.changed`, from the next run |
 | request kind `decision` | `request.opened` with options `{id, label, consequence?}`; answered by `resolve_request {optionId}`; silence never approves |
 | every command: `reqId` + `clientRequestId` | host dedupes: same id + same args → first `command_result` again, no new line; same id + other args → `idempotency_conflict`; a deduplicated reply carries the current frame's `reqId` with the first result; `input.accepted` stores the id so it survives restarts |
 
@@ -25,7 +25,7 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `cards_reset {reason, epoch}`, `card_changed`, `card_removed`, `cards_caught_up` | |
 | `thread_reset {reason, epoch}`, `thread_event {line}`, `thread_caught_up`, `page` | |
 | `text_append {itemId, offset (UTF-16), text}` | live text only, never stored |
-| `command_result {reqId, ok, value?, error?{code, message, retryable}}` | the one reply to every command |
+| `command_result {reqId, ok, value?, error?}` | the one reply to every command; `error` is v1 `AgentSurfaceError` shape (code `not_found|conflict|permission_denied|failed_precondition|resource_exhausted|internal`, `reason` = domain code like `thread_not_found`, `idempotency_conflict`, `child_budget`) |
 | `bot_changed {bot: BotProfile}`, `bot_removed` | on the cards stream |
 | `error` | |
 

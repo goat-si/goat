@@ -5,7 +5,7 @@
   cards.sqlite                 card index (cache; rebuildable from folders)
   ui-state.json                visits, read marks, pin order (not thread history)
   host.json                    running host: pid, port, generation (+ token, 0600, manual runs)
-  bots/<botId>.json            BotProfile {botId, name, purpose, face{shape,color,goat}, role main|member, threadId, engine}; main bot GOAT created on first start
+  bots/<botId>.json            BotProfile {botId, name, purpose, face{shape,color,goat}, role main|member, sessionThreadId, defaultModelSelection}; main bot GOAT created on first start
   logs/stalls.ndjson           event-loop / blocking stall records
   threads/<threadId>/
     goat.jsonl                 ONLY source of truth, append-only, line = {v, seq, at, ...event}
@@ -35,7 +35,7 @@ no "read every thread body" API, no log migrations (per-line `v`), index epoch n
 | `run.accepted` | engine acknowledged the turn |
 | `item.completed` | an item finished (no deltas) |
 | `request.opened` / `request.resolved` | approval / question / signin / resend |
-| `run.finished` | done / failed / interrupted / unknown |
+| `run.finished` | completed / failed / interrupted / unknown (v1 run status names) |
 | `child.started` / `child.reported` | parent side of a worker thread |
 | `user.notified` | `send_to_user` ack / result |
 | `checkpoint` | `{card, fold}` after each run |
@@ -48,3 +48,7 @@ Card status precedence: needs_you (open request or unresolved unknown, kind `res
 queued > failed > idle.
 
 Engines' own transcripts are pointed at, never copied: Codex by thread id + `(turnId, itemId)`.
+
+v1 names on persisted shapes (lane C `c276326`, owner-approved R1–R8): card `latestAnswerExcerpt`, `archivedAt: string|null`,
+`engine {providerInstanceId, modelSelection (v1 ModelSelection), runtimeMode, cwd}`; approval answers `accept | acceptForSession |
+acceptAlways | decline | cancel`; decision option `consequence` required; `input.delivered` outcome adds `refused`.
