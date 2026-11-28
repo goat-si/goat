@@ -10,6 +10,8 @@ export class CursorProjection {
   #next = 0;
   #seenText = false;
   #transport = new CursorTransportFailure();
+  #pending = new Map<string, ToolCall>();
+  #shellOutput = new Map<string, string>();
   turnEnded = false;
   get transportFailure() { return this.#transport.failure; }
   private readonly turnId: string;
@@ -20,8 +22,8 @@ export class CursorProjection {
     this.turnId = turnId; this.sessionId = sessionId; this.instanceId = instanceId; this.host = host;
   }
 
-  private base(id: string, nativeId = id, failed = false) {
-    return { id, turnId: this.turnId, driver: "cursor", nativeId, now: this.host.now(), status: failed ? "failed" as const : "completed" as const };
+  private base(id: string, nativeId = id, status: "completed" | "failed" | "interrupted" = "completed") {
+    return { id, turnId: this.turnId, driver: "cursor", nativeId, now: this.host.now(), status };
   }
   private id(kind: string) { return `${this.sessionId}:${this.turnId}:${kind}:${++this.#next}`; }
   private emit(value: HelperItem, nativeId: string) {
@@ -52,28 +54,60 @@ export class CursorProjection {
       case "thinking-completed": case "step-completed": case "turn-ended": this.flush(); break;
       case "tool-call-started": case "partial-tool-call":
         this.flush();
-        if (update.type === "tool-call-started" && update.toolCall.type === "task") this.subagent(update.callId, update.toolCall, false);
+        if (update.type === "partial-tool-call" && update.toolCall.type === "task") break;
+        if (update.toolCall.type === "task" && !this.#pending.has(update.callId)) this.subagent(update.callId, update.toolCall, "running");
+        this.#pending.set(update.callId, update.toolCall);
         break;
       case "tool-call-completed":
         this.flush();
-        if (update.toolCall.type === "task") this.subagent(update.callId, update.toolCall, true);
+        this.#pending.delete(update.callId);
+        if (update.toolCall.type === "task") this.subagent(update.callId, update.toolCall, update.toolCall.result?.status === "error" ? "failed" : "completed");
         this.tool(update.callId, update.toolCall); break;
+      case "shell-output-delta": {
+        const id = typeof update.event.toolCallId === "string" ? update.event.toolCallId : [...this.#pending].findLast(([, call]) => call.type === "shell")?.[0];
+        const value = update.event.value;
+        if (id && this.#pending.get(id)?.type === "shell" && (update.event.case === "stdout" || update.event.case === "stderr") && typeof value === "object" && value !== null && "data" in value && typeof value.data === "string") {
+          const output = (this.#shellOutput.get(id) ?? "") + value.data;
+          this.#shellOutput.set(id, output.length > 512 * 1024 ? output.slice(-256 * 1024) : output);
+        }
+        break;
+      }
     }
   }
   fallback(text: string | undefined) { if (!this.#seenText && text) this.text("assistant", text); }
-  private subagent(callId: string, call: Extract<ToolCall, { type: "task" }>, completed: boolean) {
+  finalize(status: "completed" | "failed" | "interrupted") {
+    this.flush();
+    for (const [callId, call] of this.#pending) {
+      const finalStatus = status === "interrupted" ? "interrupted" : "failed";
+      if (call.type === "task") this.subagent(callId, call, finalStatus);
+      this.tool(callId, call, finalStatus);
+    }
+    this.#pending.clear();
+  }
+  private subagent(callId: string, call: Extract<ToolCall, { type: "task" }>, status: "running" | "completed" | "failed" | "interrupted") {
     this.host.emit({ type: "subagent_update", turnId: this.turnId, subagentId: call.args.agentId ?? callId,
-      status: !completed ? "running" : call.result?.status === "error" ? "failed" : "completed",
+      status,
       title: call.args.description || null, progress: null });
   }
-  private tool(callId: string, call: ToolCall) {
+  private tool(callId: string, call: ToolCall, finalStatus?: "failed" | "interrupted") {
     const id = `${this.sessionId}:${this.turnId}:tool:${callId}`;
-    const base = this.base(id, callId, call.result?.status === "error" || (call.type === "shell" && call.result?.status === "success" && call.result.value.exitCode !== 0));
+    const failed = call.result?.status === "error" || (call.type === "shell" && call.result?.status === "success" && call.result.value.exitCode !== 0) || (call.type === "mcp" && call.result?.status === "success" && call.result.value.isError);
+    const base = this.base(id, callId, finalStatus ?? (failed ? "failed" : "completed"));
     let result: HelperItem;
     switch (call.type) {
-      case "shell": result = item(base, "command_execution", { input: call.args.command, outputOmitted: true, ...(call.result?.status === "success" ? { exitCode: call.result.value.exitCode } : {}) }); break;
+      case "shell": {
+        const value = call.result?.status === "success" ? call.result.value : undefined;
+        const output = (value ? [value.stdout, value.stderr].filter(part => typeof part === "string" && part.length > 0).join("\n") : "") || (this.#shellOutput.get(callId) ?? "").slice(-256 * 1024);
+        this.#shellOutput.delete(callId);
+        result = item(base, "command_execution", { input: call.args.command, ...(output ? { output } : {}), ...(typeof value?.exitCode === "number" ? { exitCode: value.exitCode } : {}) }); break;
+      }
       case "edit": case "write": case "delete": case "generateImage":
-        result = item(base, "file_change", { fileName: call.type === "generateImage" ? call.args.filePath ?? "generated-image" : call.args.path, patchOmitted: true }); break;
+        result = item(base, "file_change", { fileName: call.type === "generateImage" ? call.args.filePath ?? "generated-image" : call.args.path,
+          ...(call.type === "edit" && call.result?.status === "success" ? {
+            ...(call.result.value.diffString === undefined ? {} : { diffStr: call.result.value.diffString }),
+            ...(call.result.value.linesAdded === undefined ? {} : { additions: call.result.value.linesAdded }),
+            ...(call.result.value.linesRemoved === undefined ? {} : { deletions: call.result.value.linesRemoved }),
+          } : {}) }); break;
       case "createPlan": result = item(base, "proposed_plan", { planId: id, markdown: call.args.plan, streaming: false }); break;
       case "updateTodos": {
         const todos = call.result?.status === "success" ? call.result.value.todos : call.args.todos;
@@ -83,7 +117,11 @@ export class CursorProjection {
       case "task": result = item(base, "subagent", { subagentId: call.args.agentId ?? callId, origin: "provider_native", driver: "cursor", providerInstanceId: this.instanceId, childThreadId: null, prompt: call.args.prompt, result: call.result?.status === "success" ? call.result.value.resultSuffix ?? null : null }); break;
       default: {
         const name = call.type === "read" ? "Read" : call.type === "mcp" ? `mcp__${call.args.providerIdentifier ?? "mcp"}__${call.args.toolName ?? "unknown"}` : call.type;
-        result = item(base, "dynamic_tool", { toolName: name, input: (call.type === "mcp" ? call.args.args ?? {} : call.args) as never, outputOmitted: true });
+        const output = call.result?.status === "success" && call.type === "mcp"
+          ? { ...call.result.value, content: call.result.value.content?.map(part => part.image?.mimeType ? { type: "image", mimeType: part.image.mimeType, data: part.image.data } : part) }
+          : call.result?.status === "success" ? call.result.value : undefined;
+        result = item(base, "dynamic_tool", { toolName: name, input: (call.type === "mcp" ? call.args.args ?? {} : call.args) as never,
+          ...(output === undefined ? {} : { output: output as never }) });
       }
     }
     this.emit(result, callId);

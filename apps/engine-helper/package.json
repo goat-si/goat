@@ -17,9 +17,8 @@
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@muse-code/sdk": "1.4.6",
     "@cursor/sdk": "1.2.0",
-    "@napi-rs/keyring": "^1.3.0"
+    "@muse-code/sdk": "1.4.6"
   },
   "devDependencies": {
     "@goat2/contracts-rs": "workspace:*",

@@ -11,27 +11,44 @@ export class CursorAgentPlatform {
   }
   async cancelRun(id: string) { if (id !== "abandoned") throw new Error("wrong run"); this.cancelled = true; }
   async createAgent(options: any) {
-    if (options.mcpServers?.goat?.type !== "http" || options.mcpServers.goat.headers?.Authorization !== "Bearer fake-mcp") throw new Error("MCP mismatch");
+    if (process.env.GOAT_TEST_DIAGNOSTIC) { process.stderr.write("fake-"); process.stderr.write("key fake-mcp\n"); }
+    if (process.env.GOAT_TEST_EXPECT_KEY && (options.apiKey ?? "none") !== process.env.GOAT_TEST_EXPECT_KEY) throw new Error("API key scope mismatch");
+    if (process.env.GOAT_TEST_EXPECT_TOKEN && (process.env.CURSOR_AUTH_TOKEN ?? "none") !== process.env.GOAT_TEST_EXPECT_TOKEN) throw new Error("auth token scope mismatch");
+    if (process.env.GOAT_TEST_NO_MCP !== "1" && (options.mcpServers?.goat?.type !== "http" || options.mcpServers.goat.headers?.Authorization !== "Bearer fake-mcp")) throw new Error("MCP mismatch");
     return this.agent("cursor-new");
   }
   async resumeAgent(id: string) { return this.agent(id); }
   private agent(agentId: string) {
     const platform = this;
-    return { agentId, close() {}, async send(message: string, options: any) {
+    return { agentId, close() {}, async send(input: string | { text: string; images?: unknown[] }, options: any) {
+      if (process.env.GOAT_TEST_NO_MCP === "1" && JSON.stringify(options.mcpServers) !== "{}") throw new Error("MCP was not cleared");
+      const message = typeof input === "string" ? input : input.text;
+      if (message === "crash") setImmediate(() => process.exit(42));
       if (message === "recover" && !platform.cancelled) throw new Error("already has active run");
       if (message === "reject") throw new Error("scripted failure");
       const id = `run-${++counter}`;
       let resolve: (value: any) => void = () => {};
       const finished = new Promise(r => { resolve = r; });
-      const run = { id, agentId, async wait() { return finished; }, async cancel() { resolve({ id, status: "cancelled" }); }, async steer(text: string) { return text === "refuse" ? "revert_to_followup" : "complete_delivered"; } };
+      const run = { id, agentId, async wait() { return finished; }, async cancel() {
+        if (message === "cancel-fails-hang") { resolve({ id, status: "finished" }); await new Promise<void>(r => setImmediate(r)); throw new Error("cancel failed"); }
+        resolve({ id, status: "cancelled" });
+      }, async steer(text: string) { return text === "refuse" ? "revert_to_followup" : "complete_delivered"; } };
       if (message === "early") await options.onDelta({ update: { type: "text-delta", text: "early " } });
-      if (!message.endsWith("hang")) setImmediate(async () => {
-        await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "fake-" : "hello " } });
-        await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "key" : "world" } });
+      if (message !== "crash" && !message.endsWith("hang")) setImmediate(async () => {
+        if (message.startsWith("verify image")) {
+          if (typeof input === "string" || JSON.stringify(input.images) !== JSON.stringify([{ data: Buffer.from("fake-image").toString("base64"), mimeType: "image/png" }])) throw new Error("image mismatch");
+          await options.onDelta({ update: { type: "text-delta", text: "image verified" } });
+        } else if (message.startsWith("check attachments")) {
+          if (!message.includes('[Attached file "report.txt" is saved at: /tmp/report.txt]') || !message.includes('[Attached file "lost.txt" is unavailable:')) throw new Error("attachment prompt mismatch");
+          await options.onDelta({ update: { type: "text-delta", text: "attachments verified" } });
+        } else {
+          await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "fake-" : "hello " } });
+          await options.onDelta({ update: { type: "text-delta", text: message === "secret" ? "key" : "world" } });
+        }
         if (message === "projects") {
           await options.onDelta({ update: { type: "thinking-delta", text: "reason" } });
-          await options.onDelta({ update: { type: "tool-call-completed", callId: "cmd", toolCall: { type: "shell", args: { command: "ls" }, result: { status: "success", value: { exitCode: 0, stdout: "", stderr: "" } } } } });
-          await options.onDelta({ update: { type: "tool-call-completed", callId: "edit", toolCall: { type: "edit", args: { path: "a.ts" }, result: { status: "success", value: {} } } } });
+          await options.onDelta({ update: { type: "tool-call-completed", callId: "cmd", toolCall: { type: "shell", args: { command: "ls" }, result: { status: "success", value: { exitCode: 0, stdout: "file", stderr: "" } } } } });
+          await options.onDelta({ update: { type: "tool-call-completed", callId: "edit", toolCall: { type: "edit", args: { path: "a.ts" }, result: { status: "success", value: { diffString: "+x", linesAdded: 1, linesRemoved: 0 } } } } });
           await options.onDelta({ update: { type: "tool-call-completed", callId: "todos", toolCall: { type: "updateTodos", args: { todos: [{ content: "work", status: "completed" }] } } } });
           await options.onDelta({ update: { type: "tool-call-started", callId: "task", toolCall: { type: "task", args: { description: "research", prompt: "inspect" } } } });
           await options.onDelta({ update: { type: "tool-call-completed", callId: "task", toolCall: { type: "task", args: { description: "research", prompt: "inspect" }, result: { status: "success", value: { resultSuffix: "done" } } } } });
@@ -43,4 +60,8 @@ export class CursorAgentPlatform {
     } };
   }
 }
-export const Cursor = { me: async () => ({ apiKeyName: "" }), models: { list: async () => [{ id: "test-model", displayName: "Test model" }] } };
+export const Cursor = { me: async ({ apiKey }: { apiKey?: string }) => {
+  if (apiKey === "bad-key") throw Object.assign(new Error("unauthorized"), { status: 401 });
+  if (!apiKey && process.env.GOAT_TEST_SIGNED_IN !== "1") throw Object.assign(new Error("offline"), { name: "NetworkError" });
+  return { apiKeyName: "" };
+}, models: { list: async () => [{ id: "test-model", displayName: "Test model" }] } };
