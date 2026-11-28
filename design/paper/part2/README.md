@@ -13,6 +13,15 @@ top+left 0.5px #E2E2E2). Colors from v1 `apps/web/src/index.css` light tokens.
 | P4 Composer model picker | `1QM8-2` | `chat/ProviderModelPicker.tsx`, `ModelPickerContent.tsx`, `ModelPickerSidebar.tsx` |
 | P5 Bot settings model picker | `1QYE-2` | `goatBot/GoatBotModelPicker.tsx` (wraps ProviderModelPicker), `routes/_chat.settings.goat-bot.tsx` |
 
-Known gaps: provider logos are letter tiles (copy real v1 SVGs before generating code); some settings nav labels
-inferred from route names; model names/states are placeholder data. P2-M lifts v1 components directly; these boards
-are the visual check.
+Provider logos are the real v1 marks, copied verbatim: Codex/Claude/Antigravity from `apps/web/src/components/Icons.tsx`
+(`OpenAI` path black, `ClaudeAI` path #d97757, `AntigravityIcon` embedded PNG), Grok/fx/Muse/OpenCode/Pi/OmO/Cursor
+from each package's `client.ts` `icon` (`packages/provider-*/src/client.ts`, `provider-pi/src/omoClient.ts`; light
+fills and gradients as `ProviderPackageIcon` renders them), ACP Registry agents (Kimi Code, Kilo, Kiro CLI, Qwen Code)
+from the official CDN icons v1 loads (`officialAcpRegistryIconUrlForAgentId`, `cdn.agentclientprotocol.com/registry/v1/latest/<id>.svg`,
+currentColor drawn as #0d0d0d). Registry names/versions/descriptions match the live registry index on 2026-11-28
+(DeepSeek is not in it, so P1/P2 show Kilo instead). Settings nav labels are v1's `SETTINGS_SECTION_LABELS`
+(`settings/settingsSearch.ts`: e.g. "SnapShots", "Project", "Archived Threads", "Decision Inbox") under the
+`settingsNav.ts` groups.
+
+Remaining: model names and account states are placeholder data. P2-M lifts v1 components directly; these boards are
+the visual check.

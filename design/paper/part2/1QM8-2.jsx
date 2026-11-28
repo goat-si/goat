@@ -652,54 +652,40 @@
             ☆
           </div>
           <div style={{ alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: '8px', boxShadow: '#ECECEC 0px 0px 0px 1px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', width: '36px' }}>
-            <div style={{ backgroundColor: '#0D0D0D', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                C
-              </div>
-            </div>
+            <svg width="20" height="20" viewBox="100 100 411 411" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path fillRule="evenodd" clipRule="evenodd" d="M252.794 108.802C289.191 99.048 326.265 110.305 351.148 135.135C385.113 126.072 422.85 134.862 449.492 161.505C476.136 188.149 484.925 225.888 475.862 259.85V259.854C500.696 284.735 511.95 321.81 502.198 358.207C492.447 394.602 464.161 421.084 430.215 430.217C421.083 464.162 394.603 492.448 358.206 502.199C321.812 511.951 284.734 500.693 259.852 475.864C225.887 484.927 188.15 476.137 161.507 449.495C134.864 422.851 126.073 385.111 135.136 351.149C110.304 326.266 99.05 289.192 108.801 252.795C118.552 216.4 146.84 189.918 180.784 180.785C189.917 146.841 216.396 118.553 252.794 108.802ZM374.292 407.145C374.292 411.271 372.092 415.086 368.517 417.148L283.723 466.102C302.487 480.585 327.555 486.459 352.217 479.852C386.997 470.532 410.068 439.312 410.555 405.006V317.717C410.555 315.08 409.125 312.621 406.843 311.303L374.292 292.509V407.145ZM251.868 415.897C248.296 417.959 243.893 417.959 240.317 415.897L155.526 366.942C152.366 390.436 159.811 415.08 177.866 433.136H177.863C203.325 458.594 241.896 462.962 271.85 446.232L347.449 402.586C349.735 401.268 351.148 398.8 351.148 396.163V358.579L251.868 415.897ZM368.602 220.628C366.319 219.309 363.474 219.318 361.191 220.637L328.641 239.431L427.921 296.749C431.496 298.811 433.697 302.627 433.697 306.752V404.661C455.622 395.654 473.244 376.881 479.851 352.218C489.169 317.442 473.668 281.85 444.201 264.274L368.602 220.628ZM177.303 206.34C155.377 215.348 137.756 234.122 131.148 258.783C121.832 293.561 137.331 329.153 166.799 346.727L242.398 390.373C244.68 391.692 247.525 391.684 249.807 390.366L282.357 371.572L183.078 314.253C179.504 312.189 177.303 308.375 177.303 304.251V206.34ZM259.849 279.145V331.858L305.5 358.213L351.15 331.858V279.145L305.5 252.789L259.849 279.145ZM327.276 144.9C308.512 130.418 283.445 124.543 258.782 131.15C224.002 140.471 200.931 171.691 200.445 205.995V293.286C200.445 295.923 201.875 298.381 204.158 299.7L236.707 318.493V203.856C236.707 199.731 238.909 195.916 242.483 193.853L327.276 144.9ZM433.137 177.867C407.675 152.407 369.103 148.038 339.149 164.769L263.55 208.415C261.265 209.734 259.852 212.202 259.852 214.838V252.423L359.132 195.105C362.703 193.041 367.108 193.041 370.682 195.105L455.473 244.06C458.635 220.567 451.189 195.922 433.135 177.867H433.137Z" fill="#000000" />
+            </svg>
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', position: 'relative', width: '36px' }}>
-            <div style={{ backgroundColor: '#D97757', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                A
-              </div>
-            </div>
+            <svg width="20" height="20" viewBox="0 0 256 257" preserveAspectRatio="xMidYMid" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0 82.05 1.426l4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" fill="#D97757" />
+            </svg>
             <div style={{ backgroundColor: '#9A6700', borderRadius: '4px', bottom: '5px', boxShadow: '#FFFFFF 0px 0px 0px 1.5px', boxSizing: 'border-box', height: '7px', position: 'absolute', right: '5px', width: '7px' }} />
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', width: '36px' }}>
-            <div style={{ backgroundColor: '#0D0D0D', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                Cu
-              </div>
-            </div>
+            <svg width="20" height="20" viewBox="0 0 466.73 532.09" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path d="M457.43,125.94L244.42,2.96c-6.84-3.95-15.28-3.95-22.12,0L9.3,125.94c-5.75,3.32-9.3,9.46-9.3,16.11v247.99c0,6.65,3.55,12.79,9.3,16.11l213.01,122.98c6.84,3.95,15.28,3.95,22.12,0l213.01-122.98c5.75-3.32,9.3-9.46,9.3-16.11v-247.99c0-6.65-3.55-12.79-9.3-16.11h-.01ZM444.05,151.99l-205.63,356.16c-1.39,2.4-5.06,1.42-5.06-1.36v-233.21c0-4.66-2.49-8.97-6.53-11.31L24.87,145.67c-2.4-1.39-1.42-5.06,1.36-5.06h411.26c5.84,0,9.49,6.33,6.57,11.39h-.01Z" fill="#26251E" />
+            </svg>
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', width: '36px' }}>
-            <div style={{ backgroundColor: '#F3F3F3', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                Oc
-              </div>
-            </div>
+            <svg width="20" height="20" viewBox="0 0 32 40" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path d="M24 32H8V16H24V32Z" fill="#CFCECD" />
+              <path d="M24 8H8V32H24V8ZM32 40H0V0H32V40Z" fill="#211E1E" />
+            </svg>
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', width: '36px' }}>
-            <div style={{ backgroundColor: '#0D0D0D', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                K
-              </div>
-            </div>
+            <svg width="20" height="20" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path d="M19.514 7.342C19.711 7.862 19.814 8.413 19.816 8.969C19.816 12.494 15.998 14.697 12.946 12.934C11.529 12.116 10.657 10.605 10.657 8.969C10.657 5.646 14.085 3.431 17.115 4.793C15.26 3.373 12.99 2.607 10.655 2.612C4.772 2.614 0.005 7.381 0 13.265C0.002 19.148 4.772 23.918 10.655 23.92C16.538 23.916 21.306 19.147 21.31 13.265C21.312 11.155 20.687 9.095 19.514 7.342ZM14.841 4.666C14.841 8.191 18.657 10.395 21.709 8.632C23.127 7.814 24 6.302 24 4.666C24 1.14 20.184-1.061 17.13 0.699C15.714 1.519 14.841 3.03 14.841 4.666" fill="#0D0D0D" />
+            </svg>
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', width: '36px' }}>
-            <div style={{ backgroundColor: '#F3F3F3', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                Pi
-              </div>
-            </div>
+            <svg width="20" height="20" viewBox="165.29 165.29 469.43 469.43" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+              <path d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65Z" fillRule="evenodd" fill="#0F0F0F" />
+              <path d="M517.36 400H634.72V634.72H517.36Z" fill="#0F0F0F" />
+            </svg>
           </div>
           <div style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '36px', justifyContent: 'center', position: 'relative', width: '36px' }}>
-            <div style={{ backgroundColor: '#E8F0FE', borderRadius: '5px', boxSizing: 'border-box', flexShrink: 0, height: '20px', width: '20px' }}>
-              <div style={{ boxSizing: 'border-box', color: '#1F6FEB', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
-                Ag
-              </div>
-            </div>
+            <div style={{ backgroundImage: 'url(https://app.paper.design/file-assets/01M8GDWPDQSBBWW8RMTG12PGCC/0ACFGAK9NZKKJR4EWR87Z5EN2X.png)', backgroundPosition: '50%', backgroundRepeat: 'no-repeat', backgroundSize: '100% 100%', boxSizing: 'border-box', flexShrink: '0', height: '20px', width: '20px' }} />
             <div style={{ backgroundColor: '#9A6700', borderRadius: '4px', bottom: '5px', boxShadow: '#FFFFFF 0px 0px 0px 1.5px', boxSizing: 'border-box', height: '7px', position: 'absolute', right: '5px', width: '7px' }} />
           </div>
           <div style={{ boxSizing: 'border-box', flexBasis: '0%', flexGrow: '1' }} />
