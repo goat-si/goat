@@ -3,9 +3,16 @@
 //! each other, so the file is carried here); v1 equivalent: `packages/provider-acp/src/server/
 //! posixProcessTree.ts` (ACP agents own a detached process group, TERM then KILL).
 //!
-//! Unix: `process_group(0)` makes the child a group leader; `setpriority` in `pre_exec` lowers it
-//! (and every descendant it spawns, such as agent tool commands) by `Launch::nice`; `kill(-pgid)`
-//! ends the group. Windows: the direct child only (Job Objects are Part 2).
+//! Unix: `process_group(0)` makes the child a group leader; `setpriority` from the host right
+//! after the spawn lowers it (and every descendant it spawns, such as agent tool commands) by
+//! `Launch::nice`; `kill(-pgid)` ends the group. Windows: the direct child only (Job Objects are
+//! Part 2).
+//!
+//! No `pre_exec` hook: one makes std fork and exec instead of `posix_spawn`, and on macOS a fork
+//! while another host thread is inside a libSystem once-initializer (libnotify, reached through
+//! `getpwuid_r` and name lookups) aborts the forked child in `_notify_fork_child`
+//! (`_os_once_gate_corruption_abort`, SIGKILL) before it runs the agent. Seen as agents dying at
+//! `initialize` under parallel load.
 
 use std::ffi::OsString;
 use std::io;
@@ -175,23 +182,20 @@ impl ChildProcess {
             command.env(name, value);
         }
         #[cfg(unix)]
-        {
-            command.process_group(0);
-            let target = unix::target_priority(launch.nice);
-            // SAFETY: setpriority is async-signal-safe; the closure allocates nothing.
-            unsafe {
-                command.pre_exec(move || {
-                    if libc::setpriority(libc::PRIO_PROCESS, 0, target) != 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
+        command.process_group(0);
         let mut child = command.spawn()?;
         let pid = child
             .id()
             .ok_or_else(|| io::Error::other("child exited before its pid was read"))?;
+        #[cfg(unix)]
+        {
+            let target = unix::target_priority(launch.nice);
+            // SAFETY: plain syscall on our own just-spawned child. Lowering a child's priority is
+            // always permitted; a child that already exited (ESRCH) has nothing left to lower.
+            unsafe {
+                libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, target);
+            }
+        }
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr_tail = Arc::new(Mutex::new(StderrTail::new(
@@ -360,6 +364,12 @@ impl ChildProcess {
         while signalled && self.group_alive() && tokio::time::Instant::now() < gone_by {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        // With the leader reaped, an empty group stays empty and its pgid is free for the system
+        // to hand to a new group (another session's agent): never signal it again, Drop included.
+        // While the leader is unreaped (a zombie) its pid cannot be reused, so no mark is needed.
+        if self.reaped.is_some() && !self.group_alive() {
+            self.group_gone = true;
+        }
         ExitSummary {
             status: self.reaped,
             signalled,
@@ -505,5 +515,44 @@ mod tests {
             .unwrap();
         assert_eq!(line.trim_end(), "[][/tmp/parity]");
         child.shutdown().await;
+    }
+
+    /// Once the leader is reaped and its group is empty, the pgid can be given to an unrelated
+    /// new group (another session's agent). Drop must then send nothing: before this fix a
+    /// stopped child's Drop sent kill(-pgid) again, which would kill whatever group the system
+    /// had since given that id.
+    #[tokio::test]
+    async fn a_stopped_group_is_never_signalled_again() {
+        let exited = Launch::new("/bin/sh").arg("-c").arg("exit 0");
+        let mut child = ChildProcess::spawn(&exited).unwrap();
+        child.shutdown().await;
+        assert!(
+            child.group_gone,
+            "an exited, reaped group must be marked gone"
+        );
+
+        let running = Launch::new("/bin/sh").arg("-c").arg("exec sleep 30");
+        let mut child = ChildProcess::spawn(&running).unwrap();
+        let summary = child.terminate_group().await;
+        assert!(summary.signalled);
+        assert!(
+            child.group_gone,
+            "a killed, reaped group must be marked gone"
+        );
+    }
+
+    /// The agent still runs `nice` lower than the host after the priority moved out of
+    /// `pre_exec` (which forced fork+exec; see the module docs).
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_agent_runs_at_the_lowered_priority() {
+        let launch = Launch::new("/bin/sh").arg("-c").arg("exec sleep 30");
+        let mut child = ChildProcess::spawn(&launch).unwrap();
+        let expected = unix::target_priority(launch.nice);
+        // SAFETY: plain syscall reading our own child's priority.
+        let got = unsafe { libc::getpriority(libc::PRIO_PROCESS, child.pid() as libc::id_t) };
+        child.terminate_group().await;
+        assert_eq!(got, expected);
+        assert!(expected > 0 || launch.nice == 0);
     }
 }
