@@ -8,6 +8,8 @@ import * as Ref from "effect/Ref";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import { ProviderDriverKind } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -24,6 +26,8 @@ import { provideDeterministicTestRuntime } from "../DeterministicRuntime.ts";
 import { CODEX_MODEL_SELECTION, materializeFixtureInput } from "../fixtures/shared.ts";
 import { ORCHESTRATOR_REPLAY_FIXTURES } from "../fixtures/index.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../ProviderReplayHarness.ts";
+import * as EffectWorker from "../../EffectWorker.ts";
+import * as Orchestrator from "../../Orchestrator.ts";
 import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import { traceFromV1 } from "./traceFromV1.ts";
 
@@ -80,6 +84,8 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   // Sends followed by an idle wait, and the send after whose idle wait the host restarts.
   const idleAfterSend = new Set<number>();
   let restartAfterSend: number | undefined;
+  // A restart directly after a run-status wait is a crash with that run still live.
+  let crashAfterSend: number | undefined;
   const fixtureSteps: any[] = [];
   let sendCount = 0;
   let previous: string | undefined;
@@ -98,17 +104,20 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
       previous = "await_idle";
       continue;
     } else if (s.do === "restart_host") {
-      // Idle restart only (v1 OrchestratorReplayRecovery.integration.test.ts:294-369); a restart
-      // with a live run is a different v1 path (crash settlement) this driver does not model.
-      if (previous !== "await_idle" || restartAfterSend !== undefined) throw new Error(`restart ${s.id} is only supported once, directly after an idle wait`);
-      restartAfterSend = sendCount - 1;
+      // Idle restart (v1 OrchestratorReplayRecovery.integration.test.ts:294-369) or a crash with a
+      // live run (snapshot before teardown, same test :547-600). Once per scenario.
+      if (restartAfterSend !== undefined || crashAfterSend !== undefined) throw new Error(`restart ${s.id}: only one restart per scenario is supported`);
+      if (previous === "await_idle") restartAfterSend = sendCount - 1;
+      else if (previous === "await_run_status") crashAfterSend = sendCount - 1;
+      else throw new Error(`restart ${s.id} must directly follow an idle or run-status wait`);
       previous = "restart_host";
       continue;
     } else if (s.do === "await" && (s.until === "run_status" || s.until === "steerable")) {
-      if (previous !== "send") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
+      if (previous !== "send" && previous !== "await_run_status") throw new Error(`await ${s.id} after a ${previous ?? "start of scenario"} step is unsupported`);
       const list = awaitsAfterSend.get(sendCount - 1) ?? [];
       list.push(s);
       awaitsAfterSend.set(sendCount - 1, list);
+      previous = "await_run_status";
       continue;
     } else throw new Error(`unsupported scenario step: ${JSON.stringify(s)}`);
     previous = s.do;
@@ -132,6 +141,9 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     if (!send || messageInputs.has(step.command.messageId)) throw new Error(`unexpected message dispatch ${step.command.messageId}`);
     messageInputs.set(step.command.messageId, send.input);
     for (const a of awaitsAfterSend.get(sendIndex) ?? []) {
+      // The crash send must stay live: run it in the background like the DSL does for sends
+      // followed by another step (its own await_thread_idle is cut off with phase 2 below).
+      if (sendIndex === crashAfterSend && step.await !== false) Object.assign(step, {await: false, key: `crash:${sendIndex}`});
       // An awaited (foreground) dispatch has already gone idle, so a later status wait could
       // never be satisfied as intended; refuse rather than reorder.
       if (step.await !== false) throw new Error(`await ${a.id} follows a foreground send`);
@@ -169,8 +181,20 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   };
   for (const n of idleAfterSend) idleIndexAfterSend(n);
   // Same split as v1's splitAfterFirstIdle (OrchestratorReplayRecovery.integration.test.ts:167-181).
-  const splitIndex = restartAfterSend === undefined ? steps.length - 1 : idleIndexAfterSend(restartAfterSend);
-  const phases = [steps.slice(0, splitIndex + 1), steps.slice(splitIndex + 1)].filter((p) => p.length > 0);
+  let phases: any[][];
+  if (crashAfterSend !== undefined) {
+    // Phase 1 ends at the crash send's last run-status wait; the DSL's idle wait for that send
+    // (and anything before it) belongs to a runtime that never gets there. Phase 2 always runs:
+    // recovery on startup is the behaviour under test.
+    const dispatches = steps.flatMap((step: any, index: number) => step.type === "dispatch" && step.command.type === "message.dispatch" ? [index] : []);
+    const lastAwait = dispatches[crashAfterSend] + (awaitsAfterSend.get(crashAfterSend)?.length ?? 0);
+    const idle = idleIndexAfterSend(crashAfterSend);
+    if (idle <= lastAwait) throw new Error("crash send: fixture idle wait precedes the run-status wait");
+    phases = [steps.slice(0, lastAwait + 1), steps.slice(idle + 1)];
+  } else {
+    const splitIndex = restartAfterSend === undefined ? steps.length - 1 : idleIndexAfterSend(restartAfterSend);
+    phases = [steps.slice(0, splitIndex + 1), steps.slice(splitIndex + 1)].filter((p) => p.length > 0);
+  }
   const commandsOf = (phase: any[]) => phase.flatMap((step: any) => (step.type === "dispatch" ? [step.command] : []));
   let driver: any;
   let currentGate: any;
@@ -189,21 +213,57 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     return CodexAdapterV2Testkit.layer({transcript, driver});
   }))};
   let databaseOptions: any = {};
-  if (restartAfterSend !== undefined) {
+  let snapshotPath: string | undefined;
+  if (restartAfterSend !== undefined || crashAfterSend !== undefined) {
     const fs = yield* FileSystem.FileSystem;
     const tempDir = yield* Effect.acquireRelease(fs.makeTempDirectory({prefix: "goat2-parity-restart-"}), (d) => fs.remove(d, {recursive: true, force: true}).pipe(Effect.orDie));
     databaseOptions = {databaseLayer: SqlitePersistence.layerFromPath(join(tempDir, "state.sqlite")).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)))};
+    if (crashAfterSend !== undefined) snapshotPath = join(tempDir, "crash-state.sqlite");
   }
   const stored = new Map<number, any>();
   let restartBoundary: number | undefined;
+  // Crash: drain the worker, record the last event before the crash, and snapshot the database
+  // before scoped teardown can settle the live run (OrchestratorReplayRecovery.integration.test.ts:556-564).
+  const crashSnapshot = Effect.gen(function* () {
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    yield* worker.drain();
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    restartBoundary = yield* orchestrator.getThreadEventSequence(threadId);
+    // The replay layer does not export SqlClient; v1's test merges the database layer for this
+    // (:575-581). A second connection to the same file takes the same consistent snapshot.
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`VACUUM INTO ${snapshotPath!}`;
+    }).pipe(Effect.provide(databaseOptions.databaseLayer));
+  });
+  // Scenario results only carry events produced by dispatched commands; recovery runs while the
+  // second runtime starts, so the crash phase reads the thread's stored events from the recovered
+  // database itself (all of them, snapshot history included).
+  let recoveredEvents: any[] | undefined;
+  const readRecovered = Effect.gen(function* () {
+    const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+    yield* worker.drain();
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const last = yield* orchestrator.getThreadEventSequence(threadId);
+    recoveredEvents = last <= 0 ? [] : [...(yield* orchestrator.streamStoredEventsFrom({threadId, afterSequence: 0}).pipe(
+      Stream.takeUntil((stored: any) => stored.sequence >= last), Stream.runCollect))];
+  });
   let exit: Exit.Exit<any, any> = Exit.void;
   for (const [index, phase] of phases.entries()) {
     const first = index === 0;
     const commands = phases.length === 1 ? materialized.commands : commandsOf(phase);
-    exit = yield* Effect.exit(Effect.scoped(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex:runtime-${index + 1}`, transcript, commands, steps: phase, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...runtimePolicy}}, harness, first ? databaseOptions : {...databaseOptions, recoverOnStartup: true})));
+    const options = crashAfterSend === undefined
+      ? (first ? databaseOptions : {...databaseOptions, recoverOnStartup: true})
+      : first
+        ? {...databaseOptions, afterSteps: crashSnapshot}
+        : {databaseLayer: SqlitePersistence.layerFromPath(snapshotPath!).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))), recoverOnStartup: true, continueThreadsAfterServerUpdate: false, afterSteps: readRecovered};
+    exit = yield* Effect.exit(Effect.scoped(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex:runtime-${index + 1}`, transcript, commands, steps: phase, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...runtimePolicy}}, harness, options)));
     if (Exit.isFailure(exit)) break;
-    for (const s of exit.value.storedEvents) stored.set(s.sequence, s);
-    if (first && phases.length > 1) restartBoundary = Math.max(...[...stored.keys()]);
+    // A crash's second runtime starts from the snapshot, so its events supersede the first
+    // runtime's (which may include writes after the snapshot).
+    if (crashAfterSend !== undefined && !first) stored.clear();
+    for (const s of (crashAfterSend !== undefined && !first ? recoveredEvents ?? [] : exit.value.storedEvents)) stored.set(s.sequence, s);
+    if (first && phases.length > 1 && crashAfterSend === undefined) restartBoundary = Math.max(...[...stored.keys()]);
   }
   const state = yield* Ref.get(driver.state);
   const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? [...stored.values()] : [], driver.transcript, state, threadId, messageInputs, replayObserved, restartBoundary, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);

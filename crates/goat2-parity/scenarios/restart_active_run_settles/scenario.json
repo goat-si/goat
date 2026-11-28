@@ -1,14 +1,14 @@
 {
   "v": 1,
   "name": "restart_active_run_settles",
-  "summary": "restart active run settles",
+  "summary": "crash with an accepted active run: v1 recovery settles it cancelled/server_restart",
   "spec": [
-    "docs/parity/README.md"
+    "docs/parity/restart-settlement.md"
   ],
   "v1Refs": [
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/input.ts:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_output.ts:20"
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson:1-28",
+    "apps/server/src/orchestration-v2/testkit/OrchestratorReplayRecovery.integration.test.ts:547-600",
+    "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts:379-396"
   ],
   "streams": {
     "codex": {
@@ -18,7 +18,8 @@
         "source": "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson",
         "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
         "sourceSha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e",
-        "sha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e"
+        "sha256": "ba96e0838a1a0db0896a7ff249f5a42d7ad380373e3033f60e76ce36642c23e6",
+        "transform": "Keep lines 1-28 (turn started, user and agent message items completed); drop 29-32 (token usage, idle status, turn/completed, runtime_exit) so the turn is still active when the host crashes."
       }
     }
   },
@@ -28,23 +29,87 @@
       "stream": "codex"
     }
   },
-  "steps": [],
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with the following text: fixture simple ok",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "running",
+      "thread": "t1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "restart_host",
+      "id": "crash"
+    }
+  ],
   "expect": {
-    "complete": false,
-    "exhaustive": [],
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
+    ],
     "threads": {
-      "t1": []
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with the following text: fixture simple ok"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "host.restarted",
+          "thread": "t1"
+        },
+        {
+          "id": "e4",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "cancelled",
+          "cause": "server_restart"
+        }
+      ]
     },
     "happensBefore": []
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "supported"
     },
     "goat2": {
       "status": "pending",
-      "reason": "no host yet"
+      "reason": "GOAT 2 settles an accepted run interrupted (owner decision; docs/parity/restart-settlement.md accepted_turn_restart_settlement); needs the goat2 target and the Codex driver"
     }
   }
 }

@@ -105,6 +105,13 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
         emit({kind: "run.finished", thread: thread, run, status: "interrupted"});
         flushSteers(p.id, false);
       }
+      // A started run cancelled outside the queue, e.g. by restart recovery with terminationCause
+      // server_restart (ProviderRuntimeRecoveryService.ts:379-396).
+      if (p.status === "cancelled" && old !== "cancelled" && old !== "queued" && runAliases.has(p.id)) {
+        flushSteers(p.id, true);
+        emit({kind: "run.finished", thread: thread, run: runAliases.get(p.id), status: "cancelled", ...(p.terminationCause?.kind ? {cause: p.terminationCause.kind} : {})});
+        flushSteers(p.id, false);
+      }
     }
   }
   resolveSteers();
