@@ -355,9 +355,9 @@ export class OpenCodeSession implements EngineSession {
         }
         if (msg.role === "user") { const receipt = turn.steers.get(msg.id); if (receipt) { receipt.observed = true; if (receipt.ready) this.settleSteer(turn, msg.id, true); } }
         if (msg.role === "assistant") for (const part of turn.parts.values()) if (part.messageID === msg.id && part.type === "text") this.emitText(turn, part);
-        if (msg.role === "user" && msg.id === turn.admission.id) await this.admission(turn, "observed");
+        if (msg.role === "user" && msg.id === turn.admission.id) void this.admission(turn, "observed").catch(() => this.broken("OpenCode admission status could not be reconciled"));
         if (msg.role === "assistant" && msg.time.completed !== undefined) {
-          await this.admission(turn, "completed");
+          void this.admission(turn, "completed").catch(() => this.broken("OpenCode admission status could not be reconciled"));
           for (const part of turn.parts.values()) if (part.messageID === msg.id) this.finishPart(turn, part);
         }
         return;
@@ -409,7 +409,7 @@ export class OpenCodeSession implements EngineSession {
         return;
       }
       case "session.status":
-        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+        if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) void this.admission(turn, "idle").catch(() => this.broken("OpenCode admission status could not be reconciled")); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
         else {
           turn.admission.idle = false;
           if (turn.usageLookup && !turn.interrupted) {
@@ -420,7 +420,7 @@ export class OpenCodeSession implements EngineSession {
         }
         return;
       case "session.idle":
-        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
+        if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) void this.admission(turn, "idle").catch(() => this.broken("OpenCode admission status could not be reconciled")); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
       case "session.compacted": {
         turn.overflow = false;

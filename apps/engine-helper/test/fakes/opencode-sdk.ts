@@ -4,6 +4,7 @@ export let sendEvent: (type: string, properties: unknown) => Promise<void> = asy
 let sequence = 0;
 let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let captureStatus = false;
 let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let modelLimits: { input?: number; context: number } | undefined;
 let providerGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
@@ -25,7 +26,7 @@ const nativePermissions = new Map<string, Array<{ permission: string; pattern: s
 const nativeMetadata = new Map<string, Record<string, unknown>>();
 const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
-export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; captureStatus = false; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setModelLimits(limits: { input?: number; context: number }) { modelLimits = limits; }
 export function holdProvider() { const gate = Promise.withResolvers<void>(); const reached = Promise.withResolvers<void>(); providerGate = gate; providerReached = reached; return { reached: reached.promise, release: () => gate.resolve() }; }
 export function setHistory(value: typeof history) { history = value; }
@@ -40,7 +41,8 @@ export function holdAbort(sessionID: string) {
   abortTarget = sessionID; abortGate = Promise.withResolvers<void>(); abortReached = Promise.withResolvers<void>();
   return { reached: abortReached.promise, release: () => abortGate?.resolve() };
 }
-export function holdStatus() {
+export function holdStatus(capture = false) {
+  captureStatus = capture;
   statusGate = Promise.withResolvers<void>(); statusReached = Promise.withResolvers<void>();
   return { reached: statusReached.promise, release: () => statusGate?.resolve() };
 }
@@ -103,7 +105,7 @@ export function createOpencodeClient() {
       async messages() { calls.push({ method: "messages", args: {} }); historyReached?.resolve(); if (historyGate) { try { await historyGate.promise; } finally { historyFinished?.resolve(); } } return data(history.map((entry) => ({ ...entry, parts: entry.parts ?? [] }))); },
       async children(args: { sessionID: string }) { calls.push({ method: "children", args }); return data((children.get(args.sessionID) ?? []).map((id) => ({ id, permission: nativePermissions.get(id) ?? [], metadata: nativeMetadata.get(id) }))); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
-      async status() { calls.push({ method: "status", args: {} }); statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); },
+      async status() { calls.push({ method: "status", args: {} }); const snapshot = () => ({ "session-fake": { type: active ? "busy" : "idle" }, ...Object.fromEntries([...nativeStatuses].map(([id, type]) => [id, { type }])) }); const before = captureStatus ? snapshot() : undefined; statusReached?.resolve(); if (statusGate) await statusGate.promise; return data(before ?? snapshot()); },
       async promptAsync(args: { sessionID: string; messageID: string; model?: { providerID: string; modelID: string }; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
         calls.push({ method: "prompt", args }); promptReached?.resolve(); await awaitPromptGate(options?.signal);
         if (options?.signal?.aborted && !ignorePromptAbort) throw new Error("fake prompt aborted");
