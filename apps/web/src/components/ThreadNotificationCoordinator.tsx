@@ -31,7 +31,7 @@ import type { ClientSettings } from "@goat/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import { monitorHoldsWakeCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import * as Option from "effect/Option";
-import { AsyncResult, type AtomRegistry } from "effect/reactivity";
+import type { AtomRegistry } from "effect/reactivity";
 import {
   CircleAlertIcon,
   CircleCheckIcon,
@@ -274,180 +274,40 @@ export function startThreadNotifications(
     isRemoteChannelWorkerThreadId(threadId) ||
     usesLocalBotAlerts(environmentId, threadId);
 
-  const BOT_OWNERSHIP_CACHE_LIMIT = 500;
-  const BOT_OWNERSHIP_CACHE_TTL_MS = 15_000;
-  const BOT_OWNERSHIP_CONCURRENCY = 4;
-  let disposed = false;
-  // Caches confirmed worker-ownership answers with a short TTL and invalidates immediately
-  // when the origin's bot taskChanges stream advances.
-  const botOwnershipCache = new Map<
-    string,
-    { readonly owned: boolean; readonly expiresAt: number; readonly revision: unknown }
-  >();
-  const botOriginInvalidators = new Map<EnvironmentId, () => void>();
-  const botOwnershipKey = (origin: EnvironmentId, destination: EnvironmentId, threadId: ThreadId) =>
-    `${origin}\u0000${destination}\u0000${threadId}`;
-  const isActiveBotOrigin = (origin: EnvironmentId) => {
-    if (disposed) return false;
-    if (!registry.get(environmentSummaries.environmentIdsAtom).includes(origin)) return false;
-    const presentation = registry.get(environmentPresentations.presentationAtom(origin));
-    if (presentation?.connection !== undefined && presentation.connection.phase !== "connected") {
-      return false;
-    }
-    return (
-      presentation?.serverConfig?.environment.capabilities.goatBotAttention === true &&
-      registry.get(channelEnvironment.listBotAttention.permissionAtom(origin))
-    );
-  };
-  const extractTaskChangeRevision = (
-    result: AsyncResult.AsyncResult<unknown, unknown>,
-  ): unknown => {
-    const event = AsyncResult.value(result);
-    if (Option.isNone(event)) return undefined;
-    const payload = event.value;
-    if (typeof payload !== "object" || payload === null || !("value" in payload)) {
-      return undefined;
-    }
-    const inner = (payload as { readonly value: unknown }).value;
-    if (typeof inner === "object" && inner !== null && "revision" in inner) {
-      const subscription =
-        "subscription" in payload
-          ? (payload as { readonly subscription: unknown }).subscription
-          : "";
-      return `${String(subscription)}:${String((inner as { readonly revision: unknown }).revision)}`;
-    }
-    return inner;
-  };
-  const readOriginTaskChangeRevision = (origin: EnvironmentId): unknown =>
-    extractTaskChangeRevision(
-      registry.get(channelEnvironment.taskChanges({ environmentId: origin, input: {} })),
-    );
-  const invalidateOriginOwnership = (origin: EnvironmentId) => {
-    const prefix = `${origin}\u0000`;
-    for (const key of botOwnershipCache.keys()) {
-      if (key.startsWith(prefix)) botOwnershipCache.delete(key);
-    }
-    const stop = botOriginInvalidators.get(origin);
-    if (stop !== undefined) {
-      botOriginInvalidators.delete(origin);
-      stop();
-    }
-  };
-  const watchOriginTaskChanges = (origin: EnvironmentId) => {
-    if (disposed || botOriginInvalidators.has(origin)) return;
-    let initialized = false;
-    let lastRevision: unknown;
-    const unsubscribe = registry.subscribe(
-      channelEnvironment.taskChanges({ environmentId: origin, input: {} }),
-      (result) => {
-        const revision = extractTaskChangeRevision(result);
-        if (!initialized) {
-          initialized = true;
-          lastRevision = revision;
-          return;
-        }
-        if (revision !== lastRevision) {
-          invalidateOriginOwnership(origin);
-        }
-      },
-      { immediate: true },
-    );
-    botOriginInvalidators.set(origin, unsubscribe);
-  };
-  const rememberBotOwnership = (
-    origin: EnvironmentId,
-    key: string,
-    owned: boolean,
-    revision: unknown,
-  ) => {
-    if (!isActiveBotOrigin(origin)) return;
-    if (botOwnershipCache.size >= BOT_OWNERSHIP_CACHE_LIMIT && !botOwnershipCache.has(key)) {
-      const oldest = botOwnershipCache.keys().next().value;
-      if (oldest !== undefined) botOwnershipCache.delete(oldest);
-    }
-    watchOriginTaskChanges(origin);
-    botOwnershipCache.set(key, {
-      owned,
-      expiresAt: Date.now() + BOT_OWNERSHIP_CACHE_TTL_MS,
-      revision,
-    });
-  };
-
   const owningOrigins = (destination: EnvironmentId, source?: OrchestrationV2ThreadShell) =>
     source?.creationSource !== undefined && source.creationSource !== "mcp"
       ? []
-      : registry.get(environmentSummaries.environmentIdsAtom).filter((origin) => {
-          if (
-            origin === destination ||
-            (source?.launchedBy?.environmentId != null &&
-              source.launchedBy.environmentId !== origin)
-          ) {
-            return false;
-          }
-          return isActiveBotOrigin(origin);
-        });
+      : registry
+          .get(environmentSummaries.environmentIdsAtom)
+          .filter(
+            (origin) =>
+              origin !== destination &&
+              (source?.launchedBy?.environmentId == null ||
+                source.launchedBy.environmentId === origin) &&
+              registry.get(environmentPresentations.presentationAtom(origin))?.serverConfig
+                ?.environment.capabilities.goatBotAttention === true &&
+              registry.get(channelEnvironment.listBotAttention.permissionAtom(origin)),
+          );
 
   const ownedByBot = async (
     origins: readonly EnvironmentId[],
     environmentId: EnvironmentId,
     threadId: ThreadId,
   ) => {
-    const now = Date.now();
-    const uncached: EnvironmentId[] = [];
-    for (const origin of origins) {
-      const key = botOwnershipKey(origin, environmentId, threadId);
-      const cached = botOwnershipCache.get(key);
-      if (cached !== undefined) {
-        const currentRevision = readOriginTaskChangeRevision(origin);
-        if (now < cached.expiresAt && currentRevision === cached.revision) {
-          if (cached.owned) return true;
-          continue;
-        }
-        if (currentRevision !== cached.revision) {
-          invalidateOriginOwnership(origin);
-        } else {
-          botOwnershipCache.delete(key);
-        }
-      }
-      uncached.push(origin);
-    }
-    for (let index = 0; index < uncached.length; index += BOT_OWNERSHIP_CONCURRENCY) {
-      const batch = uncached.slice(index, index + BOT_OWNERSHIP_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(async (origin) => {
-          // Capture revision before awaiting so answers raced by taskChanges are never cached.
-          const revisionBefore = readOriginTaskChangeRevision(origin);
-          const result = await runAtomCommand(
-            registry,
-            channelEnvironment.listBotAttention,
-            {
-              environmentId: origin,
-              input: { worker: { environmentId, threadId } },
-            },
-            { reportFailure: false },
-          );
-          if (result._tag === "Success") {
-            const owned = result.value.ownsWorker === true;
-            if (
-              !disposed &&
-              isActiveBotOrigin(origin) &&
-              readOriginTaskChangeRevision(origin) === revisionBefore
-            ) {
-              rememberBotOwnership(
-                origin,
-                botOwnershipKey(origin, environmentId, threadId),
-                owned,
-                revisionBefore,
-              );
-            }
-            return owned;
-          }
-          return false;
-        }),
-      );
-      if (results.some(Boolean)) return true;
-    }
-    return false;
+    const results = await Promise.all(
+      origins.map((origin) =>
+        runAtomCommand(
+          registry,
+          channelEnvironment.listBotAttention,
+          {
+            environmentId: origin,
+            input: { worker: { environmentId, threadId } },
+          },
+          { reportFailure: false },
+        ),
+      ),
+    );
+    return results.some((result) => result._tag === "Success" && result.value.ownsWorker === true);
   };
 
   // Completions fire from a timer, so read settings, focus and route when presenting.
@@ -850,23 +710,6 @@ export function startThreadNotifications(
       pending.delete(tag);
     }
     if (count !== pending.size) setNotificationBadge(pending.size);
-    for (const key of botOwnershipCache.keys()) {
-      const [origin, destination] = key.split("\u0000");
-      if (
-        origin === undefined ||
-        destination === undefined ||
-        !activeIds.has(origin as EnvironmentId) ||
-        !activeIds.has(destination as EnvironmentId)
-      ) {
-        botOwnershipCache.delete(key);
-      }
-    }
-    for (const [origin, stop] of botOriginInvalidators) {
-      if (!activeIds.has(origin)) {
-        botOriginInvalidators.delete(origin);
-        stop();
-      }
-    }
   };
 
   // Listeners that only exist for some notification modes, rebuilt when the mode changes.
@@ -925,15 +768,11 @@ export function startThreadNotifications(
   onSettings();
 
   return () => {
-    disposed = true;
     unsubscribeSettings();
     unsubscribeRoute();
     unsubscribeEnvironmentIds();
     for (const entry of watched.values()) entry.unsubscribe();
     watched.clear();
-    for (const stop of botOriginInvalidators.values()) stop();
-    botOriginInvalidators.clear();
-    botOwnershipCache.clear();
     stopModeListeners();
     closeToasts();
   };
