@@ -249,6 +249,13 @@ pub trait EngineSession: Send + Sync {
         let _ = settings;
         Err(EngineError::Unsupported("set_config".into()))
     }
+    /// Read one finished item back from the engine's own record (lazy details: tool output,
+    /// diffs). The host calls it through a live or resumed session, with the locator recorded on
+    /// `item.completed`.
+    async fn read_item(&self, locator: &EngineItemLocator) -> Result<TurnItem, EngineError> {
+        let _ = locator;
+        Err(EngineError::Unsupported("read_item".into()))
+    }
     /// Resident memory of the engine's whole process group, when the driver can measure it
     /// (lane B `ChildProcess::group_rss_bytes()`). Sampled by the host's memory policy.
     fn group_rss_bytes(&self) -> Option<u64> {

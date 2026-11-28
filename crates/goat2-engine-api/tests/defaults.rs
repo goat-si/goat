@@ -1,7 +1,9 @@
 //! The Part 2 trait defaults: a driver that implements only the required methods reports
-//! `Unsupported` for probe and set_config instead of pretending to succeed.
+//! `Unsupported` for probe, set_config and read_item instead of pretending to succeed.
 
-use goat2_contracts::{ModelSelection, ProviderCapabilities, ProviderInstanceId, RuntimeMode};
+use goat2_contracts::{
+    EngineItemLocator, ModelSelection, ProviderCapabilities, ProviderInstanceId, RuntimeMode,
+};
 use goat2_engine_api::*;
 
 fn caps() -> ProviderCapabilities {
@@ -71,6 +73,15 @@ async fn probe_and_set_config_default_to_unsupported() {
     };
     assert!(matches!(
         MinimalSession.set_config(&settings).await,
+        Err(EngineError::Unsupported(_))
+    ));
+
+    let locator = EngineItemLocator {
+        turn_id: "turn-1".into(),
+        item_id: "item-1".into(),
+    };
+    assert!(matches!(
+        MinimalSession.read_item(&locator).await,
         Err(EngineError::Unsupported(_))
     ));
 }
