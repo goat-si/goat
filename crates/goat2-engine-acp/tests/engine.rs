@@ -9,7 +9,7 @@ use goat2_contracts::{
     EngineConfig, EngineDriver, EngineRef, ModelSelection, ProviderInstanceId, RequestKind,
     RequestOutcome, RuntimeMode, ThreadId, TurnItemBody, TurnItemStatus,
 };
-use goat2_engine_acp::{AcpEngineFactory, AcpFlavor, AcpTimeouts, LaunchCommand};
+use goat2_engine_acp::{AcpEngineFactory, AcpFlavor, AcpTimeouts, LaunchCommand, McpBridgeCommand};
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, Instructions, McpEndpoint,
     RequestAnswer, SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
@@ -20,6 +20,7 @@ struct MockFlavor {
     env: Vec<(String, String)>,
     steers: bool,
     restart_after_interrupt: bool,
+    prefers_http_mcp: bool,
 }
 
 impl MockFlavor {
@@ -31,6 +32,7 @@ impl MockFlavor {
                 .collect(),
             steers: false,
             restart_after_interrupt: false,
+            prefers_http_mcp: false,
         }
     }
 }
@@ -57,6 +59,9 @@ impl AcpFlavor for MockFlavor {
     }
     fn restart_after_interrupt(&self) -> bool {
         self.restart_after_interrupt
+    }
+    fn prefers_http_mcp(&self) -> bool {
+        self.prefers_http_mcp
     }
     fn session_mode_for(
         &self,
@@ -117,8 +122,16 @@ fn input(text: &str) -> Vec<EngineInput> {
     }]
 }
 
-async fn start(flavor: MockFlavor, spec: SessionSpec) -> EngineHandle {
+/// The bridge command the tests hand the driver; the fake agent records it without running it.
+const TEST_BRIDGE: &str = "/goat2-test/bin/goat2-acp-mcp-bridge";
+
+fn factory(flavor: MockFlavor) -> AcpEngineFactory {
     AcpEngineFactory::new(Arc::new(flavor))
+        .with_mcp_bridge(McpBridgeCommand::new(TEST_BRIDGE, Vec::<String>::new()))
+}
+
+async fn start(flavor: MockFlavor, spec: SessionSpec) -> EngineHandle {
+    factory(flavor)
         .with_timeouts(AcpTimeouts {
             request: Duration::from_secs(10),
             session_load: Duration::from_secs(10),
@@ -222,12 +235,11 @@ async fn one_turn_streams_and_finishes() {
             .iter()
             .any(|b| matches!(b, TurnItemBody::TodoList { .. }))
     );
-    // GOAT's MCP server goes to agents that take HTTP MCP, with the bearer token.
+    // Advertising HTTP MCP alone still gets the stdio bridge (v1 sessionMcpServers).
     let log = read_log(&log);
-    let new = logged(&log, "session/new");
-    let server = &new[0]["params"]["mcpServers"][0];
-    assert_eq!(server["url"], "http://127.0.0.1:9/mcp");
-    assert_eq!(server["headers"][0]["value"], "Bearer test-token");
+    let server = &session_new_mcp_servers(&log)[0];
+    assert_eq!(server["command"], TEST_BRIDGE);
+    assert_eq!(server["env"][1]["value"], "Bearer test-token");
     // Full access maps to the "code" mode through the flavor.
     assert_eq!(
         logged(&log, "session/set_mode")[0]["params"]["modeId"],
@@ -631,10 +643,9 @@ async fn resume_without_load_or_resume_support_fails_closed() {
         },
         id: "saved".into(),
     });
-    let result =
-        AcpEngineFactory::new(Arc::new(MockFlavor::new(&[("GOAT_ACP_LOAD_SESSION", "0")])))
-            .start(resume)
-            .await;
+    let result = factory(MockFlavor::new(&[("GOAT_ACP_LOAD_SESSION", "0")]))
+        .start(resume)
+        .await;
     assert!(matches!(result, Err(EngineError::StartFailed(m)) if m.contains("session/load")));
 }
 
@@ -717,7 +728,7 @@ async fn launch_overrides_apply() {
         args: vec![],
         env,
     });
-    let factory = AcpEngineFactory::new(Arc::new(MockFlavor::new(&[])));
+    let factory = factory(MockFlavor::new(&[]));
     let started = factory.start_acp(with_launch).await.unwrap();
     assert_eq!(
         started.session.initialize_info().agent_version.as_deref(),
@@ -732,4 +743,94 @@ async fn launch_overrides_apply() {
     );
     assert!(!read_log(&log).is_empty());
     goat2_engine_api::EngineSession::shutdown(&started.session).await;
+}
+
+/// The `mcpServers` the fake agent received in `session/new`.
+fn session_new_mcp_servers(log: &[Value]) -> Value {
+    logged(log, "session/new")[0]["params"]["mcpServers"].clone()
+}
+
+/// v1 `AcpSessionRuntime.ts:1475-1494`: an agent without HTTP MCP gets GOAT through the stdio bridge,
+/// with the credential in the server's environment and never on its command line.
+#[tokio::test]
+async fn stdio_agent_gets_goat_through_the_bridge() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let flavor = MockFlavor::new(&[("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap())]);
+    let handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    let servers = session_new_mcp_servers(&read_log(&log));
+    assert_eq!(
+        servers,
+        serde_json::json!([{
+            "name": "goat",
+            "command": TEST_BRIDGE,
+            "args": [],
+            "env": [
+                {"name": "GOAT_ACP_MCP_ENDPOINT", "value": "http://127.0.0.1:9/mcp"},
+                {"name": "GOAT_ACP_MCP_AUTHORIZATION", "value": "Bearer test-token"},
+            ],
+        }])
+    );
+    handle.session.shutdown().await;
+}
+
+/// v1 passes HTTP servers only for flavors with `preferHttpMcp`: advertising HTTP alone still gets
+/// the bridge (agents that advertise HTTP routinely drop injected HTTP servers, `mcpContext.ts:39-44`).
+#[tokio::test]
+async fn http_mcp_only_when_advertised_and_preferred() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("advertised.jsonl");
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+        ("GOAT_ACP_MCP_HTTP", "1"),
+    ]);
+    let handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    assert_eq!(
+        session_new_mcp_servers(&read_log(&log))[0]["command"],
+        TEST_BRIDGE
+    );
+    handle.session.shutdown().await;
+
+    let log = dir.path().join("preferred.jsonl");
+    let mut flavor = MockFlavor::new(&[
+        ("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap()),
+        ("GOAT_ACP_MCP_HTTP", "1"),
+    ]);
+    flavor.prefers_http_mcp = true;
+    let handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    assert_eq!(
+        session_new_mcp_servers(&read_log(&log)),
+        serde_json::json!([{
+            "type": "http",
+            "name": "goat",
+            "url": "http://127.0.0.1:9/mcp",
+            "headers": [{"name": "Authorization", "value": "Bearer test-token"}],
+        }])
+    );
+    handle.session.shutdown().await;
+
+    let log = dir.path().join("preferred-unadvertised.jsonl");
+    let mut flavor = MockFlavor::new(&[("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap())]);
+    flavor.prefers_http_mcp = true;
+    let handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    assert_eq!(
+        session_new_mcp_servers(&read_log(&log))[0]["command"],
+        TEST_BRIDGE
+    );
+    handle.session.shutdown().await;
+}
+
+/// An agent never starts without GOAT tools: no bridge and no HTTP route fails session setup.
+#[tokio::test]
+async fn missing_bridge_fails_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = AcpEngineFactory::new(Arc::new(MockFlavor::new(&[]))).without_mcp_bridge();
+    let error = match factory
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+    {
+        Ok(_) => panic!("started without GOAT tools"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.contains("MCP bridge"), "{error}");
 }

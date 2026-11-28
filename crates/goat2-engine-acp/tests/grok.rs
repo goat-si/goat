@@ -42,6 +42,10 @@ async fn prompt_complete_settles_without_rpc_response() {
         }),
     };
     let mut h = AcpEngineFactory::new(Arc::new(Grok::default()))
+        .with_mcp_bridge(goat2_engine_acp::McpBridgeCommand::new(
+            "/goat2-test/bin/goat2-acp-mcp-bridge",
+            Vec::<String>::new(),
+        ))
         .start(spec)
         .await
         .unwrap();

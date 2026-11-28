@@ -7,6 +7,7 @@ pub mod elicitation;
 pub mod engine;
 pub mod flavor;
 pub mod items;
+pub mod mcp;
 pub mod normalize;
 pub mod policy;
 pub mod probe;
@@ -21,3 +22,4 @@ pub use flavor::{
     AcpFlavor, AuthPolicy, ClientCaps, FlavorEvent, LaunchCommand, ModelWrite, ResumeMethod,
     StdoutLine,
 };
+pub use mcp::McpBridgeCommand;

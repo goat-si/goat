@@ -25,9 +25,9 @@ use std::time::Duration;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::v1::schema::{
     AuthenticateRequest, CancelNotification, ClientCapabilities, ContentBlock,
-    FileSystemCapabilities, HttpHeader, ImageContent, Implementation, InitializeRequest,
-    LoadSessionRequest, McpServer, McpServerHttp, NewSessionRequest, PromptRequest,
-    ResumeSessionRequest, SetSessionModeRequest, SystemPrompt, TextContent,
+    FileSystemCapabilities, ImageContent, Implementation, InitializeRequest, LoadSessionRequest,
+    NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionModeRequest, SystemPrompt,
+    TextContent,
 };
 use agent_client_protocol::{Agent, Client, Lines, Responder, UntypedMessage};
 use async_trait::async_trait;
@@ -47,6 +47,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
 use crate::flavor::{AcpFlavor, AuthPolicy, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine};
 use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
+use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
 use crate::policy::{
     Disposition, PermissionChoice, RuntimePolicy, mcp_tool_approval_elicitation_disposition,
@@ -91,6 +92,8 @@ pub struct AcpEngineFactory {
     resolver: Option<AttachmentResolver>,
     timeouts: AcpTimeouts,
     client_version: String,
+    /// GOAT's stdio MCP bridge for agents that do not take HTTP MCP (see [crate::mcp]).
+    mcp_bridge: Option<McpBridgeCommand>,
 }
 
 impl AcpEngineFactory {
@@ -100,7 +103,20 @@ impl AcpEngineFactory {
             resolver: None,
             timeouts: AcpTimeouts::default(),
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
+            mcp_bridge: McpBridgeCommand::locate(),
         }
+    }
+
+    /// Use this bridge command instead of [McpBridgeCommand::locate].
+    pub fn with_mcp_bridge(mut self, bridge: McpBridgeCommand) -> Self {
+        self.mcp_bridge = Some(bridge);
+        self
+    }
+
+    /// No stdio bridge: agents that need it fail to start (tests of the fail-closed path).
+    pub fn without_mcp_bridge(mut self) -> Self {
+        self.mcp_bridge = None;
+        self
     }
 
     pub fn with_attachment_resolver(mut self, resolver: AttachmentResolver) -> Self {
@@ -1553,7 +1569,8 @@ impl AcpEngineFactory {
                 append.clone().unwrap_or_default(),
             ))])
         });
-        let mcp_servers = mcp_servers_for(&init, spec);
+        let mcp_servers =
+            crate::mcp::mcp_servers_for(&init, spec, flavor.as_ref(), self.mcp_bridge.as_ref())?;
 
         let resume_id = spec
             .resume
@@ -1710,21 +1727,6 @@ impl AcpEngineFactory {
             id: session_id,
         })
     }
-}
-
-/// GOAT's MCP server for this thread: HTTP when the agent takes it (v1 `sessionMcpServers`).
-/// v1 bridged stdio-only agents through `goat acp-mcp-bridge`; GOAT 2 has no bridge binary yet,
-/// so those agents start without GOAT tools.
-fn mcp_servers_for(init: &InitializeInfo, spec: &SessionSpec) -> Vec<McpServer> {
-    if spec.mcp.url.is_empty() || !init.mcp_http {
-        return Vec::new();
-    }
-    vec![McpServer::Http(
-        McpServerHttp::new("goat", spec.mcp.url.clone()).headers(vec![HttpHeader::new(
-            "Authorization",
-            format!("Bearer {}", spec.mcp.bearer_token),
-        )]),
-    )]
 }
 
 #[allow(dead_code)]

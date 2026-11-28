@@ -211,6 +211,11 @@ pub trait AcpFlavor: Send + Sync + 'static {
     fn prompt_meta(&self, _prompt_id: &str) -> Option<Map<String, Value>> {
         None
     }
+    /// v1 `preferHttpMcp` (`adapterFlavor.ts:126`): hand GOAT's MCP endpoint over HTTP when the agent
+    /// advertises `mcpCapabilities.http`; otherwise the stdio bridge (see [crate::mcp]).
+    fn prefers_http_mcp(&self) -> bool {
+        false
+    }
     /// v1 `rewriteUserText`.
     fn rewrite_user_text(&self, text: String) -> String {
         text
