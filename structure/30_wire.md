@@ -10,13 +10,20 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `read_page {reqId, threadId, before, limit}` | scroll up |
 | `resync_item {subId, itemId}` | offset mismatch on streamed text |
 | `unsubscribe`, `pong` | |
-| **commands (send input, start thread, stop, resolve request)** | **missing — see 90_gaps** |
+| `send_input {threadId, text, mode, attachments?}` | command |
+| `start_thread {kind, title?, botId?, parent?, engine, cwd?, text?, mode?: async\|wait}` | command |
+| `stop_thread`, `resume_queue {threadId}` | command (next user send also releases a hold) |
+| `resolve_request {threadId, requestId, outcome, text?, answers?}` | command; unknown runs: kind `resend`, outcome `resend\|dropped` |
+| `archive_thread`, `rename_thread`, `create_bot {name, purpose, face, engine}` | command |
+| every command: `reqId` + `clientRequestId` (idempotent) | being added by lane C |
 
 | Host → client | |
 |---|---|
 | `cards_reset {reason, epoch}`, `card_changed`, `card_removed`, `cards_caught_up` | |
 | `thread_reset {reason, epoch}`, `thread_event {line}`, `thread_caught_up`, `page` | |
 | `text_append {itemId, offset (UTF-16), text}` | live text only, never stored |
+| `command_result {reqId, ok, value?, error?{code, message, retryable}}` | the one reply to every command |
+| `bot_changed {bot: BotProfile}`, `bot_removed` | on the cards stream |
 | `error` | |
 
 Reset reasons: `epoch_changed | invalid_cursor | thread_missing | too_far_behind` (128 events / 1 MiB).
@@ -25,7 +32,7 @@ Reset reasons: `epoch_changed | invalid_cursor | thread_missing | too_far_behind
 HTTP on 127.0.0.1, `rmcp`, GOAT v1 agent-surface shape: listing shows `goat_describe` + `goat_call`;
 result `ok | error | needs_human`. Token per (thread, process generation); caller = the thread's
 active run at call time. 10 paths: `surface.describe`, `surface.call`, `thread.start|send|read|list|wait|stop`,
-`user.send`, `request.ask`.
+`user.send`, `request.ask`. `thread.start` takes `mode: async|wait` (default async, v1 semantics: Stop stops wait-mode children only).
 
 ## Host → engine
 | Engine | Protocol | Where |
@@ -35,3 +42,7 @@ active run at call time. 10 paths: `surface.describe`, `surface.call`, `thread.s
 | ACP (Part 2) | Zed `agent-client-protocol` crate | later |
 
 Steer/turn result from a driver: `Accepted | Declined | RefusedUnowned | Unknown` → `input.delivered`.
+
+## UI outbox (send-first)
+Renderer keeps an outbox keyed by `clientRequestId` (persisted): shows at once, sent once when the socket is up.
+No `command_result` before a drop → "Not confirmed" with Resend / Delete; never auto-resend.

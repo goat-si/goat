@@ -4,7 +4,8 @@
 <dataDir>/                     ~/.goat2-dev (Dev) | ~/.goat2 (release)
   cards.sqlite                 card index (cache; rebuildable from folders)
   ui-state.json                visits, read marks, pin order (not thread history)
-  host.json                    running host: pid, port, generation
+  host.json                    running host: pid, port, generation (+ token, 0600, manual runs)
+  bots/<botId>.json            BotProfile {botId, name, purpose, face{shape,color,goat}, role main|member, threadId, engine}; main bot GOAT created on first start
   logs/stalls.ndjson           event-loop / blocking stall records
   threads/<threadId>/
     goat.jsonl                 ONLY source of truth, append-only, line = {v, seq, at, ...event}

@@ -21,12 +21,22 @@ flowchart LR
 |---|---|---|---|
 | Electron main | user | until quit | no thread work; no IPC data path for threads |
 | renderer | main | per window | talks to the host directly over WebSocket |
-| `goat2-host` | main | until app quit | quitting the app ends the work; writes `host.json` (pid, port, generation); on start: cleans leftover groups from `host.json`, settles runs, regenerates index epoch |
+| `goat2-host` | main | until app quit | quitting the app ends the work; own process group; exits when stdin closes; writes `host.json` (pid, port, generation); on start: kills a leftover host group from `host.json` (never attaches), settles runs, regenerates index epoch |
 | `codex app-server` | host | per thread; stopped after 10 min idle | own process group, `nice -n 10` for agent commands, memory limit per group |
 
 | Build | App | Bundle id | Data dir | Host port |
 |---|---|---|---|---|
-| Dev (Part 1) | `/Applications/GOAT 2 (Dev).app` | `si.goat.goat2.dev` | `~/.goat2-dev` | set by lane G, not 3773/3774 (GOAT v1) |
+| Dev (Part 1) | `/Applications/GOAT 2 (Dev).app` | `si.goat.goat2.dev` | `~/.goat2-dev` | 3873 (GOAT v1 uses 3773/3774) |
 | Release (later) | `GOAT 2.app` | `si.goat.goat2` | `~/.goat2` | later |
 
 GOAT v1 Nightly is a separate app with its own data (`~/.goat/desktop-nightly`); nothing is shared.
+
+## Host launch contract (lanes E + G, owner 2026-11-28)
+- Shell starts `goat2-host` with env only: `GOAT2_DATA_DIR`, `GOAT2_HOST_PORT` (0 = pick free), `GOAT2_HOST_TOKEN`
+  (random per app launch; if absent the host generates one and writes it to `host.json`, mode 0600). CLI flags
+  are aliases for manual runs only.
+- Ready: one JSON line on stdout `{wsUrl, mcpUrl, port, generation}` and `GET /health` = 200.
+- One 127.0.0.1 server: `/ws` (UI token), `/mcp` (per-thread tokens), `/health`.
+- Quit: SIGTERM to the host group, SIGKILL after 5 s. Crash: kill leftover group, restart with v1 backoff
+  (jittered 1–30 s, 5 restarts per 10 min then pause; v1 `DesktopBackendRecoveryPolicy.ts`).
+- UI gets `{wsUrl, token}` from preload `window.goat2Host` and connects directly.
