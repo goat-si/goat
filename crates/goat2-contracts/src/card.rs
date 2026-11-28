@@ -30,11 +30,45 @@ pub struct ParentRef {
     pub by_item_id: ItemId,
 }
 
-/// Engine drivers. Part 1 ships Codex only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+/// The provider behind an engine, as v1 `ProviderDriverKind` values (goat
+/// `apps/web/src/components/settings/providerDriverMeta.ts`). It names the provider, not the
+/// transport, so moving a provider between driver crates never changes persisted lines. Registry
+/// agents are `acpRegistry` plus the agent id. Cloud kinds are Part 3.
+///
+/// Wire: `"codex"`, `"claudeAgent"`, `"grok"`, ..., `{"acpRegistry": {"agentId": "kimi"}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EngineDriver {
     Codex,
+    ClaudeAgent,
+    Grok,
+    Fx,
+    Antigravity,
+    Opencode,
+    Cursor,
+    Muse,
+    Pi,
+    Omo,
+    AcpRegistry { agent_id: String },
+}
+
+impl EngineDriver {
+    /// The v1 `ProviderDriverKind` slug (`acpRegistry` for every registry agent).
+    pub fn driver_kind(&self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeAgent => "claudeAgent",
+            Self::Grok => "grok",
+            Self::Fx => "fx",
+            Self::Antigravity => "antigravity",
+            Self::Opencode => "opencode",
+            Self::Cursor => "cursor",
+            Self::Muse => "muse",
+            Self::Pi => "pi",
+            Self::Omo => "omo",
+            Self::AcpRegistry { .. } => "acpRegistry",
+        }
+    }
 }
 
 /// Engine settings for a thread, with v1 `OrchestrationV2AppThread` field names.

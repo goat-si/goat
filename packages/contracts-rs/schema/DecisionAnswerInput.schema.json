@@ -1,0 +1,53 @@
+{
+  "$defs": {
+    "DecisionApprovalAnswer": {
+      "description": "v1 `DecisionAnswerInput.decision` for a projected approval.",
+      "enum": [
+        "accept",
+        "decline"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `DecisionAnswerInput` (MCP `decision.answer`): `optionId` for a durable decision,\n`answers` or `decision` for a projected request; `reason` is required.",
+  "properties": {
+    "answers": {
+      "additionalProperties": true,
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "decision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DecisionApprovalAnswer"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "optionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reason": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "reason"
+  ],
+  "title": "DecisionAnswerInput",
+  "type": "object"
+}
