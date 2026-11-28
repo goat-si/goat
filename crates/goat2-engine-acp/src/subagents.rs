@@ -1056,4 +1056,37 @@ mod tests {
         );
         assert!(out.is_empty());
     }
+
+    /// Final review finding 8 (v1 adapter.ts:2298-2333): a carried-over subagent's reply that
+    /// arrives after its turn completed is kept, so its later end carries the reply.
+    #[test]
+    fn carryover_child_reply_after_the_turn_is_kept() {
+        let flavor = flavor("claude-acp");
+        let mut tracker = tracker();
+        let mut projector = projector();
+        let mut out = Vec::new();
+        {
+            let mut turn = Some(TurnRef {
+                turn_id: "turn-1",
+                projector: &mut projector,
+            });
+            let launch = json!({"sessionUpdate": "tool_call", "toolCallId": "toolu_1", "name": "Agent", "status": "in_progress", "rawInput": {"prompt": "find bugs", "description": "Bug hunt"}});
+            tracker.root_tool(&flavor, true, &launch, &mut turn, &mut out);
+            let delegation = json!({"sessionId": "child-s", "update": {"sessionUpdate": "session_message", "messageId": "toolu_1", "senderSessionId": "root", "content": [{"type": "text", "text": "find bugs"}]}});
+            let event = flavor.extract_subagent_session_event(&delegation).unwrap();
+            tracker.session_event(&flavor, event, &mut turn, &mut out);
+        }
+        tracker.turn_settled("turn-1", true, false, &mut out);
+        out.clear();
+        let reply = json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "found 2 bugs"}});
+        tracker.child_update(&flavor, true, "child-s", &reply, &mut None, &mut out);
+        let idle = json!({"sessionId": "root", "update": {"sessionUpdate": "subagent_update", "sessionId": "child-s", "state": {"state": "idle", "stopReason": "end_turn"}}});
+        let event = flavor.extract_subagent_session_event(&idle).unwrap();
+        tracker.session_event(&flavor, event, &mut None, &mut out);
+        let written = subagent_items(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].0, "turn-1");
+        assert_eq!(written[0].1.status, TurnItemStatus::Completed);
+        assert_eq!(result_of(&written[0].1).as_deref(), Some("found 2 bugs"));
+    }
 }

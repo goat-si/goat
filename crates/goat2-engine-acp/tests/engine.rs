@@ -1074,3 +1074,311 @@ async fn newline_free_stderr_flood_is_drained_and_bounded() {
     };
     assert!(error.len() < 8 * 1024, "reason is {} bytes", error.len());
 }
+
+// ---- final review (engine slice) -----------------------------------------------------------
+
+/// Run one turn of a fake-agent script in the given mode; returns whether the person was asked,
+/// and the answer text. Asked approvals are declined.
+async fn scripted_turn(
+    dir: &std::path::Path,
+    mode: RuntimeMode,
+    lines: &[serde_json::Value],
+) -> (bool, String) {
+    let script = dir.join(format!("script-{}.jsonl", lines.len()));
+    std::fs::write(
+        &script,
+        lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    let flavor = MockFlavor::new(&[("GOAT_ACP_SCRIPT", script.to_str().unwrap())]);
+    let mut handle = start(flavor, spec(dir, mode)).await;
+    let started = handle
+        .session
+        .start_turn(input("go"), &settings(mode))
+        .await;
+    assert!(
+        matches!(started, TurnStartResult::Accepted { .. }),
+        "{started:?}"
+    );
+    let mut asked = false;
+    let mut events = Vec::new();
+    loop {
+        let event = next(&mut handle).await;
+        if let EngineEvent::RequestOpened {
+            key,
+            kind: RequestKind::Approval,
+            ..
+        } = &event
+        {
+            asked = true;
+            handle
+                .session
+                .answer_request(
+                    key,
+                    RequestAnswer {
+                        outcome: RequestOutcome::Decline,
+                        text: None,
+                        answers: None,
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        let done = matches!(event, EngineEvent::TurnFinished { .. });
+        events.push(event);
+        if done {
+            break;
+        }
+    }
+    handle.session.shutdown().await;
+    (asked, answer_text(&events))
+}
+
+/// Final review finding 2 (v1 autoAcceptEdits.ts:21-32,148-160): auto-accept reads every path the
+/// tool call named so far, and a tool update it could not read leaves the paths unknown.
+#[tokio::test]
+async fn auto_accept_edits_counts_paths_named_by_earlier_updates() {
+    let dir = tempfile::tempdir().unwrap();
+    let inside = dir.path().join("inside.txt");
+    let inside = inside.to_str().unwrap();
+    let options = serde_json::json!([
+        {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+        {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}
+    ]);
+    let update = |path: &str| {
+        serde_json::json!({"update": {"sessionUpdate": "tool_call", "toolCallId": "edit-1",
+            "kind": "edit", "title": "Edit", "status": "pending", "locations": [{"path": path}]}})
+    };
+    let request = serde_json::json!({"request": "session/request_permission", "params": {
+        "sessionId": "$SESSION",
+        "toolCall": {"toolCallId": "edit-1", "kind": "edit", "locations": [{"path": inside}]},
+        "options": options}});
+    // An earlier update named a file outside the workspace: the person decides.
+    let (asked, text) = scripted_turn(
+        dir.path(),
+        RuntimeMode::AutoAcceptEdits,
+        &[update("/etc/goat2-outside.txt"), request.clone()],
+    )
+    .await;
+    assert!(
+        asked,
+        "auto-approved an edit that also touches /etc: {text}"
+    );
+    assert!(text.contains("reject-once"), "{text}");
+    // Only workspace paths, before and in the request: approved without asking.
+    let (asked, text) = scripted_turn(
+        dir.path(),
+        RuntimeMode::AutoAcceptEdits,
+        &[update(inside), request.clone()],
+    )
+    .await;
+    assert!(!asked, "{text}");
+    assert!(text.contains("allow-once"), "{text}");
+    // A tool update without a readable tool call id may have named any path: unknown.
+    let (asked, text) = scripted_turn(
+        dir.path(),
+        RuntimeMode::AutoAcceptEdits,
+        &[
+            update(inside),
+            serde_json::json!({"update": {"sessionUpdate": "tool_call_update", "toolCallId": 7,
+                "locations": [{"path": "/etc/goat2-outside.txt"}]}}),
+            request,
+        ],
+    )
+    .await;
+    assert!(
+        asked,
+        "auto-approved after an unreadable tool update: {text}"
+    );
+}
+
+/// Final review finding 4: the stderr kept for errors is cleaned before it is cut, so a cut
+/// after "Bearer " never leaves the token behind (both the 4096-character tail and the bounded
+/// line pieces).
+#[tokio::test]
+async fn stderr_cuts_never_reveal_a_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    for length in [5_000usize, 70_000] {
+        let line = format!("Authorization: Bearer {}", "S".repeat(length));
+        let flavor = MockFlavor::new(&[
+            ("GOAT_ACP_STDERR_LINE", line.as_str()),
+            ("GOAT_ACP_EXIT_AT_START", "1"),
+        ]);
+        let error = match factory(flavor)
+            .start(spec(dir.path(), RuntimeMode::FullAccess))
+            .await
+        {
+            Ok(_) => panic!("started"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            !error.contains(&"S".repeat(16)),
+            "{length}-character token in: {}",
+            &error[..error.len().min(300)]
+        );
+    }
+}
+
+/// Final review finding 5 (v1 strictParser.ts:18-30): a stdout line longer than 16 Mi
+/// characters ends the connection instead of growing host memory.
+#[tokio::test]
+async fn endless_stdout_line_fails_the_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let flood = (17 * 1024 * 1024).to_string();
+    let flavor = MockFlavor::new(&[("GOAT_ACP_FLOOD_STDOUT", flood.as_str())]);
+    let error = match factory(flavor)
+        .with_timeouts(AcpTimeouts {
+            request: Duration::from_secs(10),
+            session_load: Duration::from_secs(10),
+            cancel: Duration::from_secs(2),
+        })
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+    {
+        Ok(_) => panic!("started"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        error.contains("ACP frame exceeds the maximum size"),
+        "{error}"
+    );
+}
+
+/// Final review finding 7 (v1 probe.ts:461-487, registry onUrlElicitation): a sign-in link the
+/// agent sent during session setup reaches the host even though setup then failed, and the next
+/// turn starts the agent again.
+#[tokio::test]
+async fn setup_signin_link_survives_a_failed_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let once = dir.path().join("asked");
+    let answer = dir.path().join("answer.json");
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_URL_ELICITATION_ON_NEW", "1"),
+        ("GOAT_ACP_URL_ELICITATION_ONCE_PATH", once.to_str().unwrap()),
+        (
+            "GOAT_ACP_ELICITATION_RESPONSE_LOG_PATH",
+            answer.to_str().unwrap(),
+        ),
+    ]);
+    let mut handle = factory(flavor)
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+        .expect("a start that asked for a sign-in hands its link over");
+    match next(&mut handle).await {
+        EngineEvent::AuthRequired { turn_id, url, .. } => {
+            assert_eq!(turn_id, None);
+            assert_eq!(url.as_deref(), Some("https://example.invalid/login"));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&answer).unwrap(),
+        r#"{"action":"accept"}"#
+    );
+    // The run that triggered the start fails with the start error; the link stays open.
+    let first = handle
+        .session
+        .start_turn(input("hi"), &settings(RuntimeMode::FullAccess))
+        .await;
+    assert!(
+        matches!(&first, TurnStartResult::Declined { reason } if reason.contains("authentication required")),
+        "{first:?}"
+    );
+    assert!(
+        handle.events.try_recv().is_err(),
+        "no second sign-in event replaces the link"
+    );
+    // After the sign-in the next turn starts the agent and runs.
+    let second = handle
+        .session
+        .start_turn(input("hi"), &settings(RuntimeMode::FullAccess))
+        .await;
+    assert!(
+        matches!(second, TurnStartResult::Accepted { .. }),
+        "{second:?}"
+    );
+    let (events, outcome) = until_finished(&mut handle).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert_eq!(answer_text(&events), "hello from mock");
+    handle.session.shutdown().await;
+}
+
+/// Final review finding 10 (v1 acpAppContext.ts:63-64): a slash command sent first does not
+/// consume the preamble; the next prompt carries it.
+#[tokio::test]
+async fn slash_command_first_keeps_the_preamble() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("log.jsonl");
+    let mut with_preamble = spec(dir.path(), RuntimeMode::FullAccess);
+    with_preamble.instructions = Some(Instructions {
+        append_system_prompt: None,
+        first_message_preamble: Some("BOT BRIEF".into()),
+    });
+    let mut handle = start(
+        MockFlavor::new(&[("GOAT_ACP_REQUEST_LOG_PATH", log.to_str().unwrap())]),
+        with_preamble,
+    )
+    .await;
+    for text in ["/review", "hello"] {
+        handle
+            .session
+            .start_turn(input(text), &settings(RuntimeMode::FullAccess))
+            .await;
+        let (_, outcome) = until_finished(&mut handle).await;
+        assert_eq!(outcome, TurnOutcome::Done);
+    }
+    handle.session.shutdown().await;
+    let log = read_log(&log);
+    let prompts: Vec<Vec<String>> = logged(&log, "session/prompt")
+        .iter()
+        .map(|m| {
+            m["params"]["prompt"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b["text"].as_str().unwrap_or_default().to_owned())
+                .collect()
+        })
+        .collect();
+    assert_eq!(prompts, [vec!["/review"], vec!["BOT BRIEF", "hello"]]);
+}
+
+/// Final review finding 21 (v1 AcpSessionRuntime.ts:835): stderr without a newline reaches the
+/// exit reason even when a child of the agent keeps stderr open after the agent exits.
+#[tokio::test]
+async fn short_stderr_without_newline_reaches_the_exit_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_CRASH_PROMPT", "1"),
+        ("GOAT_ACP_CRASH_STDERR", "fatal: config missing"),
+        ("GOAT_ACP_CRASH_STDERR_PARTIAL", "1"),
+        ("GOAT_ACP_STDERR_HOLDER", "1"),
+    ]);
+    let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let mut reasons = Vec::new();
+    loop {
+        match next(&mut handle).await {
+            EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Failed { reason },
+                ..
+            } => reasons.push(reason),
+            EngineEvent::Exited { reason } => {
+                reasons.push(reason);
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!(
+        reasons.iter().any(|r| r.contains("fatal: config missing")),
+        "{reasons:?}"
+    );
+}

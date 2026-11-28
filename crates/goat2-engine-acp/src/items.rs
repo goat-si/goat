@@ -1169,4 +1169,32 @@ mod tests {
     fn rfc3339() {
         assert_eq!(rfc3339_ms(0), "1970-01-01T00:00:00.000Z");
     }
+
+    /// Final review finding 16 (v1 keeps the diff itself, runtimeModel.ts:385-394): line counts
+    /// follow line order, and a diff too large to count leaves the counts out.
+    #[test]
+    fn reordered_lines_count_as_changes() {
+        let edit = |old: &str, new: &str| ToolState {
+            tool_call_id: "e".into(),
+            kind: Some("edit".into()),
+            status: Some("completed".into()),
+            content: Some(
+                json!([{"type": "diff", "path": "/w/a.txt", "oldText": old, "newText": new}]),
+            ),
+            ..ToolState::default()
+        };
+        let counts = |state: &ToolState| match tool_body(state) {
+            TurnItemBody::FileChange {
+                additions,
+                deletions,
+                ..
+            } => (additions, deletions),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(counts(&edit("a\nb\n", "b\na\n")), (Some(1), Some(1)));
+        assert_eq!(counts(&edit("a\nb\nc\n", "a\nx\nc\n")), (Some(1), Some(1)));
+        let old: String = (0..3000).map(|i| format!("old {i}\n")).collect();
+        let new: String = (0..3000).map(|i| format!("new {i}\n")).collect();
+        assert_eq!(counts(&edit(&old, &new)), (None, None));
+    }
 }

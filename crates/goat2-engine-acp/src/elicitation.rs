@@ -406,4 +406,29 @@ mod tests {
             json!(["b"])
         );
     }
+
+    /// Final review finding 15 (v1 elicitationForm.ts:153-161): an integer answer keeps its value;
+    /// it is never clamped to another number.
+    #[test]
+    fn large_integers_keep_their_value() {
+        let form = parse_elicitation_form(
+            &json!({"properties": {"n": {"type": "integer", "title": "N"}}, "required": ["n"]}),
+            "m",
+            false,
+        )
+        .unwrap();
+        let content = |answer: Value| {
+            form.content(json!({ "n": answer }).as_object().unwrap())
+                .map(|c| c["n"].clone())
+        };
+        assert_eq!(content(json!("1e20")), Some(json!(1e20)));
+        assert_eq!(content(json!(1e20)), Some(json!(1e20)));
+        assert_eq!(
+            content(json!("9007199254740993")),
+            Some(json!(9_007_199_254_740_993_i64))
+        );
+        assert_eq!(content(json!(u64::MAX)), Some(json!(u64::MAX)));
+        assert_eq!(content(json!("-12")), Some(json!(-12)));
+        assert_eq!(content(json!("1.5")), None);
+    }
 }

@@ -41,7 +41,13 @@
 //! - `GOAT_ACP_IGNORE_CANCEL=1` (GOAT 2): ignore `session/cancel` (a wedged prompt).
 //! - `GOAT_ACP_FAIL_PROMPT=1`: answer `session/prompt` with an error.
 //! - `GOAT_ACP_CRASH_PROMPT=1`: exit during the prompt. (GOAT 2) `GOAT_ACP_CRASH_STDERR=<text>` is printed on stderr
-//!   first.
+//!   first; with `GOAT_ACP_CRASH_STDERR_PARTIAL=1` (GOAT 2) without a newline.
+//! - `GOAT_ACP_STDERR_HOLDER=1` (GOAT 2): start a child of the agent that keeps its stderr open and never exits
+//!   (it ends with the process group), so the agent's exit does not close stderr.
+//! - `GOAT_ACP_FLOOD_STDOUT=<bytes>` (GOAT 2): print this many `x` on stdout without a newline at start, then
+//!   work normally.
+//! - `GOAT_ACP_URL_ELICITATION_ONCE_PATH=<file>` (GOAT 2): with `GOAT_ACP_URL_ELICITATION_ON_NEW=1`, only a
+//!   `session/new` while this file does not exist asks for the sign-in (and creates it); later ones succeed.
 //! - `GOAT_ACP_FLOOD_STDERR=<bytes>` (GOAT 2): print this many `x` on stderr without a newline at start,
 //!   then work normally.
 //! - `GOAT_ACP_STOP_REASON=<reason>` (GOAT 2): stop reason of a finished prompt.
@@ -118,6 +124,15 @@ fn env(name: &str) -> Option<String> {
 
 fn flag(name: &str) -> bool {
     env(name).as_deref() == Some("1")
+}
+
+/// `GOAT_ACP_URL_ELICITATION_ONCE_PATH`: the first `session/new` asks for the sign-in, later ones do not.
+fn sign_in_pending() -> bool {
+    match env("GOAT_ACP_URL_ELICITATION_ONCE_PATH") {
+        None => true,
+        Some(path) if std::path::Path::new(&path).exists() => false,
+        Some(path) => std::fs::write(path, "asked").is_ok(),
+    }
 }
 
 struct Agent {
@@ -277,7 +292,7 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                 agent.respond(&id, json!({}));
             }
         }
-        "session/new" if flag("GOAT_ACP_URL_ELICITATION_ON_NEW") => {
+        "session/new" if flag("GOAT_ACP_URL_ELICITATION_ON_NEW") && sign_in_pending() => {
             let agent2 = Arc::clone(&agent);
             std::thread::spawn(move || {
                 let answer = agent2.request("elicitation/create", json!({"mode": "url", "elicitationId": "login-1", "message": "Sign in", "url": "https://example.invalid/login"}));
@@ -652,7 +667,12 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
     }
     if flag("GOAT_ACP_CRASH_PROMPT") {
         if let Some(text) = env("GOAT_ACP_CRASH_STDERR") {
-            eprintln!("{text}");
+            if flag("GOAT_ACP_CRASH_STDERR_PARTIAL") {
+                eprint!("{text}");
+                let _ = std::io::stderr().flush();
+            } else {
+                eprintln!("{text}");
+            }
         }
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "about to crash"}}));
         std::thread::sleep(Duration::from_millis(50));
@@ -917,6 +937,12 @@ fn play_script(
 }
 
 fn main() {
+    // The stderr holder (`GOAT_ACP_STDERR_HOLDER`): keeps the inherited stderr open until killed.
+    if flag("GOAT_ACP_PARK") {
+        loop {
+            std::thread::park();
+        }
+    }
     if flag("GOAT_ACP_MOCK_CLI") && mock_cli() {
         return;
     }
@@ -942,6 +968,15 @@ fn main() {
     if let Some(line) = env("GOAT_ACP_STDERR_LINE") {
         eprintln!("{line}");
     }
+    if flag("GOAT_ACP_STDERR_HOLDER")
+        && let Ok(exe) = std::env::current_exe()
+    {
+        let _ = std::process::Command::new(exe)
+            .env("GOAT_ACP_PARK", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn();
+    }
     if let Some(bytes) = env("GOAT_ACP_FLOOD_STDERR").and_then(|v| v.parse::<usize>().ok()) {
         let mut err = std::io::stderr().lock();
         let block = vec![b'x'; 64 * 1024];
@@ -965,6 +1000,19 @@ fn main() {
     if let Some(code) = env("GOAT_ACP_EXIT_AT_START") {
         let _ = std::io::stderr().flush();
         std::process::exit(code.parse().unwrap_or(1));
+    }
+    if let Some(bytes) = env("GOAT_ACP_FLOOD_STDOUT").and_then(|v| v.parse::<usize>().ok()) {
+        let mut out = agent.out.lock().unwrap();
+        let block = vec![b'x'; 64 * 1024];
+        let mut left = bytes;
+        while left > 0 {
+            let n = left.min(block.len());
+            if out.write_all(&block[..n]).is_err() {
+                break;
+            }
+            left -= n;
+        }
+        let _ = out.flush();
     }
     if let Some(line) = env("GOAT_ACP_STDOUT_LINE") {
         let mut out = agent.out.lock().unwrap();
