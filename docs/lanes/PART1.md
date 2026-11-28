@@ -94,9 +94,16 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
   pnpm -r typecheck                      # the TS side must stay green too
   ! git grep -n -E '^(<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)( |$)' -- . ':!design'   # no conflict markers (diff3 too)
-  git push --force-with-lease origin goat2
+  git push origin goat2                  # plain push, NEVER force: a rejection means another lane (maybe on
+                                         # another machine) merged first -> cleanup, then redo merge + gates
   trap - ERR; release
   ```
+- **Lanes run on several machines (owner rule 2026-11-28 ~23:45 KST):** this Mac was overloaded (load 57 on 18
+  cores), so lanes are spread over `mac-studio` and `macbookpro2` (both have `~/Developer/goat2`,
+  `~/Developer/goat2-design`, `~/Developer/goat` with v1 `916b5ccc`). Each machine merges in its own
+  `~/Developer/goat2` checkout under its own `/tmp/goat2-merge.lock`; across machines the **non-force push** is the
+  lock (GitHub accepts only a fast-forward of `goat2`). Never `--force`/`--force-with-lease` on `goat2`.
+  Heavy commands (cargo test --workspace, pnpm build, Playwright) run on the lane's own machine only.
 - The lock is a directory with an `owner` file. **Never `rmdir`/`rm` a lock you did not create** (a failed `mkdir`
   means someone else holds it). Builds never run in `~/Developer/goat2`; lane G builds in its own detached worktree.
 - Never leave an unpushed merge in `~/Developer/goat2` when you release the lock (a later lane would push it

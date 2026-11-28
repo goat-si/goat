@@ -8,3 +8,5 @@
 | 3 | Two TS contract packages (`packages/contracts` v1-lifted, `packages/contracts-rs` generated) | UI moves thread/card types to contracts-rs; keep v1-lifted provider/model types until replaced |
 | 4 | ~~store~~ merged `39b36a4` (durability fixes pending); `goat2-engine-codex`, `goat2-parity`, `goat2-host` still stubs on `goat2` | lanes B, D, E merge |
 | 5 | Old Node-era docs (`docs/PRD.md` "engine host" TS wording, `README.md` run commands) | owner updates after G ships |
+
+| A1 | Store not run on real power loss, Linux or Windows; no test for 'first create fails, waiting second succeeds' | lane A follow-up (INFO) |

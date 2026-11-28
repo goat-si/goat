@@ -18,7 +18,7 @@
         "./src/v1/packages/client-runtime/src/goatToolSummary.ts"
       ],
       "@goat/client-runtime/handoff": [
-        "./src/v1/seam/packages/client-runtime/src/handoff.ts"
+        "./src/v1/packages/client-runtime/src/handoff.ts"
       ],
       "@goat/client-runtime/markdown-images": [
         "./src/v1/packages/client-runtime/src/markdownImages.ts"
@@ -45,10 +45,10 @@
         "./src/v1/seam/packages/client-runtime/src/sourceControlClients.ts"
       ],
       "@goat/client-runtime/state/cloud-task": [
-        "./src/v1/seam/packages/client-runtime/src/state/cloudTask.ts"
+        "./src/v1/packages/client-runtime/src/state/cloudTask.ts"
       ],
       "@goat/client-runtime/state/command-output": [
-        "./src/v1/seam/packages/client-runtime/src/state/commandOutput.ts"
+        "./src/v1/packages/client-runtime/src/state/commandOutput.ts"
       ],
       "@goat/client-runtime/state/models": [
         "./src/v1/seam/packages/client-runtime/src/state/models.ts"
@@ -63,19 +63,19 @@
         "./src/v1/seam/packages/client-runtime/src/state/shell.ts"
       ],
       "@goat/client-runtime/state/subagentRuntime": [
-        "./src/v1/seam/packages/client-runtime/src/state/subagentRuntime.ts"
+        "./src/v1/packages/client-runtime/src/state/subagentRuntime.ts"
       ],
       "@goat/client-runtime/state/thread-checkpoints": [
-        "./src/v1/seam/packages/client-runtime/src/state/threadCheckpoints.ts"
+        "./src/v1/packages/client-runtime/src/state/threadCheckpoints.ts"
       ],
       "@goat/client-runtime/state/thread-execution": [
-        "./src/v1/seam/packages/client-runtime/src/state/threadExecution.ts"
+        "./src/v1/packages/client-runtime/src/state/threadExecution.ts"
       ],
       "@goat/client-runtime/state/thread-requests": [
         "./src/v1/seam/packages/client-runtime/src/state/threadRequests.ts"
       ],
       "@goat/client-runtime/state/turn-item-presentation": [
-        "./src/v1/seam/packages/client-runtime/src/state/turnItemPresentation.ts"
+        "./src/v1/packages/client-runtime/src/state/turnItemPresentation.ts"
       ],
       "@goat/client-runtime/storage-migration": [
         "./src/v1/packages/client-runtime/src/storageMigration.ts"
@@ -191,6 +191,9 @@
       "@goat/shared/codexArtifactTemplates": [
         "./src/v1/packages/shared/src/codexArtifactTemplates.ts"
       ],
+      "@goat/shared/codexMarkdownDirectives": [
+        "./src/v1/packages/shared/src/codexMarkdownDirectives.ts"
+      ],
       "@goat/shared/commandOutput": [
         "./src/v1/packages/shared/src/commandOutput.ts"
       ],
@@ -209,6 +212,9 @@
       "@goat/shared/goatConnect": [
         "./src/v1/packages/shared/src/goatConnect.ts"
       ],
+      "@goat/shared/goatMark": [
+        "./src/v1/packages/shared/src/goatMark.ts"
+      ],
       "@goat/shared/goatMcpToolPresentation": [
         "./src/v1/packages/shared/src/goatMcpToolPresentation.ts"
       ],
@@ -224,6 +230,9 @@
       "@goat/shared/markdownLinks": [
         "./src/v1/packages/shared/src/markdownLinks.ts"
       ],
+      "@goat/shared/markdownWindowsPaths": [
+        "./src/v1/packages/shared/src/markdownWindowsPaths.ts"
+      ],
       "@goat/shared/mcpApp": [
         "./src/v1/packages/shared/src/mcpApp.ts"
       ],
@@ -235,6 +244,15 @@
       ],
       "@goat/shared/orchestrationTiming": [
         "./src/v1/packages/shared/src/orchestrationTiming.ts"
+      ],
+      "@goat/shared/orchestrationV2ManualContinuation": [
+        "./src/v1/packages/shared/src/orchestrationV2ManualContinuation.ts"
+      ],
+      "@goat/shared/orchestrationV2PendingBackgroundWork": [
+        "./src/v1/packages/shared/src/orchestrationV2PendingBackgroundWork.ts"
+      ],
+      "@goat/shared/orchestrationV2ThreadError": [
+        "./src/v1/packages/shared/src/orchestrationV2ThreadError.ts"
       ],
       "@goat/shared/path": [
         "./src/v1/packages/shared/src/path.ts"
@@ -256,6 +274,9 @@
       ],
       "@goat/shared/standingInstructions": [
         "./src/v1/packages/shared/src/standingInstructions.ts"
+      ],
+      "@goat/shared/terminalOutput": [
+        "./src/v1/packages/shared/src/terminalOutput.ts"
       ],
       "@goat/shared/toolActivity": [
         "./src/v1/packages/shared/src/toolActivity.ts"
