@@ -29,12 +29,12 @@ Status: draft 2026-11-28. Live reference: [motion/playground.html](motion/playgr
 | idle | none open | Slow sway (turn ±1.5°, roll ±1.2°), blink | blink every 3.2s for 0.18s | Drawn still at ≤ 32px | – |
 | ack | `received`, `dispatching` | One nod, eyes forward | 0.32s once, then hold | – | Starting |
 | think | before tools run | Lean back, look up, three dots | Hermes `think` pose | – | Thinking |
-| work | `running` | Lean in, sway, dots | Hermes `work` pose | Ring around chip, 1.2s per turn | Working |
+| work | `running` | Lean in, sway, dots | Hermes `work` pose | No ring or spinner: the face is the signal (2026-11-28) | Working |
 | needs_you | `waiting_input`, login/OTP/approval | Faces the person, no sway, one small hop | hop 2.5px for 0.36s every 4s | Red dot | Needs you |
 | done | `completed` | Happy eyes | 1.2s, then back to idle | – | Done |
 | error | `failed` | Still, eyes shut | none | Red label | Failed |
 
-Transitions: every mood change blends over `MOOD_BLEND_SECONDS = 0.4` with ease-out. Ring and dot
+Transitions: every mood change blends over `MOOD_BLEND_SECONDS = 0.4` with ease-out. The dot
 fade in/out over `ENTRANCE_SECONDS = 0.2` with `EASE_OUT`.
 
 ## Rules
@@ -45,10 +45,17 @@ fade in/out over `ENTRANCE_SECONDS = 0.2` with `EASE_OUT`.
    is hidden or the face is off-screen.
 4. Idle faces at ≤ 32px are still (`STATIC_IDLE_MAX_PX`). Working and needs-you faces animate at
    any size.
-5. Reduced motion: no pose motion, no ring spin (the ring is drawn solid), no hop. `reducedPose`
+5. Reduced motion: no pose motion, no hop; the still `work` pose and the "Working" label carry the state. `reducedPose`
    keeps happy/shut eyes so done/error still read.
 6. Hover over an avatar shows the current action in one line (Grok); click opens Overview.
 7. Entrances 0.2s. Controls 100ms. Hover paints instantly; only the return eases.
+8. No spinner where a face is shown (2026-11-28). A working face moves; that is the signal on web,
+   desktop and mobile (rows, pinned tiles, rail, open chat). Grok Bot does the same (codex
+   `049_goat-bot-uiux-catchup/130_grokbot_handson.md` §5, RM-03). Spinners stay only where no face
+   is drawn (a person-started thread row: "Working 3m").
+9. Faces must not peg the GPU (GOAT `AGENTS.md`: no continuously repainting animations). Only the
+   open chat's face animates smoothly; list, tile and rail faces hold the `work` pose and step about
+   once a second; off-screen faces pause.
 
 ## Open questions
 

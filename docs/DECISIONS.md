@@ -45,3 +45,7 @@ Newest at the bottom.
   is an explicit `send_to_user(kind: ack | result)` tool; keep GOAT's 20 s / 55 s safety and one
   receipt per input; follow-ups get an immediate reply while running work moves to the background;
   finished background work wakes the bot. Full write-up: PRD page `bot-reply`.
+- **No spinner beside a face.** A working bot is shown by its moving face on web, desktop and
+  mobile; list/tile/rail faces step about once a second, only the open chat's face animates
+  smoothly; spinners stay only where no face is drawn. Evidence: Grok Bot hands-on (codex 049/130
+  §5), GOAT `AGENTS.md` no-continuous-repaint rule. MOTION.md rules 8-9.
