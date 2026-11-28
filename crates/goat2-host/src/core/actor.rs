@@ -1455,15 +1455,16 @@ impl Actor {
     }
 }
 
-/// The bounded `request.opened` summary of a sign-in: the engine's message without the sign-in
-/// URL and without the query or fragment of any other URL in it (one-time codes, tokens). The full
-/// link stays in memory ([crate::core::SigninLink]).
+/// The bounded `request.opened` summary of a sign-in: the engine's message with the sign-in URL
+/// and every other URL in it (any `scheme://`) replaced by "the sign-in link", since codes and
+/// tokens can sit in the path as well as the query. The full link stays in memory
+/// ([crate::core::SigninLink]).
 fn signin_summary(message: &str, url: Option<&str>) -> String {
     let text = match url.map(str::trim).filter(|u| !u.is_empty()) {
-        Some(url) => message.replace(url, "the sign-in link"),
+        Some(url) => message.replace(url, SIGNIN_LINK),
         None => message.to_owned(),
     };
-    let text = strip_url_queries(&text);
+    let text = redact_urls(&text);
     let text = text.trim();
     let text = if text.is_empty() {
         "Sign in to continue"
@@ -1473,22 +1474,31 @@ fn signin_summary(message: &str, url: Option<&str>) -> String {
     goat2_contracts::text::clamp_chars(text, goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS)
 }
 
-/// `text` with every http(s) URL cut before its `?` or `#`.
-fn strip_url_queries(text: &str) -> String {
+const SIGNIN_LINK: &str = "the sign-in link";
+
+/// `text` with every `scheme://…` URL replaced by [SIGNIN_LINK]. A URL runs to the next
+/// whitespace or closing bracket or quote; trailing sentence punctuation stays in the text.
+fn redact_urls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
-    while let Some(start) = [rest.find("https://"), rest.find("http://")]
-        .into_iter()
-        .flatten()
-        .min()
-    {
+    while let Some(sep) = rest.find("://") {
+        // The scheme: letters, digits, `+`, `-`, `.` directly before `://`.
+        let start = rest[..sep]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+            .last()
+            .map_or(sep, |(i, _)| i);
         out.push_str(&rest[..start]);
         let url = &rest[start..];
-        let end = url
+        let mut end = url
             .find(|c: char| c.is_whitespace() || matches!(c, ')' | '>' | ']' | '"' | '\''))
             .unwrap_or(url.len());
-        let keep = url[..end].find(['?', '#']).unwrap_or(end);
-        out.push_str(&url[..keep]);
+        let min_end = sep - start + "://".len();
+        while end > min_end && url[..end].ends_with(['.', ',', ';', ':', '!', '?']) {
+            end -= 1;
+        }
+        out.push_str(SIGNIN_LINK);
         rest = &url[end..];
     }
     out.push_str(rest);
@@ -1550,7 +1560,7 @@ mod signin_summary_tests {
     use goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS;
 
     #[test]
-    fn the_sign_in_url_and_url_queries_stay_out_of_the_summary() {
+    fn every_url_stays_out_of_the_summary() {
         let url = "https://auth.example.invalid/device?user_code=SECRET-1&state=s2";
         let message = format!(
             "Open {url} to sign in, or see (https://docs.example.invalid/help?token=SECRET-2#frag)."
@@ -1558,9 +1568,27 @@ mod signin_summary_tests {
         let summary = signin_summary(&message, Some(url));
         assert_eq!(
             summary,
-            "Open the sign-in link to sign in, or see (https://docs.example.invalid/help)."
+            "Open the sign-in link to sign in, or see (the sign-in link)."
         );
         assert!(!summary.contains("SECRET"));
+    }
+
+    #[test]
+    fn urls_are_redacted_without_a_url_field_and_with_tokens_in_the_path() {
+        let summary = signin_summary(
+            "Visit https://host.invalid/device/SECRET-PATH. Then return to vscode://auth/cb/SECRET-CB, done",
+            None,
+        );
+        assert_eq!(
+            summary,
+            "Visit the sign-in link. Then return to the sign-in link, done"
+        );
+        assert!(!summary.contains("SECRET"));
+        // A URL field that is not in the message changes nothing else.
+        assert_eq!(
+            signin_summary("Sign in", Some("https://elsewhere.invalid/x")),
+            "Sign in"
+        );
     }
 
     #[test]
