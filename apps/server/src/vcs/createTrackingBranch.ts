@@ -27,7 +27,9 @@ export function trackingCheckoutTarget(input: {
     : branch
       ? ["checkout", branch]
       : remoteExists && !localTrackingBranch
-        ? ["checkout", "--track", refName]
+        ? localTrackedBranchCandidate
+          ? ["checkout", "--track", "-b", localTrackedBranchCandidate, `refs/remotes/${refName}`]
+          : ["checkout", "--track", refName]
         : remoteExists && localTrackingBranch
           ? ["checkout", localTrackingBranch]
           : ["checkout", refName];

@@ -241,7 +241,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const timeoutMs = input.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : input.timeoutMs;
       const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
       const appendTruncationMarker = input.appendTruncationMarker ?? false;
-
       const runGitCommand = Effect.fn("runGitCommand")(function* (watch: GitStallWatch | null) {
         const watchLine = (
           onLine: ((line: string) => Effect.Effect<void, never>) | undefined,
@@ -297,7 +296,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             // Synchronous spawn throws (such as E2BIG) arrive as defects.
             Effect.catchDefect((cause) => Effect.fail(spawnError(cause))),
           );
-
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
             collectOutput(
@@ -342,7 +340,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           { concurrency: "unbounded" },
         ).pipe(Effect.map(([stdout, stderr, exitCode]) => [stdout, stderr, exitCode] as const));
         yield* trace2Monitor.flush;
-
         if (!input.allowNonZeroExit && exitCode !== 0) {
           const reason = classifyGitFailure(stderr.text);
           return yield* new GitCommandError({
@@ -354,7 +351,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             stderrLength: stderr.text.length,
           });
         }
-
         return {
           exitCode,
           stdout: stdout.text,
@@ -363,7 +359,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           stderrTruncated: stderr.truncated,
         } satisfies GitVcsDriver.ExecuteGitResult;
       });
-
       if (input.stallTimeoutMs !== undefined) {
         return yield* withGitStallTimeout(
           input.stallTimeoutMs,
@@ -376,12 +371,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           (watch) => runGitCommand(watch).pipe(Effect.scoped),
         );
       }
-
       const execution = runGitCommand(null).pipe(Effect.scoped);
       if (timeoutMs === null) {
         return yield* execution;
       }
-
       return yield* execution.pipe(
         Effect.timeoutOption(timeoutMs),
         Effect.flatMap((result) =>
@@ -422,7 +415,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         },
       }),
     );
-
   const sharedConfigRepository = (cwd: string) =>
     Effect.suspend(() => resolveRepositoryPaths(cwd)).pipe(
       Effect.map((repository) =>
@@ -433,7 +425,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             : repository.gitCommonDir,
       ),
     );
-
   const executeGit = (
     operation: string,
     cwd: string,
@@ -483,7 +474,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         );
       }),
     );
-
   const executeGitWithStableDiagnostics = (
     operation: string,
     cwd: string,
@@ -5051,10 +5041,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               ),
             )
           : null;
-
-      const localTrackedBranchCandidate = deriveLocalBranchNameFromRemoteRef(input.refName);
+      const localTrackedBranchCandidate =
+        remoteExists && !localInputExists && !localTrackingBranch
+          ? yield* executeGit("GitVcsDriver.switchRef.remoteNames", input.cwd, ["remote"], {
+              timeoutMs: 5_000,
+              allowNonZeroExit: true,
+            }).pipe(
+              Effect.map((result) => {
+                const remoteNames = result.exitCode === 0 ? parseRemoteNames(result.stdout) : [];
+                return (
+                  parseRemoteRefWithRemoteNames(input.refName, remoteNames)?.branchName ??
+                  deriveLocalBranchNameFromRemoteRef(input.refName)
+                );
+              }),
+            )
+          : null;
       const localTrackedBranchTargetExists =
-        remoteExists && !localInputExists && !localTrackingBranch && localTrackedBranchCandidate
+        localTrackedBranchCandidate !== null
           ? yield* executeGit(
               "GitVcsDriver.switchRef.localTrackedBranchTargetExists",
               input.cwd,
@@ -5065,7 +5068,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               },
             ).pipe(Effect.map((result) => result.exitCode === 0))
           : false;
-
       const { branch: newTrackingBranch, args: checkoutArgs } = trackingCheckoutTarget({
         refName: input.refName,
         localInputExists,
@@ -5074,7 +5076,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         localTrackedBranchTargetExists,
         localTrackedBranchCandidate,
       });
-
       yield* refuseOptionLikeRefName("GitVcsDriver.switchRef", input.cwd, checkoutArgs.at(-1));
       yield* createTrackingBranch(input.cwd, newTrackingBranch, input.refName, executeGit);
 
