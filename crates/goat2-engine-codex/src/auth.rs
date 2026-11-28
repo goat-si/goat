@@ -20,7 +20,8 @@ use tokio::task::JoinHandle;
 
 use goat2_contracts::{
     CredentialOwner, ProviderAuthInteraction, ProviderAuthMethod, ProviderAuthMethodType,
-    ProviderAuthPhase, ProviderAuthState, ProviderInstanceId,
+    ProviderAuthPhase, ProviderAuthResponse, ProviderAuthState, ProviderCredentialField,
+    ProviderInstanceId,
 };
 use goat2_engine_api::{EngineError, ProviderTarget};
 use serde_json::{Value, json};
@@ -42,6 +43,11 @@ use crate::transport::{Connection, Inbound};
 pub const METHOD_CHATGPT: &str = "chatgpt";
 /// ChatGPT sign-in with a one-time code entered on another device or browser.
 pub const METHOD_DEVICE_CODE: &str = "chatgpt-device-code";
+/// An OpenAI API key, which Codex saves in the instance's home (v1's credentials method shape,
+/// as provider-grok's API key).
+pub const METHOD_API_KEY: &str = "api-key";
+/// The one secret field of the API-key interaction.
+pub const API_KEY_FIELD: &str = "apiKey";
 /// A Codex answer the flow waits for (initialize, login start, account read, logout).
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -63,6 +69,10 @@ const IN_PROGRESS: &str = "Provider setup is already in progress.";
 const NOT_ACTIVE: &str = "This sign-in is no longer active in this client.";
 const SIGNED_OUT: &str = "Signed out.";
 const SIGN_OUT_FAILED: &str = "Could not sign out. Try again.";
+const ENTER_KEY: &str = "Enter an API key to continue.";
+const KEY_REFUSED: &str = "Codex did not accept this API key. Check it and try again.";
+const INTERACTION_GONE: &str = "This sign-in interaction is no longer available.";
+const RESPONSE_IN_PROGRESS: &str = "A sign-in response is already in progress.";
 
 /// The sign-in flows, one slot per provider instance (v1 keeps one flow per instance).
 ///
@@ -88,6 +98,8 @@ struct Flow {
     updates: mpsc::UnboundedSender<ProviderAuthState>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<()>>,
+    /// The API key, handed over once by `respond` (API-key flows only).
+    key: Option<oneshot::Sender<String>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -195,6 +207,17 @@ pub fn methods(email: Option<String>) -> Vec<ProviderAuthMethod> {
                 "Open the sign-in page on any device and enter a one-time code.".into(),
             ),
             r#type: ProviderAuthMethodType::Agent,
+        },
+        ProviderAuthMethod {
+            id: METHOD_API_KEY.into(),
+            account_email: None,
+            can_remove: None,
+            name: "OpenAI API key".into(),
+            description: Some(
+                "Paste an API key from the OpenAI platform. Codex keeps it in this instance's home."
+                    .into(),
+            ),
+            r#type: ProviderAuthMethodType::Credentials,
         },
     ]
 }
@@ -448,7 +471,7 @@ impl AuthFlows {
     ) -> Result<ProviderAuthState, EngineError> {
         let instance = target.instance_id.clone();
         let method = method_id.unwrap_or_else(|| METHOD_CHATGPT.into());
-        if method != METHOD_CHATGPT && method != METHOD_DEVICE_CODE {
+        if ![METHOD_CHATGPT, METHOD_DEVICE_CODE, METHOD_API_KEY].contains(&method.as_str()) {
             return Ok(state(
                 &instance,
                 ProviderAuthPhase::Failed,
@@ -465,6 +488,12 @@ impl AuthFlows {
         let deadline = Instant::now() + options.auth_timeout;
         let expires_at = format_rfc3339_ms(now_ms() + options.auth_timeout.as_millis() as i64);
         let (stop, mut stopped) = oneshot::channel();
+        let (key, key_rx) = if method == METHOD_API_KEY {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         {
             let mut flow = lock(&slot.flow);
             if flow.is_some() {
@@ -475,6 +504,7 @@ impl AuthFlows {
                 updates,
                 stop: Some(stop),
                 task: None,
+                key,
             });
         }
         let task = {
@@ -508,6 +538,40 @@ impl AuthFlows {
                 // The task owns the process from the moment it exists: every way out below ends
                 // the process group (and waits for it) before the flow is released. Stopped: the
                 // canceller already sent the terminal state and waits for this task.
+                // An API key: the person enters it first; Codex starts only once it is here.
+                let key = match key_rx {
+                    None => None,
+                    Some(key_rx) => {
+                        slot.publish(
+                            &id,
+                            state(
+                                &instance,
+                                ProviderAuthPhase::Waiting,
+                                Some(&id),
+                                Some(&expires_at),
+                                WAITING,
+                                Some(ProviderAuthInteraction::Credentials {
+                                    id: id.clone(),
+                                    fields: vec![ProviderCredentialField {
+                                        name: API_KEY_FIELD.into(),
+                                        label: "API key".into(),
+                                        secret: true,
+                                    }],
+                                }),
+                            ),
+                        );
+                        tokio::select! {
+                            biased;
+                            _ = &mut stopped => return,
+                            _ = tokio::time::sleep_until(deadline) => return slot.finish(&id, expired()),
+                            key = key_rx => match key {
+                                Ok(key) => Some(key),
+                                // The flow was ended without a key.
+                                Err(_) => return,
+                            },
+                        }
+                    }
+                };
                 let mut codex = match Codex::spawn(&options, &target) {
                     Ok(codex) => codex,
                     Err(message) => return slot.finish(&id, failed(&message)),
@@ -543,7 +607,12 @@ impl AuthFlows {
                     biased;
                     _ = &mut stopped => None,
                     _ = tokio::time::sleep_until(deadline) => Some(expired()),
-                    end = run(&mut codex, &target, &id, &method, &expires_at, &slot) => Some(end),
+                    end = async {
+                        match key {
+                            Some(key) => run_api_key(&mut codex, &target, &id, key).await,
+                            None => run(&mut codex, &target, &id, &method, &expires_at, &slot).await,
+                        }
+                    } => Some(end),
                 };
                 // The process group has ended before the flow is released, so no old login can
                 // still write credentials once a new flow or a logout may run.
@@ -597,6 +666,56 @@ impl AuthFlows {
         .await
         .map_err(|_| EngineError::Unavailable(NOT_ACTIVE.into()))?;
         Ok(cancelled)
+    }
+
+    /// v1 `providerAuthFlow.respond` for the API-key interaction: the key goes to the waiting flow
+    /// (which saves it through Codex in the instance's home) and the answer is the verifying
+    /// state; a wrong flow, interaction or empty key is refused and the flow keeps waiting. The key
+    /// is never put in a state, an error or a log.
+    pub async fn respond(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: ProviderAuthResponse,
+    ) -> Result<ProviderAuthState, EngineError> {
+        let refuse = |message: &str| Err(EngineError::Unavailable(message.into()));
+        let instance = target.instance_id.clone();
+        let slot = self.slot(&instance);
+        let _op = slot.op.lock().await;
+        let mut flow = lock(&slot.flow);
+        let Some(active) = flow.as_mut().filter(|f| f.id == flow_id) else {
+            return refuse(NOT_ACTIVE);
+        };
+        if interaction_id != flow_id {
+            return refuse(INTERACTION_GONE);
+        }
+        let ProviderAuthResponse::Credentials { values } = response else {
+            return refuse(ENTER_KEY);
+        };
+        let key = values
+            .get(API_KEY_FIELD)
+            .map(|k| k.trim().to_string())
+            .unwrap_or_default();
+        if key.is_empty() {
+            return refuse(ENTER_KEY);
+        }
+        let Some(sender) = active.key.take() else {
+            return refuse(RESPONSE_IN_PROGRESS);
+        };
+        if sender.send(key).is_err() {
+            return refuse(NOT_ACTIVE);
+        }
+        let verifying = state(
+            &instance,
+            ProviderAuthPhase::Verifying,
+            Some(flow_id),
+            None,
+            VERIFYING,
+            None,
+        );
+        let _ = active.updates.send(verifying.clone());
+        Ok(verifying)
     }
 
     /// v1 `providerAuthFlow.logout`: a running flow ends first (its stream gets the cancelled state
@@ -716,5 +835,35 @@ async fn run(
         end(ProviderAuthPhase::Succeeded, SUCCEEDED)
     } else {
         end(ProviderAuthPhase::Failed, FAILED)
+    }
+}
+
+/// The API-key flow in an open Codex: Codex saves the key in the instance's home
+/// (`account/login/start {type: apiKey}`) and confirms an account. The key goes only to Codex's
+/// stdin; no answer text from Codex is shown.
+async fn run_api_key(
+    codex: &mut Codex,
+    target: &ProviderTarget,
+    flow_id: &str,
+    key: String,
+) -> ProviderAuthState {
+    let instance = &target.instance_id;
+    let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
+    let answer = codex
+        .call(
+            methods::ACCOUNT_LOGIN_START,
+            json!({"type": "apiKey", "apiKey": key}),
+        )
+        .await;
+    drop(key);
+    let accepted = answer
+        .as_ref()
+        .and_then(|a| a.get("type"))
+        .and_then(Value::as_str)
+        == Some("apiKey");
+    if accepted && codex.signed_in().await {
+        end(ProviderAuthPhase::Succeeded, SUCCEEDED)
+    } else {
+        end(ProviderAuthPhase::Failed, KEY_REFUSED)
     }
 }

@@ -109,6 +109,20 @@ impl CodexEngineFactory {
             auth: Default::default(),
         }
     }
+
+    /// Answers a sign-in interaction (the API key of the api-key method), as v1
+    /// provider.auth.respond. Becomes the EngineFactory::auth_respond override once lane E adds it.
+    pub async fn auth_respond(
+        &self,
+        target: &ProviderTarget,
+        flow_id: &str,
+        interaction_id: &str,
+        response: goat2_contracts::ProviderAuthResponse,
+    ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
+        self.auth
+            .respond(target, flow_id, interaction_id, response)
+            .await
+    }
 }
 
 #[async_trait]

@@ -256,7 +256,7 @@ async fn logout_signs_the_instance_out_and_methods_name_the_account() {
     ]);
     let f = CodexEngineFactory::new(options(entries));
     let methods = f.auth_methods(&default_target()).await.unwrap();
-    assert_eq!(methods.len(), 2);
+    assert_eq!(methods.len(), 3);
     assert_eq!(methods[0].id, "chatgpt");
     assert_eq!(methods[0].name, "Sign in with ChatGPT");
     assert_eq!(
@@ -268,6 +268,8 @@ async fn logout_signs_the_instance_out_and_methods_name_the_account() {
         Some("Reconnect person@example.com.")
     );
     assert_eq!(methods[1].id, "chatgpt-device-code");
+    assert_eq!(methods[2].id, "api-key");
+    assert_eq!(methods[2].name, "OpenAI API key");
 }
 
 /// A second instance signs in inside its own home: Codex runs with CODEX_HOME set to it.
@@ -656,4 +658,77 @@ async fn expiry_while_codex_initializes_ends_it_before_reporting() {
         Some("Sign-in expired. Start again.")
     );
     assert!(next(&mut updates).await.is_none());
+}
+
+/// API key (second cut): a Credentials interaction with one secret field; a wrong interaction,
+/// a missing key or another response kind is refused and the flow keeps waiting; the key goes
+/// only to Codex (account/login/start {type: apiKey}) and never into a state.
+#[tokio::test]
+async fn an_api_key_is_handed_to_codex_and_never_shown() {
+    use goat2_contracts::ProviderAuthResponse;
+    let key = "sk-test-0123456789abcdef";
+    let mut entries = session(vec![
+        expect(
+            json!({"id": 2, "method": "account/login/start", "params": {"type": "apiKey", "apiKey": key}}),
+        ),
+        emit(json!({"id": 2, "result": {"type": "apiKey"}})),
+    ]);
+    entries.push(expect(
+        json!({"id": 3, "method": "account/read", "params": {}}),
+    ));
+    entries.push(emit(
+        json!({"id": 3, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    let f = CodexEngineFactory::new(options(entries));
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, Some("api-key".into()), tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    let waiting = next(&mut updates).await.unwrap();
+    assert!(matches!(
+        &waiting.interaction,
+        Some(Some(ProviderAuthInteraction::Credentials { id, fields }))
+            if *id == flow && fields.len() == 1 && fields[0].name == "apiKey" && fields[0].secret
+    ));
+    let auth = &f;
+    let values = |k: &str| ProviderAuthResponse::Credentials {
+        values: [("apiKey".to_string(), k.to_string())].into(),
+    };
+    assert!(
+        auth.auth_respond(&target, &flow, "other", values(key))
+            .await
+            .is_err()
+    );
+    assert!(
+        auth.auth_respond(&target, &flow, &flow, values("  "))
+            .await
+            .is_err()
+    );
+    assert!(
+        auth.auth_respond(&target, "old-flow", &flow, values(key))
+            .await
+            .is_err()
+    );
+    let verifying = auth
+        .auth_respond(&target, &flow, &flow, values(&format!("  {key}  ")))
+        .await
+        .unwrap();
+    assert_eq!(verifying.phase, ProviderAuthPhase::Verifying);
+    // Only once.
+    assert!(
+        auth.auth_respond(&target, &flow, &flow, values(key))
+            .await
+            .is_err()
+    );
+    let mut seen = vec![waiting];
+    while let Some(state) = next(&mut updates).await {
+        seen.push(state);
+    }
+    assert_eq!(seen.last().unwrap().phase, ProviderAuthPhase::Succeeded);
+    let shown = serde_json::to_string(&seen).unwrap() + &serde_json::to_string(&verifying).unwrap();
+    assert!(!shown.contains(key), "the key never appears in a state");
 }
