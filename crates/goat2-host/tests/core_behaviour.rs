@@ -2155,6 +2155,56 @@ async fn a_steer_the_engine_cancels_is_requeued_as_a_followup() {
     .await;
 }
 
+#[tokio::test]
+async fn a_turn_with_a_live_subagent_outlives_the_turn_cap() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(first.clone()),
+            subagent_id: "long-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    let mut second = None;
+    // 65 more turns: past the 64 turns the host remembers.
+    for n in 1..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(&t, &id, &format!("cap-{n}"), "next", InputMode::Followup).await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 1 {
+            second = t.fake.active_turn(&id);
+        }
+    }
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    // Turn 2 had no live subagent, so it was forgotten: its late item is dropped. Turn 1's
+    // subagent was still running, so its result lands on run 1.
+    emit(&second.unwrap(), late_text(&id, "late-2", "too late"));
+    emit(&first, subagent_item(&id, "long-1-item", Some("long-1")));
+    eventually("subagent result", || {
+        item_run(&t, &id, "long-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "long-1-item"), Some(run1));
+    assert_eq!(item_run(&t, &id, "late-2"), None);
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
