@@ -26,8 +26,10 @@ const fencedCode = (char: "`" | "~", name: string) => {
   const closer = String.raw`[ \t]*\k<${bq}>${AFTER_QUOTE}\k<${name}>${char}*(?!${char})[ \t]*\r?$`;
   return String.raw`^[ \t]*${LIST_MARKERS}(?<${bq}>(?:>(?:[ \t]*>)*)?)(?:(?<=>)[ \t]*${LIST_MARKERS})?(?<${name}>${char}{3,}(?!${char}))${info}(?=\r?$)(?:\r?\n(?!${closer})[ \t]*\k<${bq}>[^\r\n]*)*(?:\r?\n${closer})?`;
 };
-// A code span may wrap lines but ends where its paragraph does: a blank line, heading, list item, or fence.
-const SPAN_LINE_BREAK = String.raw`\n(?![ \t>]*(?:\r?$|#{1,6}(?:[ \t]|\r?$)|(?:[-*+]|\d{1,9}[.)])[ \t]|\`{3,}[^\`\r\n]*\r?$|~{3,}))`;
+// A code span may wrap lines until its paragraph ends: a blank line, heading, list item, fence, or deeper blockquote.
+const SPAN_BREAK_LINE =
+  /[ \t>]*(?:\r?$|#{1,6}(?:[ \t]|\r?$)|(?:[-*+]|\d{1,9}[.)])[ \t]|`{3,}[^`\r\n]*\r?$|~{3,})/my;
+const LINE_PREFIX = /([ \t]*)(>|(?:[-*+]|\d{1,9}[.)])[ \t]+)?/y;
 // Earlier alternatives claim text so later ones cannot match inside it: an escaped character opens
 // nothing, code is literal, and a link to anywhere else keeps a thread link in its label or href.
 const THREAD_LINK_OUTSIDE_CODE = new RegExp(
@@ -35,15 +37,84 @@ const THREAD_LINK_OUTSIDE_CODE = new RegExp(
     String.raw`\\[!-/:-@[-\`{-~]`,
     fencedCode("`", "bt"),
     fencedCode("~", "tl"),
-    String.raw`(?<span>(?<spanTicks>\`+)(?!\`)(?:[^\n]|${SPAN_LINE_BREAK})*?(?<!\`)\k<spanTicks>(?!\`))`,
-    // An unmatched backtick run is literal as a whole, so no span opens partway through it.
-    String.raw`\`+`,
+    String.raw`(?<spanTicks>\`+)`,
     // A labeled link's destination may be angle-bracketed, as CommonMark allows: [label](<href>).
     String.raw`\[${LABEL}\]\((?:<(?<angleHref>${THREAD_HREF}[^\s<>]+)>|(?<href>${THREAD_HREF}[^\s>)]+))\)`,
     String.raw`\[${LABEL}\]\((?:<[^<>\n]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?\)`,
   ].join("|"),
   "gm",
 );
+
+function codeSpanLines(markdown: string) {
+  const lines: Array<{ start: number; depth: number }> = [];
+  const listIndents: number[] = [];
+  let paragraphDepth: number | undefined;
+  let start = 0;
+  for (const line of markdown.split("\n")) {
+    let offset = 0;
+    let depth = 0;
+    let hasList = false;
+    let listOffset = 0;
+    while (offset < line.length) {
+      LINE_PREFIX.lastIndex = offset;
+      const prefix = LINE_PREFIX.exec(line);
+      if (prefix === null) break;
+      const indent = (prefix[1] ?? "").replace(/\t/g, "    ").length;
+      if (
+        listOffset === 0 &&
+        paragraphDepth === undefined &&
+        indent < (listIndents[depth] ?? 0) &&
+        line.trim()
+      ) {
+        listIndents.length = depth;
+      }
+      const containerIndent = listIndents[depth] ?? 0;
+      const continuedIndent = indent >= containerIndent ? containerIndent : 0;
+      if (prefix[2] === undefined || indent - continuedIndent > 3) break;
+      offset = LINE_PREFIX.lastIndex;
+      if (prefix[2] === ">") {
+        depth++;
+        listOffset = 0;
+        if (line[offset] === " " || line[offset] === "\t") offset++;
+      } else {
+        listOffset += indent + prefix[2].replace(/\t/g, "    ").length;
+        listIndents[depth] = listOffset;
+        hasList = true;
+      }
+    }
+    const content = line.slice(offset);
+    const endsParagraph =
+      /^(?:[ \t\r]*$|[ \t]*#{1,6}(?:[ \t]|$)|[ \t]*`{3,}[^`]*$|[ \t]*~{3,})/.test(content);
+    const effectiveDepth = endsParagraph || hasList ? depth : Math.max(depth, paragraphDepth ?? 0);
+    lines.push({ start, depth: effectiveDepth });
+    paragraphDepth = endsParagraph ? undefined : effectiveDepth;
+    start += line.length + 1;
+  }
+  return lines;
+}
+
+function findCodeSpanEnd(
+  markdown: string,
+  openIndex: number,
+  tickCount: number,
+  lines: ReturnType<typeof codeSpanLines>,
+  lineIndex: number,
+): number {
+  const openDepth = lines[lineIndex]?.depth ?? 0;
+  for (let i = openIndex + tickCount; i < markdown.length; i++) {
+    if (markdown[i] === "`") {
+      let runEnd = i + 1;
+      while (markdown[runEnd] === "`") runEnd++;
+      if (runEnd - i === tickCount) return runEnd;
+      i = runEnd - 1;
+    } else if (markdown[i] === "\n") {
+      lineIndex++;
+      SPAN_BREAK_LINE.lastIndex = i + 1;
+      if (SPAN_BREAK_LINE.test(markdown) || (lines[lineIndex]?.depth ?? 0) > openDepth) return -1;
+    }
+  }
+  return -1;
+}
 
 const decodeThreadId = Schema.decodeUnknownOption(ThreadId);
 
@@ -144,9 +215,30 @@ export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   return ids;
 }
 
+function* threadLinkMatches(markdown: string) {
+  const pattern = new RegExp(THREAD_LINK_OUTSIDE_CODE);
+  let lines: ReturnType<typeof codeSpanLines> | undefined;
+  let lineIndex = 0;
+  for (let match = pattern.exec(markdown); match !== null; match = pattern.exec(markdown)) {
+    const spanTicks = match.groups?.spanTicks;
+    if (spanTicks !== undefined) {
+      lines ??= codeSpanLines(markdown);
+      while (
+        lineIndex + 1 < lines.length &&
+        (lines[lineIndex + 1]?.start ?? Infinity) <= match.index
+      )
+        lineIndex++;
+      const spanEnd = findCodeSpanEnd(markdown, match.index, spanTicks.length, lines, lineIndex);
+      if (spanEnd !== -1) pattern.lastIndex = spanEnd;
+      continue;
+    }
+    if (match.groups?.angleHref !== undefined || match.groups?.href !== undefined) yield match;
+  }
+}
+
 function scanThreadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
   const ids = new Set<ThreadId>();
-  for (const match of markdown.matchAll(THREAD_LINK_OUTSIDE_CODE)) {
+  for (const match of threadLinkMatches(markdown)) {
     const href = match.groups?.angleHref ?? match.groups?.href;
     const written = href === undefined ? null : parseThreadLinkHref(href);
     if (written === null) continue;
@@ -162,19 +254,21 @@ export function relabelThreadLinks(
   title: (threadId: ThreadId) => string | undefined,
 ): string {
   if (!hasThreadLinks(markdown)) return markdown;
-  return markdown.replace(THREAD_LINK_OUTSIDE_CODE, (source, ...args) => {
-    const href =
-      (args.at(-1) as { angleHref?: string; href?: string }).angleHref ??
-      (args.at(-1) as { href?: string }).href;
-    if (href === undefined) return source;
-    const written = parseThreadLinkHref(href);
-    if (written === null) return source;
+  let result = "";
+  let cursor = 0;
+  for (const match of threadLinkMatches(markdown)) {
+    const href = match.groups?.angleHref ?? match.groups?.href;
+    const written = href === undefined ? null : parseThreadLinkHref(href);
+    if (written === null) continue;
     const decoded = percentDecodedThreadLinkId(written);
     const threadId =
       title(written) === undefined && decoded !== null && title(decoded) !== undefined
         ? decoded
         : written;
     const label = title(threadId)?.trim();
-    return label ? formatThreadLink(threadId, label) : source;
-  });
+    if (!label) continue;
+    result += markdown.slice(cursor, match.index) + formatThreadLink(threadId, label);
+    cursor = match.index + match[0].length;
+  }
+  return cursor === 0 ? markdown : result + markdown.slice(cursor);
 }

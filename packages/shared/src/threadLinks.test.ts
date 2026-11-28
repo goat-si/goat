@@ -156,8 +156,11 @@ describe("thread links", () => {
         "After [New](goat-thread://v1/t1)",
       ].join("\n"),
     );
-    for (const escaped of ["\\``<t3-thread://v2/env-1/t1>`", "\\```<t3-thread://v2/env-1/t1>``"]) {
-      expect(threadLinkRefs(escaped, local)).toEqual([]);
+    for (const escaped of [
+      "\\``[old](goat-thread://v1/t1)`",
+      "\\```[old](goat-thread://v1/t1)``",
+    ]) {
+      expect(threadLinkIds(escaped)).toEqual([]);
     }
   });
 
@@ -178,10 +181,27 @@ describe("thread links", () => {
       ["Stray ` tick", "", after, "and `code`"],
       ["Stray ` tick", `# ${after}`, "and `code`"],
       ["Stray ` tick", `- ${after}`, "and `code`"],
+      ["Stray ` tick", `> ${after} and \`code\``],
+      ["> Stray ` tick", `> > ${after} and \`code\``],
+      ["- Stray ` tick", `  > ${after} and \`code\``],
+      ["> Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["> Use `example", `${hidden} end\``, after],
+      ["Use `example", `    > ${hidden} end\``, after],
+      ["> Use `example", `>     > ${hidden} end\``, `> ${after}`],
+      ["> Intro", "Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Intro", "> Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["1. Stray ` tick", `    > ${after} and \`code\``],
+      ["1. Intro", "", "    Stray ` tick", `    > ${after} and \`code\``],
+      ["- Intro", "", "Use `example", `    > ${hidden} end\``, after],
       ["Use `example", "```" + hidden + "`", after],
       ["\\\\``" + after + "`"],
     ]) {
-      expect(threadLinkIds(markdown.join("\n"))).toEqual(["t1"]);
+      const joined = markdown.join("\n");
+      expect(threadLinkIds(joined)).toEqual(["t1"]);
+      expect(relabelThreadLinks(joined, () => "New")).toBe(
+        joined.replace("[live](goat-thread://v1/t1)", "[New](goat-thread://v1/t1)"),
+      );
     }
   });
 
