@@ -452,7 +452,7 @@ describe("remote thread lifecycle commands", () => {
         const request = yield* Queue.take(h.requests);
         expect(h.registry.get(source)).toBe(initial);
         yield* Deferred.fail(request.reply, new Error("Remote rejected the action"));
-        expect((yield* Effect.promise(() => result))._tag).toBe("Failure");
+        expect((yield* Effect.promise(() => Promise.resolve(result)))._tag).toBe("Failure");
         expect(h.registry.get(h.visibleAtom)).toBe(initial);
       }),
   );

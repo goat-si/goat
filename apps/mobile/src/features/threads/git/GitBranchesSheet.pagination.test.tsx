@@ -8,7 +8,6 @@ import { expect, it, vi } from "vite-plus/test";
 type PressProps = { label: string; disabled?: boolean; onPress: () => void };
 const harness = vi.hoisted(() => ({
   cwd: "",
-  buttons: new Map<string, PressProps>(),
   checkouts: [] as string[],
   pages: new Map<string, unknown>(),
   // Requests this returns true for stay unanswered until the test sets their atom.
@@ -53,10 +52,16 @@ vi.mock("../../../components/ui/AppText", () => ({
 }));
 vi.mock("./gitSheetComponents", () => ({
   GitActionFailure: () => null,
-  SheetActionButton: (props: PressProps) => {
-    harness.buttons.set(props.label, props);
-    return null;
-  },
+  SheetActionButton: (props: PressProps) => (
+    <button
+      type="button"
+      data-sheet-action={props.label}
+      disabled={props.disabled}
+      onClick={props.onPress}
+    >
+      {props.label}
+    </button>
+  ),
 }));
 vi.mock("../../../state/use-thread-selection", () => ({
   useThreadSelection: () => ({ selectedThread: { environmentId: "environment-1", branch: null } }),
@@ -149,14 +154,12 @@ function answer(input: VcsListRefsInput) {
 function setup() {
   harness.cwd = "/repo";
   harness.pages.clear();
-  harness.buttons.clear();
   harness.checkouts = [];
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const registry = AtomRegistry.make();
   const container = document.createElement("div");
   const root = createRoot(container);
   const render = () => {
-    harness.buttons.clear();
     act(() =>
       root.render(
         <RegistryContext.Provider value={registry}>
@@ -169,16 +172,19 @@ function setup() {
   };
   const rows = () =>
     new Map(
-      [...container.querySelectorAll("button")].map((button) => [
+      [...container.querySelectorAll("button:not([data-sheet-action])")].map((button) => [
         button.querySelectorAll("span")[0]?.textContent ?? "",
         button,
       ]),
     );
+  const actionButton = (label: string) =>
+    container.querySelector<HTMLButtonElement>(`button[data-sheet-action="${label}"]`);
   render();
   return {
     registry,
     container,
     rows,
+    actionButton,
     render,
     [Symbol.dispose]() {
       act(() => root.unmount());
@@ -196,9 +202,9 @@ it("reaches local branches past the first page and checks them out", async () =>
   expect(screen.container.textContent).not.toContain("No local branches found.");
 
   harness.holds = (input) => input.cursor === 100;
-  act(() => harness.buttons.get("Load more")!.onPress());
+  act(() => screen.actionButton("Load more")!.click());
   screen.render();
-  expect(harness.buttons.get("Load more")!.disabled).toBe(true);
+  expect(screen.actionButton("Load more")!.disabled).toBe(true);
 
   const [secondPageKey, secondPage] = [...harness.pages].find(
     ([key]) => (JSON.parse(key) as VcsListRefsInput).cursor === 100,
@@ -212,7 +218,7 @@ it("reaches local branches past the first page and checks them out", async () =>
   screen.render();
   expect(screen.rows().size).toBe(105);
   expect([...screen.rows().keys()].some((name) => name.startsWith("origin/"))).toBe(false);
-  expect(harness.buttons.has("Load more")).toBe(false);
+  expect(screen.actionButton("Load more")).toBeNull();
   await act(async () => screen.rows().get("feature/branch-104")!.click());
   expect(harness.checkouts).toEqual(["feature/branch-104"]);
 });
@@ -224,5 +230,5 @@ it("shows the saved branch list while local pages are unanswered", () => {
   expect(screen.rows().size).toBe(100);
   expect(screen.container.textContent).not.toContain("Loading branches...");
   expect(screen.container.textContent).not.toContain("No local branches found.");
-  expect(harness.buttons.has("Load more")).toBe(false);
+  expect(screen.actionButton("Load more")).toBeNull();
 });

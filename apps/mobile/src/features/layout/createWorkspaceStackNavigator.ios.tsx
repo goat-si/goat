@@ -19,15 +19,7 @@ import {
   type NativeStackNavigatorProps,
   type NativeStackTypeBag,
 } from "@react-navigation/native-stack";
-import {
-  Fragment,
-  use,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
+import { Fragment, use, useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import { Split, type SplitHostCommands } from "react-native-screens";
 import { SafeAreaView } from "react-native-safe-area-context";

@@ -64,9 +64,7 @@ function failureMessage(error: unknown): string | null {
 }
 
 /** The server's reason a reset credit could not be used, or a generic line when it gave none. */
-export function resetCreditFailureText(result: {
-  readonly cause: Cause.Cause<unknown>;
-}): string {
+export function resetCreditFailureText(result: { readonly cause: Cause.Cause<unknown> }): string {
   // Squashing an interrupt-only cause invents Effect's own "All fibers interrupted" text.
   const failed = Cause.hasFails(result.cause) || Cause.hasDies(result.cause);
   return (

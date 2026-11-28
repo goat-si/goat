@@ -214,6 +214,14 @@ const reactTests = [
   "src/features/workspace/useSearchScrollRestoration.test.tsx",
   "src/state/entities.threadLinks.test.tsx",
   "src/AppProviders.test.tsx",
+  "src/features/layout/useCollapsedSplitColumn.test.tsx",
+  "src/features/pull-requests/PullRequestFilterSearchScreen.test.tsx",
+  "src/features/pull-requests/PullRequestInlineCommentScreen.test.tsx",
+  "src/features/threads/HtmlRenderWebView.test.tsx",
+  "src/features/threads/ThreadScreenHost.test.tsx",
+  "src/features/threads/git/GitBranchesSheet.pagination.test.tsx",
+  "src/features/threads/git/GitConfirmSheet.test.tsx",
+  "src/features/voice-input/useVoiceInputController.test.tsx",
 ];
 
 const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;

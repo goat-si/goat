@@ -147,7 +147,6 @@ export function ThreadScreenBinding({
   ...props
 }: ThreadDetailScreenProps & { readonly header?: ReactNode }) {
   const store = useContext(ThreadScreenContext)!;
-  // oxlint-disable-next-line goat/no-unreasoned-state-sync -- publishes the route's thread screen props to the external store the outlet reads
   useLayoutEffect(() => {
     store.publish({ props, header });
   });

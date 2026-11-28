@@ -2339,10 +2339,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
-  const compactionLabelsByEntryId = useMemo(
-    () => threadFeedCompactionLabels(props.feed),
-    [props.feed],
-  );
+  const compactionLabelsByEntryId = threadFeedCompactionLabels(props.feed);
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
@@ -2689,7 +2686,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
       }
     },
-    [],
+    [userScrollSettleTimerRef],
   );
 
   const settleDisclosureAfterLayout = () => {

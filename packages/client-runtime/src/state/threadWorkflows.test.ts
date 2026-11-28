@@ -85,7 +85,9 @@ describe("thread workflows", () => {
       thread: { id: "thread", activeProviderThreadId: "provider-thread" },
       runs: [{ id: activeRunId, status: "running", providerThreadId: "provider-thread" }],
       providerThreads: [{ id: "provider-thread", providerSessionId: "session" }],
-      providerSessions: [{ id: "session", status: "running", capabilities: capabilities({ steer: true }) }],
+      providerSessions: [
+        { id: "session", status: "running", capabilities: capabilities({ steer: true }) },
+      ],
       messages: [],
       turnItems: [{ runId: activeRunId, type: "run_interrupt_request" }],
     } as unknown as OrchestrationV2ThreadProjection;

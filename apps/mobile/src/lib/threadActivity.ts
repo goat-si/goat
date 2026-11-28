@@ -78,12 +78,7 @@ import {
   mcpAppFromToolItem,
   sentMessageFromToolItem,
 } from "@goat/shared/toolOutput";
-import {
-  setsEqual,
-  mapsEqual,
-  setMapsEqual,
-  firstChangedIndex,
-} from "./threadFeedCacheEquality";
+import { setsEqual, mapsEqual, setMapsEqual, firstChangedIndex } from "./threadFeedCacheEquality";
 import * as DateTime from "effect/DateTime";
 import { groupAdjacentActivities } from "./threadActivityGroups";
 import {

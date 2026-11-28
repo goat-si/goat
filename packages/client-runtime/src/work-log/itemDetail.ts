@@ -267,13 +267,13 @@ function dynamicToolOutputText(
   );
 }
 
-export interface FileSearchResultGroup {
+interface FileSearchResultGroup {
   readonly fileName: string;
   readonly results: ReadonlyArray<OrchestrationV2FileSearchResult>;
 }
 
 /** Results under one heading per file, in first-seen order, the way `rg --heading` prints them. */
-export function groupFileSearchResults(
+function groupFileSearchResults(
   results: ReadonlyArray<OrchestrationV2FileSearchResult>,
 ): ReadonlyArray<FileSearchResultGroup> {
   const groups = new Map<string, OrchestrationV2FileSearchResult[]>();

@@ -603,8 +603,7 @@ it.effect("a silent route's network failure does not hide an answered route's re
     const attempted: Array<string> = [];
     const error = yield* Driver.connectOverRoutes(
       twoRoutes,
-      (route) =>
-        Effect.succeed<Driver.RouteCheck>(route.target === target ? "answered" : "silent"),
+      (route) => Effect.succeed<Driver.RouteCheck>(route.target === target ? "answered" : "silent"),
       (route) => {
         attempted.push(route.target.label);
         return route.target === target

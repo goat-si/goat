@@ -164,7 +164,9 @@ export type {
   WatchThreadPullRequestInput,
 } from "../operations/commands.ts";
 
-const EMPTY_PENDING_SYNC_ATOM = Atom.make<ReadonlySet<ThreadId>>(new Set());
+const DEFAULT_SHELL_STATUS_ATOM = Atom.family((_environmentId: EnvironmentId) =>
+  Atom.make("live" as EnvironmentShellStatus),
+);
 
 function applySettle(
   thread: OrchestrationV2ThreadShell,
@@ -212,7 +214,9 @@ export function createThreadEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | SecureRandom.SecureRandom | R, E>,
   snapshotAtom: (environmentId: EnvironmentId) => Atom.Atom<OrchestrationV2ShellSnapshot | null>,
   /** Offline settle and snooze are sent once this reports a synchronized shell. */
-  shellStatusAtom?: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellStatus>,
+  shellStatusAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<EnvironmentShellStatus> = DEFAULT_SHELL_STATUS_ATOM,
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -592,34 +596,30 @@ export function createThreadEnvironmentAtoms<R, E>(
     pin: rowAction(sent.pin),
     unpin: rowAction(sent.unpin),
   };
-  const triage =
-    shellStatusAtom !== undefined
-      ? createThreadTriageOutbox({
-          runtime,
-          sourceSnapshotAtom: snapshotAtom,
-          shellStatusAtom,
-          apply: (thread, action, queuedAt) =>
-            action.type === "settle"
-              ? applySettle(thread, queuedAt, false)
-              : applySnooze(thread, action.snoozedUntil, queuedAt, false),
-          send: (registry, { environmentId, threadId, commandId, action }) =>
-            action.type === "settle"
-              ? settle.run(registry, { environmentId, input: { threadId, commandId } })
-              : snooze.run(registry, {
-                  environmentId,
-                  input: { threadId, commandId, snoozedUntil: action.snoozedUntil },
-                }),
-        })
-      : null;
-  const optimistic = createOptimisticThreadLifecycle(triage?.snapshotAtom ?? snapshotAtom);
+  const triage = createThreadTriageOutbox({
+    runtime,
+    sourceSnapshotAtom: snapshotAtom,
+    shellStatusAtom,
+    apply: (thread, action, queuedAt) =>
+      action.type === "settle"
+        ? applySettle(thread, queuedAt, false)
+        : applySnooze(thread, action.snoozedUntil, queuedAt, false),
+    send: (registry, { environmentId, threadId, commandId, action }) =>
+      action.type === "settle"
+        ? settle.run(registry, { environmentId, input: { threadId, commandId } })
+        : snooze.run(registry, {
+            environmentId,
+            input: { threadId, commandId, snoozedUntil: action.snoozedUntil },
+          }),
+  });
+  const optimistic = createOptimisticThreadLifecycle(triage.snapshotAtom);
   const settle = optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
     applySettle(thread, now, accepted),
   );
   const snooze = optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
     applySnooze(thread, input.snoozedUntil, now, accepted),
   );
-  const pendingSyncAtom =
-    triage?.pendingSyncAtom ?? Atom.family((_environmentId: EnvironmentId) => EMPTY_PENDING_SYNC_ATOM);
+  const pendingSyncAtom = triage.pendingSyncAtom;
   const disconnectedAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) => {
       const connection = AsyncResult.getOrElse(
@@ -663,38 +663,31 @@ export function createThreadEnvironmentAtoms<R, E>(
       modelSelection: input.modelSelection,
     })),
     // Queued inside the optimistic update, so it stays shown until the queued entry replaces it.
-    settle: triage
-      ? optimistic.wrap(
-          triage.queueWhenOffline(commands.settle, () => ({ type: "settle" as const })),
-          (thread, _input, now, accepted) => applySettle(thread, now, accepted),
-        )
-      : settle,
-    unsettle: (() => {
-      const wrapped = optimistic.wrap(commands.unsettle, (thread, input, now) => ({
+    settle: optimistic.wrap(
+      triage.queueWhenOffline(commands.settle, () => ({ type: "settle" as const })),
+      (thread, _input, now, accepted) => applySettle(thread, now, accepted),
+    ),
+    unsettle: optimistic.wrap(
+      triage.cancelQueued(commands.unsettle, "settle"),
+      (thread, input, now) => ({
         ...thread,
         settledOverride: input.reason === "user" ? "active" : null,
         settledAt: null,
         unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
-      }));
-      return triage ? triage.cancelQueued(wrapped, "settle") : wrapped;
-    })(),
-    snooze: triage
-      ? optimistic.wrap(
-          triage.queueWhenOffline(commands.snooze, (input) => ({
-            type: "snooze" as const,
-            snoozedUntil: input.snoozedUntil,
-          })),
-          (thread, input, now, accepted) => applySnooze(thread, input.snoozedUntil, now, accepted),
-        )
-      : snooze,
-    unsnooze: (() => {
-      const wrapped = optimistic.wrap(commands.unsnooze, (thread) => ({
-        ...thread,
-        snoozedUntil: null,
-        snoozedAt: null,
-      }));
-      return triage ? triage.cancelQueued(wrapped, "snooze") : wrapped;
-    })(),
+      }),
+    ),
+    snooze: optimistic.wrap(
+      triage.queueWhenOffline(commands.snooze, (input) => ({
+        type: "snooze" as const,
+        snoozedUntil: input.snoozedUntil,
+      })),
+      (thread, input, now, accepted) => applySnooze(thread, input.snoozedUntil, now, accepted),
+    ),
+    unsnooze: optimistic.wrap(triage.cancelQueued(commands.unsnooze, "snooze"), (thread) => ({
+      ...thread,
+      snoozedUntil: null,
+      snoozedAt: null,
+    })),
     setAutoSettle: optimistic.wrap(commands.setAutoSettle, (thread, input, now) => ({
       ...thread,
       autoSettleDisabledAt: input.enabled ? null : (thread.autoSettleDisabledAt ?? now),

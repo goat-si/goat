@@ -11,7 +11,12 @@ import type {
 } from "@goat/contracts";
 import { SourceControlProviderKind } from "@goat/contracts";
 import { cloneUrlRepositoryPath } from "@goat/shared/cloneUrl";
-import { isAbsolutePath, isExplicitRelativePath, newProjectFolderName } from "@goat/shared/path";
+import {
+  isAbsolutePath,
+  isExplicitRelativePath,
+  isHostPath,
+  newProjectFolderName,
+} from "@goat/shared/path";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";

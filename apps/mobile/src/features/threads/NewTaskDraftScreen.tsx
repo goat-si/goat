@@ -300,9 +300,7 @@ export function NewTaskDraftScreen(props: {
       selectedProject,
       // The route's share was prepared for the draft's initial project; a handed share joins whichever project is selected.
       initialProjectRef: isHandedIncomingShare ? undefined : props.initialProjectRef,
-      hasPendingShare: Boolean(
-        incomingShare && cancelledIncomingShareId !== activeIncomingShareId,
-      ),
+      hasPendingShare: Boolean(incomingShare && cancelledIncomingShareId !== activeIncomingShareId),
       awaitingServerConfig: isIncomingShareAwaitingServerConfig,
       isImportingShare,
     });

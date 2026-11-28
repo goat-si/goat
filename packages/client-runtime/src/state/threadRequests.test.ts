@@ -749,9 +749,9 @@ it("leaves a joiner or a presentation selector alone only inside an emoji", () =
     "a<U+FE0F>b<U+FE0E> 1<U+FE0F> 1<U+FE0E>\u20E3 漢<U+FE0F> <U+FE0F>",
   );
   // An emoji on one side only, a non-joiner, and a second joiner or selector.
-  expect(named("\u{1F469}\u200D.txt x\u200D\u{1F4BB} \u{1F469}\u200C\u{1F4BB} \u{1F469}\u200D")).toBe(
-    "\u{1F469}<U+200D>.txt x<U+200D>\u{1F4BB} \u{1F469}<U+200C>\u{1F4BB} \u{1F469}<U+200D>",
-  );
+  expect(
+    named("\u{1F469}\u200D.txt x\u200D\u{1F4BB} \u{1F469}\u200C\u{1F4BB} \u{1F469}\u200D"),
+  ).toBe("\u{1F469}<U+200D>.txt x<U+200D>\u{1F4BB} \u{1F469}<U+200C>\u{1F4BB} \u{1F469}<U+200D>");
   expect(named("\u{1F469}\u200D\u200D\u{1F4BB} ❤️\uFE0F")).toBe(
     "\u{1F469}<U+200DU+200D>\u{1F4BB} ❤️<U+FE0F>",
   );

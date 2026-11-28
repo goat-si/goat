@@ -86,7 +86,15 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     if (!canWriteSourceControl || !confirmAction || !copy) return;
     returnToThread({ environmentId, threadId });
     await gitActions.onRunSelectedThreadGitAction({ action: confirmAction });
-  }, [canWriteSourceControl, confirmAction, copy, environmentId, gitActions, returnToThread, threadId]);
+  }, [
+    canWriteSourceControl,
+    confirmAction,
+    copy,
+    environmentId,
+    gitActions,
+    returnToThread,
+    threadId,
+  ]);
 
   const movePendingActionToFeatureBranch = useCallback(async () => {
     if (!canChangeThreadBranch || !confirmAction || !copy) return;

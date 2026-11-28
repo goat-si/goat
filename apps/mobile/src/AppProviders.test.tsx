@@ -87,7 +87,9 @@ it("an assistant reply renders inside the app's providers with its translated se
       ),
     );
     const message = container.querySelector("p");
-    expect(message?.textContent).toBe(reply);
+    expect(message?.textContent).toBe(
+      "Here is the capture:\n\n![after](https://example.test/after.png)",
+    );
     expect(message?.dataset.selectionCopy).toBe("Copy");
   } finally {
     await act(async () => root.unmount());

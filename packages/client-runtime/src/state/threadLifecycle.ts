@@ -55,10 +55,14 @@ export function createOptimisticThreadLifecycle(
     ),
   );
 
-  function wrap<Input extends { readonly threadId: ThreadId }, E>(
+  function wrap<
+    Input extends { readonly threadId: ThreadId },
+    Output extends { readonly sequence: number },
+    E,
+  >(
     command: AtomCommand<
       { readonly environmentId: EnvironmentId; readonly input: Input },
-      { readonly sequence: number },
+      Output,
       E
     >,
     apply: (

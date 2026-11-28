@@ -23,27 +23,44 @@ it("shows a thread picked while folded Back is still revealing the list", () => 
   const show = vi.fn();
   const navigation = { getState: () => state, dispatch: vi.fn() };
   const hostRef = { current: { show } as never };
-  let split: ReturnType<typeof useCollapsedSplitColumn> | undefined;
-  function Columns() {
-    split = useCollapsedSplitColumn({
-      hostRef,
-      usesSplitView: false,
-      compactColumn: state.index > 0 ? "secondary" : "primary",
-      primaryKey: home.key,
-      navigation,
-    });
+  const splitRef: { current: ReturnType<typeof useCollapsedSplitColumn> | undefined } = {
+    current: undefined,
+  };
+  function Columns({
+    onSplit,
+  }: {
+    readonly onSplit: (value: ReturnType<typeof useCollapsedSplitColumn>) => void;
+  }) {
+    onSplit(
+      useCollapsedSplitColumn({
+        hostRef,
+        usesSplitView: false,
+        compactColumn: state.index > 0 ? "secondary" : "primary",
+        primaryKey: home.key,
+        navigation,
+      }),
+    );
     return null;
   }
   const root = createRoot(document.createElement("div"));
-  const render = () => act(() => root.render(<Columns />));
+  const render = () =>
+    act(() =>
+      root.render(
+        <Columns
+          onSplit={(value) => {
+            splitRef.current = value;
+          }}
+        />,
+      ),
+    );
   try {
     render();
-    act(() => split!.followAppearance("willDisappear", left.key));
-    act(() => split!.followAppearance("willAppear", home.key));
+    act(() => splitRef.current!.followAppearance("willDisappear", left.key));
+    act(() => splitRef.current!.followAppearance("willAppear", home.key));
     // The list is tappable from willAppear, so the next thread is picked before didAppear.
     state = routerState([home, left, picked]);
     render();
-    act(() => split!.followAppearance("didAppear", home.key));
+    act(() => splitRef.current!.followAppearance("didAppear", home.key));
     expect(navigation.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: "POP", source: left.key }),
     );
