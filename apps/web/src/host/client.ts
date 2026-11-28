@@ -96,7 +96,7 @@ export class HostClient {
     } else if (s === "closed") {
       this.outbox.onDisconnect();
       for (const [reqId, resolve] of this.pending) {
-        resolve({ type: "command_result", reqId, ok: false, error: { code: "internal", message: "Lost the connection to the host before it answered.", retryable: true } });
+        resolve({ type: "command_result", reqId, ok: false, error: { code: "unknown_outcome", reason: "disconnected", message: "Lost the connection to the host before it answered.", retryable: true } });
       }
       this.pending.clear();
     }
@@ -137,7 +137,7 @@ export class HostClient {
     if (t.threadId) return t.threadId;
     if (t.botId) {
       const bot = this.snapshot.state.bots[t.botId];
-      if (bot) return bot.threadId;
+      if (bot) return bot.sessionThreadId;
       const row = botRows(this.snapshot.state).find((r) => r.botId === t.botId);
       return row?.threadId ?? null;
     }
@@ -164,13 +164,13 @@ export class HostClient {
   command<T extends CommandBody>(body: T, clientRequestId = newId()): Promise<CommandResult> {
     const reqId = newId();
     if (this.snapshot.connection !== "open") {
-      return Promise.resolve({ type: "command_result", reqId, ok: false, error: { code: "internal", message: "Not connected to the host.", retryable: true } });
+      return Promise.resolve({ type: "command_result", reqId, ok: false, error: { code: "unavailable", reason: "not_connected", message: "Not connected to the host.", retryable: true } });
     }
     return new Promise((resolve) => {
       // An open socket with no answer: report an unknown outcome after a bound; never retry by itself.
       const timer = setTimeout(() => {
         if (!this.pending.delete(reqId)) return;
-        resolve({ type: "command_result", reqId, ok: false, error: { code: "internal", message: "No answer from the host yet; it may still apply. Check before trying again.", retryable: false } });
+        resolve({ type: "command_result", reqId, ok: false, error: { code: "unknown_outcome", reason: "no_answer", message: "No answer from the host yet; it may still apply. Check before trying again.", retryable: false } });
       }, this.commandTimeoutMs);
       this.pending.set(reqId, (r) => { clearTimeout(timer); resolve(r); });
       this.send({ ...body, reqId, clientRequestId } as unknown as ClientFrame);
