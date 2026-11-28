@@ -48,8 +48,9 @@ pub struct EngineInput {
 /// Per-turn engine settings, read from the card when the run starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnSettings {
-    pub model: String,
-    pub runtime_mode: String,
+    /// v1 `ModelSelection` (instance, model, options).
+    pub model_selection: goat2_contracts::ModelSelection,
+    pub runtime_mode: goat2_contracts::RuntimeMode,
 }
 
 /// Answer to a turn start.
@@ -123,6 +124,10 @@ pub enum EngineEvent {
         item_id: Option<ItemId>,
         kind: RequestKind,
         summary: String,
+        /// The waiting TurnItem v1 emits for this request (`approval_request` with requestKind,
+        /// prompt, reason, options; `user_input_request` with questions), so the UI can render
+        /// the choices (v1 `CodexAdapterV2.ts:3576-3777`). The host records it in the timeline.
+        item: Option<Box<TurnItem>>,
     },
     /// The engine resolved or withdrew a request by itself.
     RequestClosed { key: String },
