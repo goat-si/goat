@@ -17,13 +17,14 @@ Rules (PRD storage.md): append-only log, completed items only, `run.started` wri
 the engine, card index writes batched only during a run (dirty mark first, write-through otherwise),
 no "read every thread body" API, no log migrations (per-line `v`), index epoch new per host start.
 
-## The 14 log events — `crates/goat2-contracts/src/log.rs`
+## The 15 log events — `crates/goat2-contracts/src/log.rs`
 
 | Event | Written when |
 |---|---|
 | `thread.created` | thread created |
 | `thread.changed` | changed fields only (title, model, archived, ...) |
 | `input.accepted` | input enters the mailbox (sender's requested mode) |
+| `input.changed` | queued input edited, cancelled, reordered or promoted to steer |
 | `input.delivered` | engine answered a steer or turn start for that input: accepted / declined / unknown |
 | `run.started` | before sending to the engine (dispatch boundary) |
 | `run.accepted` | engine acknowledged the turn |

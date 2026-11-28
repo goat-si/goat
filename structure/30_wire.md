@@ -15,6 +15,7 @@ WebSocket on 127.0.0.1 with a token. JSON frames, `type` tag, camelCase fields.
 | `stop_thread`, `resume_queue {threadId}` | command (next user send also releases a hold) |
 | `resolve_request {threadId, requestId, outcome, text?, answers?}` | command; unknown runs: kind `resend`, outcome `resend\|dropped` |
 | `archive_thread`, `rename_thread`, `create_bot {name, purpose, face, engine}` | command |
+| `edit_queued`, `cancel_queued`, `reorder_queued {threadId, inputIds}`, `promote_to_steer` | command, only while the input is queued → `input.changed` (v1 queue parity) |
 | `change_thread {threadId, model?, runtimeMode?, followUpMode?}` | command → `thread.changed`, from the next run |
 | request kind `decision` | `request.opened` with options `{id, label, consequence?}`; answered by `resolve_request {optionId}`; silence never approves |
 | every command: `reqId` + `clientRequestId` (idempotent) | being added by lane C |
@@ -33,8 +34,8 @@ Reset reasons: `epoch_changed | invalid_cursor | thread_missing | too_far_behind
 ## Agent → host: MCP — PRD `part1/mcp.md`
 HTTP on 127.0.0.1, `rmcp`, GOAT v1 agent-surface shape: listing shows `goat_describe` + `goat_call`;
 result `ok | error | needs_human`. Token per (thread, process generation); caller = the thread's
-active run at call time. 10 paths: `surface.describe`, `surface.call`, `thread.start|send|read|list|wait|stop`,
-`user.send`, `request.ask`. `thread.start` takes `mode: async|wait` (default async, v1 semantics: Stop stops wait-mode children only).
+active run at call time. 11 paths: `surface.describe`, `surface.call`, `thread.start|send|read|list|wait|stop`,
+`thread.report_result` (worker → parent `child.reported`, v1), `user.send`, `request.ask` (with options = decision). Deferred: `thread.watch`, agent `queue.*`. `thread.start` takes `mode: async|wait` (default async, v1 semantics: Stop stops wait-mode children only).
 
 ## Host → engine
 | Engine | Protocol | Where |
