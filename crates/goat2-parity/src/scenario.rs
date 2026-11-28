@@ -255,6 +255,9 @@ impl LoadedScenario {
         if scenario.v != 1 {
             return Err("scenario version must be 1".into());
         }
+        if scenario.v1_refs.is_empty() {
+            return Err("v1Refs must cite at least one v1 source".into());
+        }
         let root = dir.canonicalize().map_err(|e| e.to_string())?;
         let mut outbound_counts = BTreeMap::new();
         for (name, stream) in &scenario.streams {

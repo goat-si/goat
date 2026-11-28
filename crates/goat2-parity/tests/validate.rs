@@ -233,3 +233,22 @@ invalid_case!(await_call_unknown_call, |v: &mut serde_json::Value| {
         .unwrap()
         .push(serde_json::json!({"do":"await_call","id":"join","call":"unknown","timeoutMs":1}));
 });
+
+#[test]
+fn empty_v1_refs_is_rejected() {
+    let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenarios/simple_turn");
+    let dir = std::env::temp_dir().join(format!("parity-empty-refs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("transcripts")).unwrap();
+    for e in std::fs::read_dir(src.join("transcripts")).unwrap() {
+        let p = e.unwrap().path();
+        std::fs::copy(&p, dir.join("transcripts").join(p.file_name().unwrap())).unwrap();
+    }
+    let mut v: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(src.join("scenario.json")).unwrap()).unwrap();
+    v["v1Refs"] = serde_json::json!([]);
+    std::fs::write(dir.join("scenario.json"), serde_json::to_vec(&v).unwrap()).unwrap();
+    let err = goat2_parity::scenario::LoadedScenario::load(&dir).unwrap_err();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(err.contains("v1Refs"), "{err}");
+}

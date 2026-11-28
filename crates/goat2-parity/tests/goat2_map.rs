@@ -276,3 +276,22 @@ fn map_input_delivered_refused_fails_closed() {
         "{actual:?}"
     );
 }
+
+#[test]
+fn requested_queue_observed_as_steer_keeps_steer() {
+    use goat2_parity::scenario::SendMode;
+    let mut m = AliasMap::default();
+    m.register_request_mode("req", "i1", SendMode::Queue);
+    let event: LogEvent = serde_json::from_value(serde_json::json!({"type":"input.accepted","inputId":"raw","from":{"kind":"user"},"mode":"steer","text":"x","clientRequestId":"req"})).unwrap();
+    let out = m.map("t", &event).unwrap();
+    assert!(
+        matches!(
+            out.as_slice(),
+            [TraceEvent::InputAccepted {
+                mode: SendMode::Steer,
+                ..
+            }]
+        ),
+        "{out:?}"
+    );
+}
