@@ -211,3 +211,27 @@ fn scenario_v1_refs_resolve_when_root_available() {
         }
     }
 }
+
+/// The v1 runner's own TypeScript unit tests (trace mapping on synthetic v1 events), run through
+/// run-v1.sh --unit in a scratch copy inside the export.
+#[test]
+fn v1_runner_unit_tests_pass_when_available() {
+    let Some(v1) = std::env::var_os("GOAT_V1_ROOT") else {
+        println!("SKIPPED v1 runner unit tests: GOAT_V1_ROOT unset");
+        return;
+    };
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh");
+    let output = std::process::Command::new("sh")
+        .arg(script)
+        .arg("--v1-root")
+        .arg(v1)
+        .arg("--unit")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

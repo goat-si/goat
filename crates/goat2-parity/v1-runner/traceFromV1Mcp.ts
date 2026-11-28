@@ -53,17 +53,27 @@ export function traceFromV1Mcp(input: {
     }
   }
   // A delegated completion delivery (Orchestrator.ts:11315-11447): one cohort message per wake.
-  const wakeByMessage = new Map<string, { child: string; wake: string; input: string }>();
-  const unmappedCohort = new Map<string, string>();
+  // A queued delivery absorbs later siblings by rewriting the same message (Orchestrator.ts:11315-11388),
+  // so every revision counts: a message that ever names other than exactly one task is not mapped.
+  const cohortTasks = new Map<string, Set<string>>();
   for (const { event } of sorted) {
     const p = event.payload;
-    if (event.type !== "message.updated" || p.delegatedCompletion === undefined || wakeByMessage.has(p.id) || unmappedCohort.has(p.id)) continue;
+    if (event.type !== "message.updated" || p.delegatedCompletion === undefined) continue;
+    const seen = cohortTasks.get(p.id) ?? new Set<string>();
     const taskIds: readonly string[] = p.delegatedCompletion.taskIds;
-    if (taskIds.length !== 1) { unmappedCohort.set(p.id, "multi-task completion cohorts are not mapped (message " + p.id + ")"); continue; }
-    const w = taskWake.get(taskIds[0]!);
-    if (w === undefined) throw new Error("completion for an unreported task " + taskIds[0]);
-    wakeByMessage.set(p.id, w);
-    messageAlias.set(p.id, w.input);
+    if (taskIds.length !== 1) seen.add("<cohort of " + taskIds.length + ">");
+    for (const id of taskIds) seen.add(id);
+    cohortTasks.set(p.id, seen);
+  }
+  const wakeByMessage = new Map<string, { child: string; wake: string; input: string }>();
+  const unmappedCohort = new Map<string, string>();
+  for (const [messageId, tasks] of cohortTasks) {
+    if (tasks.size !== 1) { unmappedCohort.set(messageId, "multi-task completion cohorts are not mapped (message " + messageId + ")"); continue; }
+    const taskId = [...tasks][0]!;
+    const w = taskWake.get(taskId);
+    if (w === undefined) throw new Error("completion for an unreported task " + taskId);
+    wakeByMessage.set(messageId, w);
+    messageAlias.set(messageId, w.input);
   }
   // v1 dispatches a completion queue_after_active (ProviderContinuationService.ts:173-193) and writes
   // no user turn item for it; its mode here is what happened: queue when its run first waits queued
@@ -156,6 +166,7 @@ export function traceFromV1Mcp(input: {
       const old = statuses.get(p.id);
       statuses.set(p.id, p.status);
       const inputAlias = p.userMessageId ? messageAlias.get(p.userMessageId) : undefined;
+      if (p.userMessageId && unmappedCohort.has(p.userMessageId)) { incomplete = unmappedCohort.get(p.userMessageId); continue; }
       const wake = p.userMessageId ? wakeByMessage.get(p.userMessageId) : undefined;
       if (wake !== undefined && p.status === "queued" && old !== "queued") {
         semantic.push({ sequence, event: { kind: "parent.woken", thread, child: wake.child, wake: wake.wake, state: "queued" } });
