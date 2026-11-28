@@ -295,7 +295,11 @@ pub async fn acp_initialize_only(
     cwd: Option<&Path>,
     params: Value,
 ) -> Result<Value, String> {
-    let mut command = tokio::process::Command::new(program);
+    // Resolved against the child's PATH so std keeps posix_spawn (crate::process module docs).
+    let resolved =
+        crate::process::resolve_program(program, env.get("PATH").map(std::ffi::OsStr::new), cwd)
+            .map_err(|e| format!("spawn: {e}"))?;
+    let mut command = tokio::process::Command::new(resolved);
     command
         .args(args)
         .env_clear()

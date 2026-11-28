@@ -169,7 +169,12 @@ pub async fn spawn_and_collect(
     cwd: Option<&Path>,
     timeout: Duration,
 ) -> Result<Option<CommandResult>, CliError> {
-    let mut command = tokio::process::Command::new(program);
+    // A bare name is resolved against the child's own PATH first: with a cleared environment std
+    // would fork+exec instead of posix_spawn (crate::process module docs).
+    let resolved =
+        crate::process::resolve_program(program, env.get("PATH").map(std::ffi::OsStr::new), cwd)
+            .map_err(CliError::Spawn)?;
+    let mut command = tokio::process::Command::new(resolved);
     command
         .args(args)
         .env_clear()

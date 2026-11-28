@@ -12,11 +12,18 @@
 //! while another host thread is inside a libSystem once-initializer (libnotify, reached through
 //! `getpwuid_r` and name lookups) aborts the forked child in `_notify_fork_child`
 //! (`_os_once_gate_corruption_abort`, SIGKILL) before it runs the agent. Seen as agents dying at
-//! `initialize` under parallel load.
+//! `initialize` under parallel load. std also forks when the program is a bare name and the
+//! child's `PATH` differs from the host's (cleared or set environment), so every spawn in this
+//! crate first resolves a bare name with [resolve_program], the search `execvp` would do.
+//!
+//! The priority is lowered just after the spawn, so it is not atomic: on macOS it applies to the
+//! whole process; on Linux the nice value is per thread, so threads or children the agent makes in
+//! the microseconds before the call keep the host's priority. Accepted: wrapping the launch in
+//! `nice -n` would change the agent's argv and spawn errors.
 
 use std::ffi::OsString;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -36,7 +43,7 @@ pub type StderrHook = Arc<dyn Fn(&str) + Send + Sync>;
 pub const REMOVE_INHERITED: &str = "*";
 
 /// How to start a child.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Launch {
     pub program: PathBuf,
     pub args: Vec<OsString>,
@@ -101,6 +108,105 @@ impl Launch {
         );
         self
     }
+
+    /// The `PATH` the child will see: `env_set`'s, else the inherited one unless it is removed
+    /// (None: no `PATH`, which `execvp` searches as `/usr/bin:/bin`).
+    fn child_path(&self) -> Option<OsString> {
+        if let Some((_, value)) = self.env_set.iter().rev().find(|(name, _)| name == "PATH") {
+            return Some(value.clone());
+        }
+        let removed = self.env_remove.iter().any(|name| name == "PATH")
+            || self
+                .env_remove_prefixes
+                .iter()
+                .any(|prefix| "PATH".starts_with(prefix.as_str()));
+        if removed {
+            None
+        } else {
+            std::env::var_os("PATH")
+        }
+    }
+}
+
+/// Names only: `env_set` carries credentials (`XAI_API_KEY`, Gemini keys), as round 7 part 5a.6
+/// redacted `LaunchCommand` and `AgentEnv`.
+impl std::fmt::Debug for Launch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&OsString> = self.env_set.iter().map(|(name, _)| name).collect();
+        f.debug_struct("Launch")
+            .field("program", &self.program)
+            .field("args", &self.args)
+            .field("cwd", &self.cwd)
+            .field("env_remove", &self.env_remove)
+            .field("env_remove_prefixes", &self.env_remove_prefixes)
+            .field("env_set_names", &names)
+            .field("nice", &self.nice)
+            .field("kill_grace", &self.kill_grace)
+            .finish()
+    }
+}
+
+/// The program to hand to std: a name with a path separator unchanged, a bare name resolved the way
+/// `execvp` would in the child, against `child_path` (None = `/usr/bin:/bin`) with relative
+/// entries taken from `cwd`. Keeps std on `posix_spawn`, which forks never (module docs). A name
+/// found nowhere is the ENOENT error std's own spawn returns, without spawning anything.
+pub fn resolve_program(
+    program: &Path,
+    child_path: Option<&std::ffi::OsStr>,
+    cwd: Option<&Path>,
+) -> io::Result<PathBuf> {
+    if !cfg!(unix) || program.components().count() != 1 || program.is_absolute() {
+        return Ok(program.to_path_buf());
+    }
+    let text = program.as_os_str();
+    if text.is_empty() || text.to_string_lossy().contains('/') {
+        return Ok(program.to_path_buf());
+    }
+    let default = std::ffi::OsString::from("/usr/bin:/bin");
+    let search = child_path.unwrap_or(&default);
+    for entry in std::env::split_paths(search) {
+        // An empty entry is the current directory, as in execvp.
+        let dir = if entry.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            entry
+        };
+        let dir = match cwd {
+            Some(cwd) if dir.is_relative() => cwd.join(dir),
+            _ => dir,
+        };
+        let candidate = dir.join(program);
+        if is_executable_file(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(io::Error::from_raw_os_error(libc_enoent()))
+}
+
+fn libc_enoent() -> i32 {
+    #[cfg(unix)]
+    {
+        libc::ENOENT
+    }
+    #[cfg(not(unix))]
+    {
+        2
+    }
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.is_file() && meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        meta.is_file()
+    }
 }
 
 /// How the child ended.
@@ -149,7 +255,12 @@ impl ChildProcess {
         launch: &Launch,
         on_stderr_line: Option<StderrHook>,
     ) -> io::Result<Self> {
-        let mut command = Command::new(&launch.program);
+        let program = resolve_program(
+            &launch.program,
+            launch.child_path().as_deref(),
+            launch.cwd.as_deref(),
+        )?;
+        let mut command = Command::new(&program);
         command
             .args(&launch.args)
             .stdin(Stdio::piped())

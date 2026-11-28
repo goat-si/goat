@@ -125,7 +125,18 @@ fn probe_timeout(launch_env: &[(String, String)]) -> Duration {
 /// the cap, final review 6 finding B1) or undecodable output.
 pub async fn discover_skills(program: &Path, context: &PromptContext) -> Option<Vec<GrokSkill>> {
     let identity = Launch::new(program).without_host_identity();
-    let mut command = tokio::process::Command::new(program);
+    // Resolved against the child's PATH (the session's, else the host's) so std keeps
+    // posix_spawn (crate::process module docs). Not found: no skills, as a spawn failure.
+    let child_path = context
+        .launch_env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| std::ffi::OsString::from(value))
+        .or_else(|| std::env::var_os("PATH"));
+    let cwd = (!context.cwd.is_empty()).then(|| std::path::Path::new(&context.cwd));
+    let resolved = crate::process::resolve_program(program, child_path.as_deref(), cwd).ok()?;
+    let mut command = tokio::process::Command::new(resolved);
     command
         .args(["inspect", "--json"])
         .stdin(std::process::Stdio::null());
