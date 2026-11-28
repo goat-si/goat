@@ -61,7 +61,8 @@ use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
 use crate::policy::{
-    Disposition, PermissionChoice, RuntimePolicy, mcp_tool_approval_elicitation_disposition,
+    Disposition, PermissionChoice, RuntimePolicy, UnreadToolCalls, auto_accept_policy_request,
+    mcp_tool_approval_elicitation_disposition, unread_tool_call_update,
 };
 use crate::process::{ChildProcess, Launch};
 use crate::subagents::{SubagentTracker, ToolRoute, TurnRef};
@@ -249,6 +250,8 @@ struct State {
     /// A `config_option_update` arrived; it replaces the setup response's options even when it
     /// is handled first (v1 probe.ts:545-547 prefers the update).
     config_options_from_update: bool,
+    /// Tool calls with an update the driver could not read (see [UnreadToolCalls]).
+    unread_tool_calls: UnreadToolCalls,
 }
 
 struct Shared {
@@ -539,6 +542,15 @@ impl Shared {
     }
 
     fn on_session_update(self: &Arc<Self>, params: &Value) {
+        // v1 makeUndecodableNotificationHandler (autoAcceptEdits.ts:133-155): what an unreadable
+        // update may have changed stays unknown to auto-accept (final review finding 2).
+        if let Some((session, tool_call)) = unread_tool_call_update(params) {
+            self.state
+                .lock()
+                .expect("state")
+                .unread_tool_calls
+                .add(session.as_deref(), tool_call.as_deref());
+        }
         let Some(update) = params.get("update") else {
             return;
         };
@@ -794,8 +806,29 @@ impl Shared {
             }
         }
         let policy = self.policy.lock().expect("policy").clone();
-        let disposition = self.flavor.permission_disposition(&policy, &params);
         let tool_call = params.get("toolCall").cloned().unwrap_or(Value::Null);
+        // v1 adapter.ts:5148-5175 with autoAcceptPolicyRequest (autoAcceptEdits.ts:148-160): policy
+        // reads every path this call's updates named, not only the request's (final review
+        // finding 2). Tracked calls are the root session's.
+        let policy_request = {
+            let state = self.state.lock().expect("state");
+            let session = text_field(&params, "sessionId");
+            let own = session
+                .as_deref()
+                .is_none_or(|s| self.session_id.get().is_some_and(|own| own == s));
+            let id = text_field(&tool_call, "toolCallId");
+            let (kind, paths) = match (&id, state.turn.as_ref()) {
+                (Some(id), Some(turn)) if own => turn.projector.tracked_call(id),
+                _ => (None, None),
+            };
+            let unread = id.as_deref().is_some_and(|id| {
+                state
+                    .unread_tool_calls
+                    .has(session.as_deref().unwrap_or_default(), id)
+            });
+            auto_accept_policy_request(&params, kind.as_deref(), paths.as_ref(), unread)
+        };
+        let disposition = self.flavor.permission_disposition(&policy, &policy_request);
         match disposition {
             Disposition::Allow => {
                 // v1 `selectAutoApprovedPermissionOption`: allow-once first, then the flavor's

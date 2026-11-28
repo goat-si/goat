@@ -6,7 +6,7 @@
 //! starts), `unfinishedStop.ts`. GOAT 2 stores finished items only, so a tool is written once it
 //! completes or fails, or when the turn ends with it open.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +18,7 @@ use goat2_engine_api::EngineEvent;
 use serde_json::{Map, Value, json};
 
 use crate::flavor::{AcpFlavor, BackgroundMutation, BackgroundStatus};
+use crate::policy::{ChangedPaths, changed_paths_of_tool_call, merge_changed_paths};
 use crate::wire::text_field;
 
 pub(crate) fn now_ms() -> i64 {
@@ -83,6 +84,10 @@ pub struct ToolState {
     pub meta: Option<Value>,
     pub name: Option<String>,
     pub started_ms: i64,
+    /// v1 `AcpToolCallState.changedPaths` (runtimeModel.ts:56-61): every path any update of this
+    /// call named, or unknown; None when none did. It only grows (`locations` is what the latest
+    /// update says).
+    pub changed_paths: Option<ChangedPaths>,
 }
 
 impl ToolState {
@@ -111,6 +116,11 @@ impl ToolState {
         set_value(&mut self.content, update, "content");
         set_value(&mut self.locations, update, "locations");
         set_value(&mut self.meta, update, "_meta");
+        // v1 runtimeModel.ts:932,982 (final review finding 2): auto-accept reads all of them.
+        self.changed_paths = merge_changed_paths(
+            self.changed_paths.take(),
+            changed_paths_of_tool_call(update),
+        );
     }
 
     pub fn is_terminal(&self) -> bool {
@@ -452,6 +462,10 @@ pub struct TurnProjector {
     awaiting_hydration: HashSet<String>,
     /// v1 `lastCapturedProposedPlan` for this turn: (item id, plan id, ordinal, markdown).
     proposed: Option<(ItemId, PlanId, u32, String)>,
+    /// Paths content chunks named for calls this turn has no update of (v1 `trackChunkPaths`).
+    chunk_paths: HashMap<String, ChangedPaths>,
+    /// More calls than that map holds had such chunks: every call's paths are unknown.
+    chunk_paths_overflow: bool,
 }
 
 impl TurnProjector {
@@ -482,6 +496,8 @@ impl TurnProjector {
             ended_tasks: HashSet::new(),
             awaiting_hydration: HashSet::new(),
             proposed: None,
+            chunk_paths: HashMap::new(),
+            chunk_paths_overflow: false,
         }
     }
 
@@ -616,6 +632,20 @@ impl TurnProjector {
         self.tools.iter().find(|t| t.tool_call_id == tool_call_id)
     }
 
+    /// What auto-accept knows of a call from this turn's updates: its kind and every path they
+    /// named (v1 `autoAcceptPolicyRequest`'s tracked tool, autoAcceptEdits.ts:148-160).
+    pub fn tracked_call(&self, tool_call_id: &str) -> (Option<String>, Option<ChangedPaths>) {
+        let tool = self.tool(tool_call_id);
+        let kind = tool.and_then(|t| t.kind.clone());
+        let mut paths = tool.and_then(|t| t.changed_paths.clone());
+        if self.chunk_paths_overflow {
+            paths = Some(ChangedPaths::Unknown);
+        } else if let Some(extra) = self.chunk_paths.get(tool_call_id) {
+            paths = merge_changed_paths(paths, extra.clone());
+        }
+        (kind, paths)
+    }
+
     pub fn tool_item_id(&self, tool_call_id: &str) -> ItemId {
         ItemId::new(format!("{}:tool:{tool_call_id}", self.turn_id))
     }
@@ -724,6 +754,28 @@ impl TurnProjector {
                 }
                 let id = text_field(update, "toolCallId").unwrap_or_default();
                 self.after_tool_update(&id, out);
+            }
+            // v1 `trackChunkPaths` (autoAcceptEdits.ts:177-182, adapter.ts:4016-4023): a content
+            // chunk that names files counts for auto-accept (GOAT 2 does not show chunk output).
+            "tool_call_content_chunk" => {
+                let (Some(id), Some(content)) =
+                    (text_field(update, "toolCallId"), update.get("content"))
+                else {
+                    return;
+                };
+                let paths = changed_paths_of_tool_call(&json!({ "content": [content] }));
+                if let Some(tool) = self.tools.iter_mut().find(|t| t.tool_call_id == id) {
+                    tool.changed_paths = merge_changed_paths(tool.changed_paths.take(), paths);
+                } else if let Some(merged) =
+                    merge_changed_paths(self.chunk_paths.remove(&id), paths)
+                {
+                    if self.chunk_paths.len() >= crate::policy::MAX_UNREAD_TOOL_CALLS {
+                        self.chunk_paths_overflow = true;
+                        self.chunk_paths.clear();
+                    } else {
+                        self.chunk_paths.insert(id, merged);
+                    }
+                }
             }
             // v1 adapter.ts:4047-4087: background output Grok injects as user text (subagent end
             // notices in the same text are the tracker's).
