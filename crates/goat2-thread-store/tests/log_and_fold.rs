@@ -65,12 +65,12 @@ fn every_event_type_is_written_and_reencodes_byte_for_byte() {
                 accepted("r1"),
                 delivered("i1", "r1", DeliveredAs::Turn, DeliveryOutcome::Accepted),
                 request("q1", Some("r1"), RequestKind::Approval),
-                resolved("q1", RequestOutcome::Approved),
+                resolved("q1", RequestOutcome::Accept),
                 child_started("c"),
                 answer("r1", "a1", "done"),
                 child_reported("c", &parent.epoch),
                 notified("result"),
-                finished("r1", RunOutcome::Done),
+                finished("r1", RunOutcome::Completed),
             ],
         )
         .unwrap();
@@ -126,7 +126,7 @@ fn status_follows_the_precedence_order() {
             vec![
                 started("r2", &["i2"]),
                 delivered("i2", "r2", DeliveredAs::Turn, DeliveryOutcome::Accepted),
-                finished("r2", RunOutcome::Done),
+                finished("r2", RunOutcome::Completed),
             ],
         )
         .unwrap();
@@ -155,7 +155,7 @@ fn delivery_rules_keep_each_input_in_exactly_one_place() {
                 delivered("a", "r1", DeliveredAs::Turn, DeliveryOutcome::Accepted),
                 delivered("b", "r1", DeliveredAs::Steer, DeliveryOutcome::Declined),
                 delivered("c", "r1", DeliveredAs::Steer, DeliveryOutcome::Unknown),
-                finished("r1", RunOutcome::Done),
+                finished("r1", RunOutcome::Completed),
             ],
         )
         .unwrap();
@@ -300,7 +300,7 @@ fn run_finished_is_followed_by_a_checkpoint_of_the_folded_state() {
     let (card, fold) = replay(dir.path(), "t");
     assert_eq!(cp.fold, fold);
     assert!(same_card(&cp.card, &card));
-    assert_eq!(card.last_excerpt, "answer to hello");
+    assert_eq!(card.latest_answer_excerpt, "answer to hello");
 }
 
 #[test]

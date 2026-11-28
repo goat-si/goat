@@ -67,7 +67,7 @@ fn find_uses_only_index_fields() {
         .append(
             &tid("t3"),
             vec![LogEvent::ThreadChanged(ThreadChanged {
-                archived: Some(true),
+                archived_at: Some(Some("2026-11-28T10:00:00Z".into())),
                 ..Default::default()
             })],
         )

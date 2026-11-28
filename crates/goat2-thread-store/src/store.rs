@@ -188,7 +188,9 @@ impl CardFilter {
                 .project_id
                 .as_ref()
                 .is_none_or(|p| card.project_id.as_ref() == Some(p))
-            && self.archived.is_none_or(|a| card.archived == a)
+            && self
+                .archived
+                .is_none_or(|a| card.archived_at.is_some() == a)
     }
 }
 
@@ -485,7 +487,7 @@ impl Store {
                 .map(|r| {
                     LogEvent::RequestResolved(RequestResolved {
                         request_id: r.request_id.clone(),
-                        outcome: RequestOutcome::Cancelled,
+                        outcome: RequestOutcome::Cancel,
                         option_id: None,
                         text: Some("The host restarted before this request was answered.".into()),
                         answers: None,

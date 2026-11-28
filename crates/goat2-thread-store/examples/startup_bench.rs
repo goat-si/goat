@@ -60,9 +60,13 @@ fn created(i: usize) -> ThreadCreated {
         bot_id: None,
         parent: None,
         engine: EngineConfig {
-            driver: EngineDriver::Codex,
-            model: "gpt-6.1-terra".into(),
-            runtime_mode: "full-access".into(),
+            provider_instance_id: ProviderInstanceId::new("codex"),
+            model_selection: ModelSelection {
+                instance_id: ProviderInstanceId::new("codex"),
+                model: "gpt-6.1-terra".into(),
+                options: None,
+            },
+            runtime_mode: RuntimeMode::FullAccess,
             cwd: format!("/Users/me/work/repo-{}", i % 13),
         },
         follow_up_mode: FollowUpMode::Steer,
@@ -130,7 +134,7 @@ fn run_events(r: usize, done: bool, accepted: bool) -> Vec<LogEvent> {
         events.push(item(&run, &format!("{run}-ans"), json!({"type": "assistant_message", "messageId": format!("m{r}"), "text": "x".repeat(800), "streaming": false})));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: RunId::new(&run),
-            outcome: RunOutcome::Done,
+            outcome: RunOutcome::Completed,
             reason: None,
         }));
     }

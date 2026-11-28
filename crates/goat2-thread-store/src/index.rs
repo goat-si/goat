@@ -216,7 +216,7 @@ impl Index {
                     card.bot_id.as_ref().map(|b| b.as_str().to_owned()),
                     card.project_id.as_ref().map(|p| p.as_str().to_owned()),
                     card.engine.cwd,
-                    card.archived as i64,
+                    card.archived_at.is_some() as i64,
                     card.updated_at,
                     *dirty as i64,
                     *active_run as i64,

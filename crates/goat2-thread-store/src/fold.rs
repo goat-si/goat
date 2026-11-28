@@ -29,10 +29,10 @@ pub fn initial(
         engine_ref: None,
         status: ThreadStatus::Idle,
         needs_you: None,
-        last_excerpt: String::new(),
+        latest_answer_excerpt: String::new(),
         children: ChildCounts::default(),
         follow_up_mode: created.follow_up_mode,
-        archived: false,
+        archived_at: None,
         updated_at: at.to_owned(),
         epoch: epoch.clone(),
         applied_seq: seq,
@@ -91,17 +91,17 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
             if let Some(title) = &e.title {
                 card.title = clamp_chars(title, CARD_TITLE_MAX_CHARS);
             }
-            if let Some(model) = &e.model {
-                card.engine.model = model.clone();
+            if let Some(selection) = &e.model_selection {
+                card.engine.model_selection = selection.clone();
             }
-            if let Some(mode) = &e.runtime_mode {
-                card.engine.runtime_mode = mode.clone();
+            if let Some(mode) = e.runtime_mode {
+                card.engine.runtime_mode = mode;
             }
             if let Some(mode) = e.follow_up_mode {
                 card.follow_up_mode = mode;
             }
-            if let Some(archived) = e.archived {
-                card.archived = archived;
+            if let Some(archived_at) = &e.archived_at {
+                card.archived_at = archived_at.clone();
             }
         }
         LogEvent::InputAccepted(e) => {
@@ -152,6 +152,11 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
             DeliveryOutcome::Declined => {
                 fold.active_run_input_ids.retain(|id| id != &e.input_id);
             }
+            DeliveryOutcome::Refused => {
+                // Fails closed: the input leaves the queue and is never retried.
+                fold.active_run_input_ids.retain(|id| id != &e.input_id);
+                take_queued(fold, &e.input_id);
+            }
             DeliveryOutcome::Unknown => {
                 fold.active_run_input_ids.retain(|id| id != &e.input_id);
                 if let Some(input) = take_queued(fold, &e.input_id) {
@@ -180,7 +185,7 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
                 fold.active_run_reached_engine = true;
             }
             if let TurnItemBody::AssistantMessage { text, .. } = &e.item.body {
-                card.last_excerpt = clamp_chars(text, CARD_EXCERPT_MAX_CHARS);
+                card.latest_answer_excerpt = clamp_chars(text, CARD_EXCERPT_MAX_CHARS);
             }
         }
         LogEvent::RequestOpened(e) => {
@@ -243,7 +248,7 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
             fold.running_child_ids.retain(|id| id != &e.child_thread_id);
         }
         LogEvent::UserNotified(e) => {
-            card.last_excerpt = clamp_chars(&e.text, CARD_EXCERPT_MAX_CHARS);
+            card.latest_answer_excerpt = clamp_chars(&e.text, CARD_EXCERPT_MAX_CHARS);
         }
     }
     card.applied_seq = line.seq;

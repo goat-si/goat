@@ -23,9 +23,13 @@ pub fn created(title: &str, cwd: &str) -> ThreadCreated {
         bot_id: None,
         parent: None,
         engine: EngineConfig {
-            driver: EngineDriver::Codex,
-            model: "gpt-test".into(),
-            runtime_mode: "full-access".into(),
+            provider_instance_id: ProviderInstanceId::new("codex"),
+            model_selection: ModelSelection {
+                instance_id: ProviderInstanceId::new("codex"),
+                model: "gpt-test".into(),
+                options: None,
+            },
+            runtime_mode: RuntimeMode::FullAccess,
             cwd: cwd.into(),
         },
         follow_up_mode: FollowUpMode::Steer,
@@ -154,7 +158,7 @@ pub fn child_reported(child: &str, epoch: &Epoch) -> LogEvent {
     LogEvent::ChildReported(ChildReported {
         child_thread_id: ThreadId::new(child),
         child_run_id: None,
-        status: ChildResultStatus::Done,
+        status: ChildResultStatus::Completed,
         summary: "ok".into(),
         child_cursor: ThreadCursor {
             epoch: epoch.clone(),
@@ -186,7 +190,7 @@ pub fn full_run(run: &str, input_id: &str, text: &str) -> Vec<LogEvent> {
         accepted(run),
         delivered(input_id, run, DeliveredAs::Turn, DeliveryOutcome::Accepted),
         answer(run, &format!("{run}-a"), &format!("answer to {text}")),
-        finished(run, RunOutcome::Done),
+        finished(run, RunOutcome::Completed),
     ]
 }
 
