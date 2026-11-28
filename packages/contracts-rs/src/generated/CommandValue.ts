@@ -15,7 +15,7 @@ import type { TurnItem } from "./TurnItem.ts";
 /**
  * `command_result.value`: ids the command created or touched.
  */
-export type CommandValue = { installState?: ProviderInstallState, authState?: ProviderAuthState, accepted?: boolean, registrySearch?: AcpRegistrySearchResult, registryPrepare?: AcpRegistryPrepareResult, notes?: ChannelListBotNotesResult, turnItem?: TurnItem, bot?: BotProfile, threadId?: ThreadId, botId?: BotId, inputId?: InputId, runId?: RunId, requestId?: RequestId, 
+export type CommandValue = { installState?: ProviderInstallState, authState?: ProviderAuthState, accepted?: boolean, registrySearch?: AcpRegistrySearchResult, registryPrepare?: AcpRegistryPrepareResult, notes?: ChannelListBotNotesResult, turnItem?: TurnItem, bot?: BotProfile, threadId?: ThreadId, botId?: BotId, inputId?: InputId, runId?: RunId, requestId?: RequestId,
 /**
  * True when this `clientRequestId` was already applied and the earlier result is returned.
  */

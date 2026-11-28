@@ -8,7 +8,7 @@ import type { ProviderInstanceId } from "./ProviderInstanceId.ts";
 /**
  * v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.
  */
-export type ProviderAuthState = { instanceId: ProviderInstanceId, phase: ProviderAuthPhase, flowId: string | null, 
+export type ProviderAuthState = { instanceId: ProviderInstanceId, phase: ProviderAuthPhase, flowId: string | null,
 /**
  * v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.
  */

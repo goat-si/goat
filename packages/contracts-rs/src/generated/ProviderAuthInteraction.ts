@@ -4,15 +4,15 @@ import type { ProviderCredentialField } from "./ProviderCredentialField.ts";
 /**
  * v1 `ProviderAuthInteraction`: what the person must do next in a sign-in flow.
  */
-export type ProviderAuthInteraction = { "type": "browser", id: string, 
+export type ProviderAuthInteraction = { "type": "browser", id: string,
 /**
  * v1 `SignInUrl`: http(s) only.
  */
-url: string, requiresConsent: boolean, acceptsCallback?: boolean, } | { "type": "deviceCode", id: string, 
+url: string, requiresConsent: boolean, acceptsCallback?: boolean, } | { "type": "deviceCode", id: string,
 /**
  * v1 `SignInUrl`: http(s) only.
  */
-url: string, userCode: string, } | { "type": "terminal", id: string, output: string, 
+url: string, userCode: string, } | { "type": "terminal", id: string, output: string,
 /**
  * v1 non-negative integer, within the safe wire integer range.
  */

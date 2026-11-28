@@ -4,19 +4,19 @@ import type { TerminalStatusQuality } from "./TerminalStatusQuality.ts";
 /**
  * v1 `OrchestrationV2TurnCapabilities`.
  */
-export type TurnCapabilities = { supportsNativeGoals?: boolean, exposesNativeTurnId: boolean, emitsTurnStarted: boolean, emitsTurnCompleted: boolean, supportsInterrupt: boolean, 
+export type TurnCapabilities = { supportsNativeGoals?: boolean, exposesNativeTurnId: boolean, emitsTurnStarted: boolean, emitsTurnCompleted: boolean, supportsInterrupt: boolean,
 /**
  * Continues an interrupted turn without a new message.
  */
-supportsNativeResume?: boolean, supportsActiveSteering: boolean, 
+supportsNativeResume?: boolean, supportsActiveSteering: boolean,
 /**
  * Some native steering mechanisms cancel pending tools before consuming the message.
  */
-activeSteeringInterruptsTools?: boolean, 
+activeSteeringInterruptsTools?: boolean,
 /**
  * Some take text only, so a steer with attachments restarts the turn instead.
  */
-activeSteeringAcceptsAttachments?: boolean, 
+activeSteeringAcceptsAttachments?: boolean,
 /**
  * Only where a steer leaves a running automatic compaction intact.
  */

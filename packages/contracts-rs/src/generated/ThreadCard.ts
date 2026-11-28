@@ -15,47 +15,47 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
 /**
  * One row per thread. Every text field is bounded.
  */
-export type ThreadCard = { id: ThreadId, kind: ThreadKind, 
+export type ThreadCard = { id: ThreadId, kind: ThreadKind,
 /**
  * At most [CARD_TITLE_MAX_CHARS] characters.
  */
-title: string, 
+title: string,
 /**
  * Card index column for lookups by project.
  */
-projectId: ProjectId | null, botId: BotId | null, parent: ParentRef | null, engine: EngineConfig, engineRef: EngineRef | null, status: ThreadStatus, needsYou: NeedsYou | null, 
+projectId: ProjectId | null, botId: BotId | null, parent: ParentRef | null, engine: EngineConfig, engineRef: EngineRef | null, status: ThreadStatus, needsYou: NeedsYou | null,
 /**
  * Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters (v1
  * `latestAnswerExcerpt`).
  */
-latestAnswerExcerpt: string, children: ChildCounts, followUpMode: FollowUpMode, 
+latestAnswerExcerpt: string, children: ChildCounts, followUpMode: FollowUpMode,
 /**
  * v1 `archivedAt`: when the thread was archived (`thread.changed {archivedAt}`), else `null`.
  * Archived cards stay in the index.
  */
-archivedAt: string | null, 
+archivedAt: string | null,
 /**
  * RFC 3339 UTC timestamp.
  */
-updatedAt: string, 
+updatedAt: string,
 /**
  * Generation of this thread's `goat.jsonl`.
  */
-epoch: Epoch, 
+epoch: Epoch,
 /**
  * Last `goat.jsonl` seq folded into this card, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-appliedSeq: number, 
+appliedSeq: number,
 /**
  * Card index global sequence, the `subscribeCards` cursor, at most
  * [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-cardSeq: number, 
+cardSeq: number,
 /**
  * Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the
  * store. Omitted when 0.
  */
-openAsks?: number, 
+openAsks?: number,
 /**
  * Derived by the host when it serves a card: the thread's last item not from the person is
  * newer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state

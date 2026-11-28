@@ -13,11 +13,11 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  * `payload_too_large`; `unavailable` / `not_available` (the command's host module has not
  * landed yet); `invalid_request` / `invalid_request`; `internal` / `internal`.
  */
-export type CommandError = { code: AgentSurfaceErrorCode, 
+export type CommandError = { code: AgentSurfaceErrorCode,
 /**
  * The domain's own code, unchanged.
  */
-reason: string, message: string, 
+reason: string, message: string,
 /**
  * True only when repeating the command cannot duplicate an effect.
  */

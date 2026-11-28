@@ -26,43 +26,43 @@ import type { ThreadId } from "./ThreadId.ts";
  * unchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as
  * the turn ends still requeues.
  */
-export type Fold = { 
+export type Fold = {
 /**
  * The run between `run.started` and `run.finished`, if any.
  */
-activeRunId: RunId | null, 
+activeRunId: RunId | null,
 /**
  * Inputs carried by the active run's `run.started`.
  */
-activeRunInputIds: Array<InputId>, 
+activeRunInputIds: Array<InputId>,
 /**
  * True once `run.accepted`, an `item.completed` or `request.opened` for the active run, or
  * `input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer
  * deliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.
  */
-activeRunReachedEngine: boolean, 
+activeRunReachedEngine: boolean,
 /**
  * Inputs accepted but not yet delivered, in order, with `input.changed` edits applied, so a
  * client gets the whole queue from a checkpoint.
  */
-queuedInputs: Array<QueuedInput>, 
+queuedInputs: Array<QueuedInput>,
 /**
  * Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
  */
-heldInputs: Array<HeldInputs>, 
+heldInputs: Array<HeldInputs>,
 /**
  * Steers the engine accepted that are not settled yet (see the steer rules above). Omitted
  * when empty; checkpoints written before this field read as empty.
  */
-steeredInputs?: Array<QueuedInput>, 
+steeredInputs?: Array<QueuedInput>,
 /**
  * Requests still open (including `resend`), so the inbox renders without earlier lines.
  */
-openRequests: Array<RequestOpened>, 
+openRequests: Array<RequestOpened>,
 /**
  * Children started and not yet reported; `card.children.running` is its length.
  */
-runningChildIds: Array<ThreadId>, 
+runningChildIds: Array<ThreadId>,
 /**
  * Outcome of the last finished run, for the `failed` status after later events.
  */

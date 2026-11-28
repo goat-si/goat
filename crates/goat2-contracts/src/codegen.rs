@@ -147,7 +147,7 @@ pub fn render_typescript() -> Result<Files, String> {
 
     let mut files = Files::new();
     for (rel, text) in types {
-        files.insert(format!("{TS_DIR}/{rel}"), text);
+        files.insert(format!("{TS_DIR}/{rel}"), trim_line_ends(&text));
     }
     files.insert(format!("{TS_DIR}/index.ts"), index);
     files.insert(format!("{TS_DIR}/limits.ts"), render_limits());
@@ -425,6 +425,20 @@ pub fn render_fixture_module(fixtures: &[Fixture]) -> String {
             serde_json::to_string_pretty(&fixture.value).expect("fixture JSON"),
             fixture_type(&fixture.root)
         ));
+    }
+    out
+}
+
+/// ts-rs leaves a space before line breaks it inserts for doc comments; generated files carry no
+/// trailing whitespace (`git diff --check` stays clean).
+fn trim_line_ends(text: &str) -> String {
+    let mut out: String = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
     }
     out
 }

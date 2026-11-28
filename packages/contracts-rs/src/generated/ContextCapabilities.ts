@@ -3,7 +3,7 @@
 /**
  * v1 `OrchestrationV2ContextCapabilities`.
  */
-export type ContextCapabilities = { acceptsSystemContext: boolean, acceptsDeveloperContext: boolean, acceptsSyntheticUserContext: boolean, canGenerateSummaries: boolean, canConsumeHandoffSummaries: boolean, supportsDeltaHandoff: boolean, supportsFullThreadHandoff: boolean, 
+export type ContextCapabilities = { acceptsSystemContext: boolean, acceptsDeveloperContext: boolean, acceptsSyntheticUserContext: boolean, canGenerateSummaries: boolean, canConsumeHandoffSummaries: boolean, supportsDeltaHandoff: boolean, supportsFullThreadHandoff: boolean,
 /**
  * v1 `NullOr(PositiveInt)`: zero is rejected.
  */
