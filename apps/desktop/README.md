@@ -9,14 +9,18 @@ it with its whole process group on quit: quitting the app ends the work.
 |---|---|
 | Start | `goat2-host` with env `GOAT2_DATA_DIR`, `GOAT2_HOST_PORT`, `GOAT2_HOST_TOKEN` (random per app launch). No flags. Own process group. |
 | Start line | first JSON line on stdout: `{wsUrl, mcpUrl, port, generation}` |
-| Ready | `GET http://127.0.0.1:<port>/health` returns 200 |
+| Health | `GET http://127.0.0.1:<port>/health` |
 | Quit | SIGTERM to the group, SIGKILL after 5 s |
 | Shell gone | host exits when its stdin closes (host side) |
 | Crash | shell kills the dead host's leftover group, restarts with GOAT v1's backoff (1 s .. 30 s jittered, 5 restarts per 10 min, then paused; menu **Start Host** retries) |
 | Clean exit before ready | exit code 0 before the start line or /health: the host chose to exit (the empty stub does this), so it is not restarted; title says "host not running"; **Start Host** retries |
 | Leftovers from an earlier run | host kills the group recorded in `host.json` on start (host side) |
 | Thread groups after a crash | each codex app-server has its own group; the restarted host kills the groups it recorded (host side, structure/10_processes.md). The shell only knows the host's own group |
-| Renderer | preload gives `window.goat2Host = {wsUrl, token}`; the UI talks to the host directly |
+| Renderer | preload gives `window.goat2Host = {wsUrl, token, build}`; the UI talks to the host directly |
+| Ready | start line **and** `/health` = 200 from the same host process; either alone stays "starting" |
+
+`build = {commit, branch, builtAt, dirty}` (owner 2026-11-28): the Dev UI shows it in the top bar so the
+running version is unmistakable. `builtAt` is null when running unpackaged.
 
 ## Dev build identity
 

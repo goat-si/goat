@@ -179,9 +179,14 @@ export class HostSupervisor {
 
   #recovering: Promise<void> = Promise.resolve();
   #recoveryActive = false;
+  /** Per host process: /health answered 200, and whether "ready" (start line + 200) was reached. */
+  #healthy = false;
+  #reachedReady = false;
 
   #spawn(): void {
     const generation = ++this.#generation;
+    this.#healthy = false;
+    this.#reachedReady = false;
     this.#set({ phase: "starting", pid: null, announce: null });
     let child: ChildProcess;
     try {
@@ -216,6 +221,7 @@ export class HostSupervisor {
           pending = "";
           this.#log(`host announced ${announce.wsUrl}`);
           this.#set({ announce });
+          this.#maybeReady(generation);
           return;
         }
         newline = pending.indexOf("\n");
@@ -243,15 +249,16 @@ export class HostSupervisor {
     }
   }
 
+  /** Polls /health until it answers exactly 200 for this host process. */
   async #waitReady(generation: number): Promise<void> {
     const step = this.#opts.healthIntervalMs ?? 200;
     while (generation === this.#generation && this.#child !== null && this.#state.phase === "starting") {
       try {
         const response = await fetch(this.#opts.healthUrl, { signal: AbortSignal.timeout(2_000) });
         await response.body?.cancel();
-        if (response.ok && generation === this.#generation && this.#state.phase === "starting") {
-          this.#log("host ready");
-          this.#set({ phase: "ready" });
+        if (response.status === 200 && generation === this.#generation) {
+          this.#healthy = true;
+          this.#maybeReady(generation);
           return;
         }
       } catch {
@@ -261,9 +268,18 @@ export class HostSupervisor {
     }
   }
 
+  /** Ready = the start line and /health 200, both from the current host process (owner contract). */
+  #maybeReady(generation: number): void {
+    if (generation !== this.#generation || this.#state.phase !== "starting") return;
+    if (!this.#healthy || this.#state.announce === null) return;
+    this.#reachedReady = true;
+    this.#log("host ready");
+    this.#set({ phase: "ready" });
+  }
+
   #onExit(generation: number, reason: string, pid: number | null): void {
     if (generation !== this.#generation) return;
-    const wasUp = this.#state.phase === "ready" || this.#state.announce !== null;
+    const wasUp = this.#reachedReady;
     this.#child = null;
     this.#log(`host exited ${reason}`);
     if (this.#stopping) {

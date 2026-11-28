@@ -226,10 +226,15 @@ ipcMain.on("goat2:host-info", (event) => {
   const frame = event.senderFrame;
   if (frame === null || frame.parent !== null || !isTrusted(frame.url)) {
     log(`refused host info to ${frame?.url ?? "unknown frame"}`);
-    event.returnValue = { wsUrl: null, token: null };
+    event.returnValue = { wsUrl: null, token: null, build: null };
     return;
   }
-  event.returnValue = { wsUrl: supervisor.state.announce?.wsUrl ?? null, token: HOST_TOKEN };
+  // build: the Dev UI shows it in the top bar so the running version is unmistakable (owner 2026-11-28).
+  event.returnValue = {
+    wsUrl: supervisor.state.announce?.wsUrl ?? null,
+    token: HOST_TOKEN,
+    build: { commit: build.commit, branch: build.branch, builtAt: build.builtAt, dirty: build.dirty },
+  };
 });
 
 if (!app.requestSingleInstanceLock()) {

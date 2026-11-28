@@ -4,6 +4,9 @@
 //   FAKE_HOST_MODE    comma list: crash-after-ready, exit-clean-after-ready, exit-now, exit-clean,
 //                     ignore-term, grandchild
 //   FAKE_HOST_ANNOUNCE_DELAY_MS  print the start line this late (slow host start)
+//   FAKE_HOST_HEALTH_STATUS      status /health answers with (default 200)
+//   FAKE_HOST_HEALTH_DELAY_MS    /health answers 503 until this long after start
+//   mode no-announce             never print the start line
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -22,13 +25,17 @@ if (modes.has("grandchild")) {
   const agent = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
   record("agent", agent.pid);
 }
+const startedAt = Date.now();
+const healthStatus = Number(process.env.FAKE_HOST_HEALTH_STATUS ?? 200);
+const healthDelay = Number(process.env.FAKE_HOST_HEALTH_DELAY_MS ?? 0);
 const server = createServer((req, res) => {
-  res.writeHead(req.url === "/health" ? 200 : 404).end();
+  if (req.url !== "/health") return void res.writeHead(404).end();
+  res.writeHead(Date.now() - startedAt < healthDelay ? 503 : healthStatus).end();
 });
 server.listen(port, "127.0.0.1", () => {
   console.log("booting");
   const announce = () => console.log(JSON.stringify({ wsUrl: `ws://127.0.0.1:${port}/ws`, mcpUrl: null, port, generation: 1 }));
-  setTimeout(announce, Number(process.env.FAKE_HOST_ANNOUNCE_DELAY_MS ?? 0));
+  if (!modes.has("no-announce")) setTimeout(announce, Number(process.env.FAKE_HOST_ANNOUNCE_DELAY_MS ?? 0));
   if (modes.has("crash-after-ready")) setTimeout(() => process.exit(1), 300);
   if (modes.has("exit-clean-after-ready")) setTimeout(() => process.exit(0), 300);
 });

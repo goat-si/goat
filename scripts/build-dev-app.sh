@@ -4,11 +4,11 @@
 #   -> Electron.app renamed to "GOAT 2 (Dev).app", bundle id si.goat.goat2.dev, ad-hoc signed.
 # Identity (structure/10_processes.md): data ~/.goat2-dev, host port 3873, nothing shared with GOAT v1.
 #
-# Usage: scripts/build-dev-app.sh [--no-install] [--no-open] [--any-branch]
+# Usage: scripts/build-dev-app.sh [--no-install] [--no-open]
 #   --no-install  build into build/goat2-dev/ only
 #   --no-open     do not relaunch the app after installing (it is relaunched only if it was running)
-#   --any-branch  allow installing from a branch other than goat2 (lane testing only)
-# Run it from ~/Developer/goat2 after each merge into goat2 (docs/lanes/PART1.md).
+# Installs only from goat2: run it in ~/Developer/goat2 after each merge (docs/lanes/PART1.md).
+# Lane branches can build with --no-install.
 set -euo pipefail
 
 APP_NAME="GOAT 2 (Dev)"
@@ -16,12 +16,10 @@ BUNDLE_ID="si.goat.goat2.dev"
 INSTALL_DIR="/Applications"
 INSTALL=1
 OPEN=1
-ANY_BRANCH=0
 for arg in "$@"; do
   case "$arg" in
     --no-install) INSTALL=0 ;;
     --no-open) OPEN=0 ;;
-    --any-branch) ANY_BRANCH=1 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -32,9 +30,9 @@ cd "$REPO"
 
 COMMIT="$(git rev-parse --short=11 HEAD)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$BRANCH" != "goat2" && $INSTALL == 1 && $ANY_BRANCH == 0 ]]; then
+if [[ "$BRANCH" != "goat2" && $INSTALL == 1 ]]; then
   echo "the installed Dev app is built from goat2 (this checkout is on $BRANCH)." >&2
-  echo "run it in ~/Developer/goat2, or pass --no-install / --any-branch" >&2
+  echo "run it in ~/Developer/goat2, or pass --no-install" >&2
   exit 1
 fi
 DIRTY=false

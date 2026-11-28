@@ -3,11 +3,16 @@ import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { HostSupervisor, groupAlive, parseAnnounce, restartDelayMs, type HostPhase, type HostState } from "./hostSupervisor.ts";
 
 const FAKE_HOST = fileURLToPath(new URL("./test-fixtures/fake-host.mjs", import.meta.url));
+
+// A failing assertion skips that test's stop(); stop every supervisor at the end so leaked fake
+// hosts never keep the test process alive.
+const supervisors: HostSupervisor[] = [];
+after(() => Promise.all(supervisors.map((supervisor) => supervisor.stop())).then(() => undefined));
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -37,7 +42,11 @@ async function until(check: () => boolean, timeoutMs = 10_000): Promise<void> {
   }
 }
 
-async function harness(mode: string, extra: Partial<ConstructorParameters<typeof HostSupervisor>[0]> = {}) {
+async function harness(
+  mode: string,
+  extra: Partial<ConstructorParameters<typeof HostSupervisor>[0]> = {},
+  fakeEnv: Record<string, string> = {},
+) {
   const port = await freePort();
   const dir = mkdtempSync(join(tmpdir(), "goat2-desktop-test-"));
   const pidsFile = join(dir, "pids");
@@ -45,7 +54,7 @@ async function harness(mode: string, extra: Partial<ConstructorParameters<typeof
   const supervisor = new HostSupervisor({
     command: process.execPath,
     args: [FAKE_HOST],
-    env: { ...process.env, GOAT2_HOST_PORT: String(port), FAKE_HOST_PIDS: pidsFile, FAKE_HOST_MODE: mode },
+    env: { ...process.env, ...fakeEnv, GOAT2_HOST_PORT: String(port), FAKE_HOST_PIDS: pidsFile, FAKE_HOST_MODE: mode },
     healthUrl: `http://127.0.0.1:${port}/health`,
     healthIntervalMs: 20,
     stopGraceMs: 300,
@@ -53,6 +62,7 @@ async function harness(mode: string, extra: Partial<ConstructorParameters<typeof
     onState: (state) => states.push(state),
     ...extra,
   });
+  supervisors.push(supervisor);
   const pids = (role: string) =>
     existsSync(pidsFile)
       ? readFileSync(pidsFile, "utf8").trim().split("\n").filter((line) => line.startsWith(role + " ")).map((line) => Number(line.split(" ")[1]))
@@ -188,5 +198,50 @@ test("a host that was ready and then exits 0 is still restarted", async () => {
   h.supervisor.start();
   await until(() => h.pids("host").length === 2);
   assert.equal(h.states.find((state) => state.lastExit === "code=0")?.phase, "restarting");
+  await h.supervisor.stop();
+});
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("ready needs both signals: /health 200 without a start line stays starting", async () => {
+  const h = await harness("no-announce");
+  h.supervisor.start();
+  await settle(600);
+  assert.equal(h.supervisor.state.phase, "starting");
+  await h.supervisor.stop();
+});
+
+test("ready needs both signals: a start line with /health 503 or 204 stays starting", async () => {
+  for (const status of ["503", "204"]) {
+    const h = await harness("", {}, { FAKE_HOST_HEALTH_STATUS: status });
+    h.supervisor.start();
+    await until(() => h.supervisor.state.announce !== null);
+    await settle(400);
+    assert.equal(h.supervisor.state.phase, "starting", `/health ${status} counted as ready`);
+    await h.supervisor.stop();
+  }
+});
+
+test("ready comes with whichever signal arrives last, in either order", async () => {
+  const healthFirst = await harness("", {}, { FAKE_HOST_ANNOUNCE_DELAY_MS: "400" });
+  healthFirst.supervisor.start();
+  await healthFirst.reached("ready");
+  assert.notEqual(healthFirst.states.find((state) => state.phase === "ready")?.announce ?? null, null);
+  await healthFirst.supervisor.stop();
+
+  const announceFirst = await harness("", {}, { FAKE_HOST_HEALTH_DELAY_MS: "400" });
+  announceFirst.supervisor.start();
+  await until(() => announceFirst.supervisor.state.announce !== null);
+  assert.equal(announceFirst.supervisor.state.phase, "starting");
+  await announceFirst.reached("ready");
+  await announceFirst.supervisor.stop();
+});
+
+test("a host that announced but never passed /health and exits 0 is not restarted", async () => {
+  const h = await harness("exit-clean-after-ready", {}, { FAKE_HOST_HEALTH_STATUS: "503" });
+  h.supervisor.start();
+  await h.reached("exited");
+  await settle(300);
+  assert.equal(h.pids("host").length, 1);
   await h.supervisor.stop();
 });
