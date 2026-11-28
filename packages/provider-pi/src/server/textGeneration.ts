@@ -155,6 +155,9 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
           }
         }
       });
+      if (turnError !== undefined) {
+        return yield* new TextGenerationError({ operation, detail: turnError });
+      }
       const data = yield* connection.request({ type: "get_last_assistant_text" });
       const text =
         typeof data === "object" &&
@@ -165,7 +168,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       if (!text) {
         return yield* new TextGenerationError({
           operation,
-          detail: turnError ?? `${profile.displayName} returned empty output.`,
+          detail: `${profile.displayName} returned empty output.`,
         });
       }
       return yield* TextGenerationOperations.decodeJsonReply(request, profile.displayName, text);

@@ -1,4 +1,8 @@
-import { npmProviderPackageNames, resolveNpmGlobalLatestVersion } from "./maintenanceNpm.ts";
+import {
+  npmProviderPackageNames,
+  resolveNpmGlobalLatestVersion,
+  runConfiguredNpmView,
+} from "./maintenanceNpm.ts";
 import { resolveMacPortsOwner } from "./maintenanceMacPorts.ts";
 import { runProbe } from "./maintenanceProbe.ts";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
@@ -710,6 +714,7 @@ const decodeNpmViewVersion = Schema.decodeUnknownOption(
 
 const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup")(function* (
   capabilities: ProviderMaintenanceCapabilities,
+  npmCacheDir: string | undefined,
 ) {
   const packageName = capabilities.packageName;
   if (!packageName || capabilities.latestVersion !== undefined) {
@@ -724,18 +729,7 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
     ? update.args.indexOf("--prefix")
     : -1;
   const prefix = prefixIndex >= 0 ? update?.args[prefixIndex + 1] : undefined;
-  const lookup = runProbe(
-    npmPath,
-    [
-      "view",
-      "--global",
-      ...(prefix ? ["--prefix", prefix] : []),
-      "--json",
-      `${packageName}@latest`,
-      "version",
-    ],
-    env,
-  ).pipe(
+  const lookup = runConfiguredNpmView({ npmPath, packageName, prefix, env, npmCacheDir }).pipe(
     Effect.map((stdout) => {
       const value = stdout ? Option.getOrNull(decodeNpmViewVersion(stdout.trim())) : null;
       return nonEmptyString(typeof value === "string" ? value : value?.[0]);
@@ -772,43 +766,51 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
 
 export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
   "resolveProviderMaintenanceCapabilitiesEffect",
-)(function* (
-  resolver: ProviderMaintenanceCapabilitiesResolver,
-  options?: {
-    readonly binaryPath?: string | null;
-    readonly env?: NodeJS.ProcessEnv;
-    readonly resolvedCommandPath?: string | null;
+)(
+  function* (
+    resolver: ProviderMaintenanceCapabilitiesResolver,
+    options?: {
+      readonly binaryPath?: string | null;
+      readonly env?: NodeJS.ProcessEnv;
+      readonly resolvedCommandPath?: string | null;
+      /** Where configured npm lookups keep their npm cache, apart from the user's. */
+      readonly npmCacheDir?: string;
+    },
+  ) {
+    const binaryPath = nonEmptyString(options?.binaryPath);
+    if (!binaryPath) {
+      return yield* resolver.resolve(null);
+    }
+
+    const env = options?.env ?? (yield* readCommandLookupEnv);
+    const resolvedCommandPath =
+      options?.resolvedCommandPath !== undefined
+        ? options.resolvedCommandPath
+        : yield* resolveCommandPath(binaryPath, { env });
+    if (!resolvedCommandPath) {
+      return yield* resolver.resolve(null);
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    const realCommandPath = yield* fileSystem
+      .realPath(resolvedCommandPath)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (!realCommandPath) {
+      return yield* resolver.resolve(null);
+    }
+    return yield* resolver.resolve({
+      binaryPath,
+      resolvedCommandPath,
+      realCommandPath,
+      env,
+      platform: yield* HostProcess.Platform,
+    });
   },
-) {
-  const binaryPath = nonEmptyString(options?.binaryPath);
-  if (!binaryPath) {
-    return yield* resolver.resolve(null);
-  }
-
-  const env = options?.env ?? (yield* readCommandLookupEnv);
-  const resolvedCommandPath =
-    options?.resolvedCommandPath !== undefined
-      ? options.resolvedCommandPath
-      : yield* resolveCommandPath(binaryPath, { env });
-  if (!resolvedCommandPath) {
-    return yield* resolver.resolve(null);
-  }
-
-  const fileSystem = yield* FileSystem.FileSystem;
-  const realCommandPath = yield* fileSystem
-    .realPath(resolvedCommandPath)
-    .pipe(Effect.orElseSucceed(() => null));
-  if (!realCommandPath) {
-    return yield* resolver.resolve(null);
-  }
-  return yield* resolver.resolve({
-    binaryPath,
-    resolvedCommandPath,
-    realCommandPath,
-    env,
-    platform: yield* HostProcess.Platform,
-  });
-}, Effect.flatMap(withConfiguredNpmVersionLookup));
+  (effect, _resolver, options) =>
+    Effect.flatMap(effect, (capabilities) =>
+      withConfiguredNpmVersionLookup(capabilities, options?.npmCacheDir),
+    ),
+);
 
 /**
  * An install GOAT cannot update gets no Update button or command, so its

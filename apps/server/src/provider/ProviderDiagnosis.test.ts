@@ -115,6 +115,8 @@ const diagnose = (input: ProviderDiagnoseInput, fixture: Fixture = {}) =>
     const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
       search: () => Effect.die("No registry search"),
       prepare: () => Effect.die("No install"),
+      refreshIndex: () => Effect.succeed(false),
+      invalidateIndex: () => Effect.void,
       uninstallManagedBinary: () => Effect.die("No uninstall"),
       prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
       inspect: (selected) =>

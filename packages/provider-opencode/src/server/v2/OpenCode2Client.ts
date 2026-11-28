@@ -103,7 +103,9 @@ export interface OpenCode2Api {
   readonly shellJobs?: (
     sessionID: string,
   ) => Effect.Effect<typeof ShellJobs.Type, HttpClientError.HttpClientError | Schema.SchemaError>;
-  readonly usageLimits: (directory: string) => Effect.Effect<ServerProviderUsageLimits | undefined>;
+  readonly usageLimits: (
+    directory: string | undefined,
+  ) => Effect.Effect<ServerProviderUsageLimits | undefined>;
   readonly imageJobs: (
     sessionID: string,
   ) => Effect.Effect<ReadonlyArray<typeof NativeImageJob.Type>, OpenCode2ImageError>;

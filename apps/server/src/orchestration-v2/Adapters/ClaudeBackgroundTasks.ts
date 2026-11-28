@@ -1,5 +1,6 @@
 import type { OrchestrationV2PendingBackgroundTask } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Ref from "effect/Ref";
 
 // background_tasks_changed can include subagents already counted by their lifecycle.
 const CLAUDE_OPAQUE_BACKGROUND_TASK_KINDS: ReadonlyMap<
@@ -136,3 +137,136 @@ export function makeClaudeTaskLaunches() {
     forget: (taskId: string) => launches.delete(taskId),
   };
 }
+
+const CLAUDE_SLEEP_DURATION = String.raw`(?:\d[\w.]*|\$\(\([\d\s+*/%-]+\)\)|\$\{\w+(?::?[-=]\d[\w.]*)?\}|\$\w+)`;
+const CLAUDE_SLEEP_TIMER_START = new RegExp(
+  String.raw`^[ \t\n]*sleep[ \t]+(?:${CLAUDE_SLEEP_DURATION}|"${CLAUDE_SLEEP_DURATION}"|'\d[\w.]*')[ \t]*(?:$|;|&&|\n)`,
+);
+// Bash separates words only with spaces and tabs, so `\s` would read `true\rnpm` as `true`.
+const CLAUDE_SLEEP_TIMER_REPORT = /^[ \t]*(?:$|(?:date|echo|printf|true|:)(?:[ \t]|$))/;
+
+// Splits at unquoted `;`, `&&` and newlines. Gives up on anything a report never needs that could
+// run or hide another command: pipes, `||`, a lone `&`, subshells, heredocs, substitutions, `${…}`,
+// `$'…'`, comments, and unbalanced quotes or escapes.
+function splitClaudeSleepTimerSteps(tail: string): string[] | undefined {
+  const steps: string[] = [];
+  let step = "";
+  let quote: string | undefined;
+  for (let index = 0; index < tail.length; index++) {
+    const char = tail[index] ?? "";
+    const next = tail[index + 1] ?? "";
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      step += char;
+      continue;
+    }
+    if (char === "\\") {
+      if (next === "") return undefined;
+      step += char + next;
+      index++;
+      continue;
+    }
+    if (char === "`" || (char === "$" && "({'\"".includes(next) && next !== "")) return undefined;
+    if (quote === '"') {
+      if (char === '"') quote = undefined;
+      step += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === ";" || char === "\n" || (char === "&" && next === "&")) {
+      steps.push(step);
+      step = "";
+      if (char === "&") index++;
+      continue;
+    } else if (char === "&" ? next !== ">" && tail[index - 1] !== ">" : "|()<#".includes(char)) {
+      return undefined;
+    }
+    step += char;
+  }
+  if (quote !== undefined) return undefined;
+  steps.push(step);
+  return steps;
+}
+
+// A background command that only sleeps for a finite time, then at most prints the time or a
+// note, is a timer the agent set to check back, which Claude wakes it for when it ends. Any other
+// step (`sleep 5 && npm run dev`) may never end, so that command is not a timer.
+function isClaudeSleepTimer(command: string | undefined): boolean {
+  const start = command === undefined ? null : CLAUDE_SLEEP_TIMER_START.exec(command);
+  if (command === undefined || start === null) return false;
+  const steps = splitClaudeSleepTimerSteps(command.slice(start[0].length));
+  return steps !== undefined && steps.every((step) => CLAUDE_SLEEP_TIMER_REPORT.test(step));
+}
+
+function startsAwaitedClaudeBackgroundTask(
+  task: OrchestrationV2PendingBackgroundTask,
+  previous: OrchestrationV2PendingBackgroundTask | undefined,
+): boolean {
+  return task.kind === "monitor"
+    ? previous?.kind !== "monitor"
+    : task.kind === "command" &&
+        previous?.command === undefined &&
+        isClaudeSleepTimer(task.command);
+}
+
+export function upsertClaudeRosterTask(
+  current: ReadonlyMap<string, Map<string, OrchestrationV2PendingBackgroundTask>>,
+  nativeThreadId: string,
+  task: OrchestrationV2PendingBackgroundTask,
+) {
+  const roster = new Map(current.get(nativeThreadId));
+  const startedWait = startsAwaitedClaudeBackgroundTask(task, roster.get(task.taskId));
+  roster.set(task.taskId, task);
+  return [startedWait, new Map(current).set(nativeThreadId, roster)] as const;
+}
+
+export const taskIdSetForNativeThread = (
+  all: ReadonlyMap<string, Set<string>>,
+  nativeThreadId: string,
+): Set<string> => all.get(nativeThreadId) ?? new Set<string>();
+
+export const addTaskIdsToNativeThreadSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+  taskIds: ReadonlyArray<string>,
+) =>
+  Ref.update(ref, (current) => {
+    if (taskIds.length === 0) return current;
+    const next = new Set(taskIdSetForNativeThread(current, nativeThreadId));
+    let changed = false;
+    for (const taskId of taskIds) {
+      if (!next.has(taskId)) {
+        next.add(taskId);
+        changed = true;
+      }
+    }
+    return changed ? new Map(current).set(nativeThreadId, next) : current;
+  });
+
+export const clearTaskIdFromNativeThreadSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+  taskId: string,
+) =>
+  Ref.update(ref, (current) => {
+    const existing = taskIdSetForNativeThread(current, nativeThreadId);
+    if (!existing.has(taskId)) return current;
+    const next = new Set(existing);
+    next.delete(taskId);
+    const updated = new Map(current);
+    if (next.size === 0) updated.delete(nativeThreadId);
+    else updated.set(nativeThreadId, next);
+    return updated;
+  });
+
+export const clearNativeThreadTaskIdSet = (
+  ref: Ref.Ref<Map<string, Set<string>>>,
+  nativeThreadId: string,
+) =>
+  Ref.update(ref, (current) => {
+    if (!current.has(nativeThreadId)) return current;
+    const updated = new Map(current);
+    updated.delete(nativeThreadId);
+    return updated;
+  });

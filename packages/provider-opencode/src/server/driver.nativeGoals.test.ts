@@ -69,7 +69,7 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
     const served = new Map<string, string>();
     const running = new Map<string, boolean>();
     const starts = new Map<string, number>();
-    const closers = new Map<string, () => void>();
+    const closers = new Map<string, Set<() => void>>();
     const reread = new Map<string, () => void>();
     const held = new Map<string, Promise<void>>();
     // A held version probe: `started` resolves once the probe for that PATH is waiting.
@@ -93,10 +93,26 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
       }
       if (url.pathname === "/api/event") {
         const signal = reread.get(path);
+        let closeStream: (() => void) | undefined;
         const body =
           signal === undefined
             ? new ReadableStream({
-                start: (controller) => void closers.set(path, () => controller.close()),
+                start: (controller) => {
+                  const set = closers.get(path) ?? new Set<() => void>();
+                  closers.set(path, set);
+                  closeStream = () => {
+                    set.delete(closeStream!);
+                    try {
+                      controller.close();
+                    } catch {
+                      // Already closed or cancelled.
+                    }
+                  };
+                  set.add(closeStream);
+                },
+                cancel: () => {
+                  if (closeStream) closers.get(path)?.delete(closeStream);
+                },
               })
             : new ReadableStream({ pull: () => signal() }, { highWaterMark: 0 });
         return Effect.succeed(
@@ -173,7 +189,9 @@ const goalHarness = (host: NodeJS.ProcessEnv, launches: Launches) =>
         () =>
           new Promise<void>((resolve) => {
             reread.set(path, resolve);
-            closers.get(path)?.();
+            const openStreams = Array.from(closers.get(path) ?? []);
+            closers.delete(path);
+            for (const close of openStreams) close();
           }),
       );
     const holdOpen = (path: string) =>

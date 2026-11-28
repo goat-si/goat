@@ -45,7 +45,7 @@ it.effect.skipIf(!symlinksSupported)(
       const workspace = path.join(scratch, "workspace");
       const home = path.join(scratch, "home");
       const loadServers = () =>
-        cursorWorkspaceMcpServers(cwd, { MCP_TYPE: "stdio" }).pipe(
+        cursorWorkspaceMcpServers(cwd, { MCP_TYPE: "stdio" }, { includeProject: true }).pipe(
           Effect.provideService(HostProcess.HomeDirectory, home),
           Effect.provideService(HostProcess.Environment, {}),
         );
@@ -169,13 +169,13 @@ it.effect.skipIf(!symlinksSupported)(
           Effect.provideService(HostProcess.Environment, {}),
         );
       const now = yield* DateTime.now;
-      const sendTurn = (ordinal: number) =>
+      const sendTurn = (ordinal: number, turnPolicy = runtimePolicy) =>
         runtime
           .startTurn({
             threadId,
             providerThread,
             modelSelection,
-            runtimePolicy,
+            runtimePolicy: turnPolicy,
             runId: RunId.make(`cursor-mcp-run-${ordinal}`),
             runOrdinal: ordinal,
             providerTurnOrdinal: ordinal,
@@ -250,6 +250,20 @@ it.effect.skipIf(!symlinksSupported)(
       );
       yield* sendTurn(3);
       assert.deepEqual(sentWith[2], goatServers);
+      // A restricted turn starts no command the checkout names; the user's own file still applies.
+      yield* fileSystem.writeFileString(
+        path.join(home, ".cursor", "projects", projectDirectory, "mcp-disabled.json"),
+        "[]",
+      );
+      for (const [index, runtimeMode] of (
+        ["approval-required", "auto-accept-edits", "auto"] as const
+      ).entries()) {
+        yield* sendTurn(4 + index, { ...runtimePolicy, runtimeMode });
+        assert.deepEqual(sentWith[3 + index], {
+          repro: { command: "node", args: [`${home}/shadowed.mjs`], cwd: projectRoot },
+          ...goatServers,
+        });
+      }
       yield* fileSystem.writeFileString(
         path.join(workspace, ".cursor", "mcp.json"),
         JSON.stringify({ mcpServers: { plain: { command: "node", args: ["server.mjs"] } } }),

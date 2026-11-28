@@ -334,6 +334,7 @@ export const CodexDriver: ProviderDriver<
         {
           binaryPath: effectiveConfig.binaryPath,
           env,
+          npmCacheDir: pathService.join(host.paths.providerStatusCacheDir, "npm"),
           ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         },
       ).pipe(

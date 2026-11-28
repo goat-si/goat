@@ -1,7 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import type * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { PiRpcError, piRecordField, piRecordString, type PiRpcRecord } from "./rpc.ts";
+
+const decodeSessionLine = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 export const readPiEntries = <E>(
   paged: boolean,
@@ -49,9 +54,10 @@ export const readPiEntries = <E>(
   });
 };
 
-interface PiSessionEntry {
+export interface PiSessionEntry {
   readonly parentId: string | null;
   readonly isUserMessage: boolean;
+  readonly isLabel: boolean;
   /** Pi's `timestamp` as epoch milliseconds; null when missing or unparsable. */
   readonly timestamp: number | null;
 }
@@ -60,6 +66,51 @@ export interface PiSessionListing {
   readonly entries: ReadonlyMap<string, PiSessionEntry>;
   readonly leafId: string | null;
 }
+
+function readPiSessionEntry(entry: unknown): [string, PiSessionEntry] | null {
+  const id = piRecordString(entry, "id");
+  const parentId = piRecordField(entry, "parentId");
+  if (id === undefined || (parentId !== null && typeof parentId !== "string")) return null;
+  const timestamp = piRecordString(entry, "timestamp");
+  return [
+    id,
+    {
+      parentId,
+      isUserMessage:
+        piRecordField(entry, "type") === "message" &&
+        piRecordString(piRecordField(entry, "message"), "role") === "user",
+      isLabel: piRecordField(entry, "type") === "label",
+      timestamp:
+        timestamp === undefined
+          ? null
+          : Option.getOrNull(Option.map(DateTime.make(timestamp), DateTime.toEpochMillis)),
+    },
+  ];
+}
+
+export const readPiSessionFile = Effect.fnUntraced(function* (
+  fileSystem: FileSystem.FileSystem,
+  file: string,
+): Effect.fn.Return<PiSessionListing | null> {
+  const entries = new Map<string, PiSessionEntry>();
+  let leafId: string | null = null;
+  const readable = yield* fileSystem.stream(file).pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.runForEach((line) =>
+      Effect.sync(() => {
+        const entry = readPiSessionEntry(Option.getOrUndefined(decodeSessionLine(line)));
+        if (entry === null) return;
+        const [id, value] = entry;
+        entries.set(id, value);
+        leafId = id;
+      }),
+    ),
+    Effect.as(true),
+    Effect.orElseSucceed(() => false),
+  );
+  return readable ? { entries, leafId } : null;
+});
 
 export function piSessionListing(data: unknown): PiSessionListing | null {
   const leafId = piRecordField(data, "leafId");
@@ -73,21 +124,9 @@ function piSessionEntries(entries: unknown): ReadonlyMap<string, PiSessionEntry>
   const byId = new Map<string, PiSessionEntry>();
   if (!Array.isArray(entries)) return null;
   for (const entry of entries) {
-    const id = piRecordString(entry, "id");
-    const parentId = piRecordField(entry, "parentId");
-    if (id === undefined || byId.has(id) || (parentId !== null && typeof parentId !== "string"))
-      return null;
-    const timestamp = piRecordString(entry, "timestamp");
-    byId.set(id, {
-      parentId,
-      isUserMessage:
-        piRecordField(entry, "type") === "message" &&
-        piRecordString(piRecordField(entry, "message"), "role") === "user",
-      timestamp:
-        timestamp === undefined
-          ? null
-          : Option.getOrNull(Option.map(DateTime.make(timestamp), DateTime.toEpochMillis)),
-    });
+    const parsed = readPiSessionEntry(entry);
+    if (parsed === null || byId.has(parsed[0])) return null;
+    byId.set(parsed[0], parsed[1]);
   }
   return byId;
 }
@@ -113,4 +152,76 @@ export function walkPiBranch(
     current = entry.parentId;
   }
   return { entryCount: visited.size, userEntryIds, reachedStop: current === stopAt };
+}
+
+export function piUserEntryInWindow(
+  entry: PiSessionEntry | undefined,
+  from: number,
+  to: number,
+): boolean {
+  return (
+    entry?.isUserMessage === true &&
+    entry.timestamp !== null &&
+    entry.timestamp >= from &&
+    entry.timestamp <= to
+  );
+}
+
+export interface PiRetainedCheckpoint {
+  readonly headId: string;
+  readonly forkEntryId?: string;
+}
+
+export interface PiHistoricalCheckpoint {
+  readonly file: string;
+  readonly listing: PiSessionListing;
+  readonly retained: PiRetainedCheckpoint;
+}
+
+export function piRetainedCheckpoint(
+  listing: PiSessionListing,
+  targetId: string,
+  completedAt: number | undefined,
+): PiRetainedCheckpoint | undefined {
+  const walk = walkPiBranch(listing.entries, listing.leafId, targetId);
+  if (listing.leafId === null || walk?.reachedStop !== true || !listing.entries.has(targetId))
+    return undefined;
+  // An extension can leave later prompts in the source. Keep steers within the retained turn.
+  for (const id of [...walk.userEntryIds].reverse()) {
+    const entry = listing.entries.get(id);
+    if (entry?.timestamp == null || completedAt === undefined) return undefined;
+    if (entry.timestamp >= completedAt)
+      return entry.parentId === null ? undefined : { headId: entry.parentId, forkEntryId: id };
+  }
+  return { headId: listing.leafId };
+}
+
+// Pi's fork drops label entries from the copied path and re-adds them with new ids at the leaf.
+export function piSameHistory(
+  a: PiSessionListing,
+  aHead: string | null,
+  b: PiSessionListing,
+  bHead: string | null,
+): boolean {
+  const aPath = piContentPath(a, aHead);
+  const bPath = piContentPath(b, bHead);
+  return (
+    aPath !== null &&
+    bPath !== null &&
+    aPath.length === bPath.length &&
+    aPath.every((id, index) => id === bPath[index])
+  );
+}
+
+function piContentPath(listing: PiSessionListing, headId: string | null): Array<string> | null {
+  const path: Array<string> = [];
+  const visited = new Set<string>();
+  for (let id = headId; id !== null;) {
+    const entry = listing.entries.get(id);
+    if (entry === undefined || visited.has(id)) return null;
+    visited.add(id);
+    if (!entry.isLabel) path.push(id);
+    id = entry.parentId;
+  }
+  return path;
 }

@@ -37,7 +37,8 @@ import { piExtensionDisplayName } from "./extensionDisplayName.ts";
 import { contentText } from "./piContentText.ts";
 import { piSubagentOutput } from "./subagentOutput.ts";
 import { awaitPromptAcknowledgment } from "./promptAcknowledgment.ts";
-import { piForkBoundary, piForkEntry, type PiForkBoundary } from "./forkBoundary.ts";
+import { piForkBoundary, type PiForkBoundary } from "./forkBoundary.ts";
+import { executePiRollback } from "./rollback.ts";
 import {
   piQuestion,
   piUiResponse,
@@ -261,6 +262,20 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         void,
         ProviderAdapter.ProviderAdapterProtocolError
       > | null = null;
+      const failBarriers = Effect.fnUntraced(function* (subject: string) {
+        if (pendingPromptResponsesDrained !== null)
+          yield* Deferred.fail(
+            pendingPromptResponsesDrained,
+            protocolError(`${subject} while awaiting prompt acknowledgment`),
+          );
+        if (extensionStatusReset !== null)
+          yield* Deferred.fail(
+            extensionStatusReset.ready,
+            protocolError(`${subject} during status reset`),
+          );
+        if (rollbackBarrier !== null)
+          yield* Deferred.fail(rollbackBarrier, protocolError(`${subject} during rollback`));
+      });
       let closed = false;
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
@@ -268,21 +283,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           customAnswers.clear();
           sessionEntity = { ...sessionEntity, extensionStatuses: [] };
           pendingWake = null;
-          if (pendingPromptResponsesDrained !== null)
-            yield* Deferred.fail(
-              pendingPromptResponsesDrained,
-              protocolError("Pi session closed while awaiting prompt acknowledgment"),
-            );
-          if (extensionStatusReset !== null)
-            yield* Deferred.fail(
-              extensionStatusReset.ready,
-              protocolError("Pi session closed during status reset"),
-            );
-          if (rollbackBarrier !== null)
-            yield* Deferred.fail(
-              rollbackBarrier,
-              protocolError("Pi session closed during rollback"),
-            );
+          yield* failBarriers("Pi session closed");
         }),
       );
       let appliedModel: string | null = null;
@@ -806,7 +807,10 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             Effect.andThen(
               Effect.suspend(() => {
                 item.flushScheduled = false;
-                return item.completed ? Effect.void : emitStreamItem(turn, item, true);
+                // Gemini sends an empty text part on tool-use steps; publishing it would leave an empty message.
+                return item.completed || item.text.length === 0
+                  ? Effect.void
+                  : emitStreamItem(turn, item, true);
               }),
             ),
             Effect.forkIn(scope),
@@ -1584,6 +1588,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             failureItemOrdinal: itemOrdinal(turn, failureItemId),
             status: "failed",
             failure,
+            ...(!closed && asyncSubagents.hasForTurn(turn) ? { childTurnsContinue: true } : {}),
             ...(turn.activeProviderRetry === null
               ? {}
               : {
@@ -2281,24 +2286,22 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           sessionEventPermit.withPermits(1)(
             Effect.gen(function* () {
               runtimeRetired = true;
-              yield* asyncSubagents.clear();
               const state = threadState;
+              // Pi ending while nothing is in flight is an idle exit, not a failure.
+              const idle =
+                state !== null &&
+                state.activeTurn === null &&
+                pendingWake === null &&
+                !asyncSubagents.hasAny() &&
+                pendingPrompts.size === 0 &&
+                !nativeCompacting &&
+                !registrationInProgress &&
+                rollbackBarrier === null &&
+                extensionStatusReset === null &&
+                pendingPromptResponsesDrained === null;
+              yield* asyncSubagents.clear();
               closed = true;
-              if (pendingPromptResponsesDrained !== null)
-                yield* Deferred.fail(
-                  pendingPromptResponsesDrained,
-                  protocolError("Pi transport closed while awaiting prompt acknowledgment"),
-                );
-              if (extensionStatusReset !== null)
-                yield* Deferred.fail(
-                  extensionStatusReset.ready,
-                  protocolError("Pi transport closed during status reset"),
-                );
-              if (rollbackBarrier !== null)
-                yield* Deferred.fail(
-                  rollbackBarrier,
-                  protocolError("Pi transport closed during rollback"),
-                );
+              yield* failBarriers("Pi transport closed");
               pendingWake = null;
               const interrupted = state?.activeTurn?.interrupted === true;
               if (state?.activeTurn != null) {
@@ -2316,7 +2319,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               if (unsolicitedActivityDetected) {
                 yield* updateProviderSession("error", PiConstants.PI_UNSOLICITED_ACTIVITY_ERROR);
                 yield* Queue.end(events);
-              } else if (stopRequested) {
+              } else if (stopRequested || idle) {
                 yield* updateProviderSession("stopped", null);
                 yield* Queue.end(events);
               } else {
@@ -2669,10 +2672,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         },
         events: Stream.fromQueue(events),
         backgroundTasksEndWithProcess: true,
-        hasPendingBackgroundWork: Effect.sync(() => pendingWake !== null),
-        hasPendingBackgroundWorkForThread: (providerThread) =>
+        hasPendingBackgroundWork: Effect.sync(
+          () => pendingWake !== null || asyncSubagents.hasAny(),
+        ),
+        hasPendingBackgroundWorkForThread: (providerThread, probe) =>
           Effect.sync(
-            () => pendingWake !== null && pendingWake.state.providerThread.id === providerThread.id,
+            () =>
+              (pendingWake !== null && pendingWake.state.providerThread.id === providerThread.id) ||
+              (probe?.includeSubagents === true && asyncSubagents.hasForThread(providerThread.id)),
           ),
         getModelContextWindow: (selection) => {
           if (selection.instanceId !== options.instanceId) return undefined;
@@ -3223,16 +3230,6 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (pendingWake !== null) {
               return yield* protocolError("Cannot roll back while native Pi work awaits a turn");
             }
-            const boundary = piForkBoundary(rollbackInput);
-            if (boundary.type === "nothing") {
-              return piThreadSnapshot(state.providerThread);
-            }
-            const forkEntryId = yield* piForkEntry(
-              driver,
-              boundary,
-              rollbackInput.providerThread.createdAt,
-              readPiEntries(profile.pagedEntries, request),
-            );
             return yield* Effect.acquireUseRelease(
               sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
@@ -3255,47 +3252,34 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   return barrier;
                 }),
               ),
-              (barrier) =>
-                Effect.gen(function* () {
-                  const forkData = yield* lifecycleRequest({ type: "fork", entryId: forkEntryId });
-                  if (recordField(forkData, "cancelled") === true)
-                    return yield* protocolError("A Pi extension cancelled the session fork");
-                  if (profile.driver === "omo") {
-                    // The fork already moved the native session; never keep the old binding on failure.
-                    yield* request(
-                      { type: "prompt", message: "/computer off" },
-                      PiConstants.PI_SESSION_TIMEOUT_MS,
-                    ).pipe(
-                      Effect.onError(() =>
-                        Effect.sync(() => {
-                          threadState = null;
-                        }),
-                      ),
-                    );
-                  }
-                  const forkState = yield* request({ type: "get_state" }).pipe(
-                    Effect.onError(() =>
-                      Effect.sync(() => {
-                        threadState = null;
-                      }),
-                    ),
-                  );
-                  const forkSessionFile = recordString(forkState, "sessionFile");
-                  if (forkSessionFile === undefined) {
-                    threadState = null;
+              (barrier) => {
+                let switchedSession = false;
+                return Effect.gen(function* () {
+                  const outcome = yield* executePiRollback({
+                    rollbackInput,
+                    currentFile: state.providerThread.nativeThreadRef?.nativeId,
+                    cwd,
+                    driver,
+                    profile,
+                    options,
+                    launchArgs: resolvedLaunchArgs.args,
+                    spawner,
+                    fileSystem,
+                    path,
+                    request,
+                    lifecycleRequest,
+                    protocolError,
+                    invalidateThreadState: () => {
+                      threadState = null;
+                    },
+                    onSessionSwitched: (switched) => {
+                      switchedSession = switched;
+                    },
+                  });
+                  if (!outcome.changed) return piThreadSnapshot(state.providerThread);
+                  const { forkSessionFile, entriesData, leafId } = outcome;
+                  if (forkSessionFile === undefined)
                     return yield* protocolError("Pi fork did not return a persisted session file");
-                  }
-                  const entriesRead = readPiEntries(profile.pagedEntries, request);
-                  const entriesData = yield* profile.pagedEntries
-                    ? entriesRead.pipe(
-                        Effect.tapError(() =>
-                          Effect.sync(() => {
-                            threadState = null;
-                          }),
-                        ),
-                      )
-                    : entriesRead.pipe(Effect.orElseSucceed(() => undefined));
-                  const leafId = recordString(entriesData, "leafId") ?? null;
                   // RPC responses bypass the pump; drain prior native events before replacing their binding.
                   const queued = yield* Queue.offer(connection.events, {
                     type: "t3.rollback_barrier",
@@ -3324,17 +3308,21 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                       appliedModel = null;
                       appliedThinking = null;
                       appliedSessionName = null;
-                      lastKnownLeaf = leafId;
+                      lastKnownLeaf = leafId ?? null;
                       leafCursorStale = entriesData === undefined;
                       yield* updateProviderThread(state, {
                         nativeThreadRef: providerRef(forkSessionFile),
-                        nativeConversationHeadRef: leafId === null ? null : providerRef(leafId),
+                        nativeConversationHeadRef: leafId == null ? null : providerRef(leafId),
                       });
                       rollbackBarrier = null;
                       return piThreadSnapshot(state.providerThread);
                     }),
                   );
-                }).pipe(Effect.onInterrupt(() => connection.terminate)),
+                }).pipe(
+                  Effect.onError(() => (switchedSession ? connection.terminate : Effect.void)),
+                  Effect.onInterrupt(() => connection.terminate),
+                );
+              },
               (barrier) =>
                 Effect.sync(() => {
                   if (rollbackBarrier === barrier) rollbackBarrier = null;

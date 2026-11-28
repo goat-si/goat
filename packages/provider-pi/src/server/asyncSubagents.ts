@@ -118,5 +118,10 @@ export function makeAsyncSubagents(callbacks: {
     for (const ended of turns) yield* callbacks.pending(ended, false);
     if (turn === undefined) latest = [];
   });
-  return { track, snapshot, clear };
+  // An async pi-subagents run dies with the Pi process, so the session stays loaded for it.
+  const hasAny = () => tracked.size > 0;
+  const hasForThread = (providerThreadId: string) =>
+    [...tracked.values()].some((run) => run.turn.turnInput.providerThread.id === providerThreadId);
+  const hasForTurn = (turn: ActivePiTurn) => [...tracked.values()].some((run) => run.turn === turn);
+  return { track, snapshot, clear, hasAny, hasForThread, hasForTurn };
 }

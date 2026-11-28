@@ -40,7 +40,6 @@ import {
   ProjectId,
   ProjectScript,
   ProjectSettingsOverrides,
-  ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceMutation,
   resolveProviderInstanceEnabled,
@@ -1008,18 +1007,8 @@ const decodeCommittedMemorySettingsJson = Schema.decodeUnknownExit(
 const decodeConversationMemoryPause = Schema.decodeUnknownExit(
   fromLenientJson(Schema.Struct({ conversationMemoryEnabled: Schema.Literal(false) })),
 );
-const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
-
-function selectionSupportsTextGeneration(
-  settings: ServerSettings,
-  selection: ModelSelection,
-): boolean {
-  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
-}
-
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection) &&
-    selectionSupportsTextGeneration(settings, settings.textGenerationModelSelection)
+  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection)
     ? settings
     : fallbackTextGenerationProvider(settings);
 }

@@ -58,6 +58,8 @@ const catalogFor = (
   AcpRegistrySupport.AcpRegistryCatalog.of({
     search: () => Effect.die("No registry search"),
     prepare: () => Effect.die("No install"),
+    refreshIndex: () => Effect.succeed(false),
+    invalidateIndex: () => Effect.void,
     uninstallManagedBinary: () => Effect.die("No uninstall"),
     prepareRuntimeSpawn: () => Effect.die("No runtime spawn"),
     inspect,

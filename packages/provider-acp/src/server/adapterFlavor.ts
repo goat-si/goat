@@ -10,6 +10,7 @@ import type {
   ProviderDriverKind,
   ProviderUserInputAnswers,
   ThreadId,
+  ThreadTokenUsageSnapshot,
 } from "@goat/contracts";
 import type { SelfInvocation } from "@goat/shared/nodeRuntime";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
@@ -18,7 +19,10 @@ import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
+import type { ElicitationQuestionForm } from "./elicitationForm.ts";
 import type { AcpSessionModeState, AcpToolCallState } from "./runtimeModel.ts";
+import type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
+export type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
 import type { AcpPermissionDisposition } from "./clientPolicy.ts";
 import type * as AcpSessionRuntime from "./AcpSessionRuntime.ts";
 import type { BackgroundWork } from "@goat/provider-core/server/notification";
@@ -51,6 +55,7 @@ export interface AcpAdapterV2RuntimeInput {
   readonly onOutgoingResponseFailure?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponseFailure"];
   readonly onOutgoingResponse?: AcpSessionRuntime.AcpSessionRuntimeOptions["onOutgoingResponse"];
   readonly onIncomingRequest?: AcpSessionRuntime.AcpSessionRuntimeOptions["onIncomingRequest"];
+  readonly onUndecodableNotification?: AcpSessionRuntime.AcpSessionRuntimeOptions["onUndecodableNotification"];
 }
 
 export type AcpAdapterV2NativeLogging = Pick<
@@ -145,7 +150,9 @@ export interface AcpAdapterV2Flavor {
     (
       result: EffectAcpSchema.PromptResponse,
       options?: { readonly retired?: boolean },
-    ) => Effect.Effect<OrchestrationV2ProviderFailure | AcpResumablePromptFailure | undefined>
+    ) => Effect.Effect<
+      OrchestrationV2ProviderFailure | AcpResumablePromptFailure | "completed" | undefined
+    >
   >;
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /** The flavor's runtime refuses a version the policy rates broken when it starts. */
@@ -169,6 +176,10 @@ export interface AcpAdapterV2Flavor {
     notification: EffectAcpSchema.SessionNotification,
     runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => EffectAcpSchema.SessionNotification;
+  /** Extract provider-specific context usage while preserving the original session update. */
+  readonly extractContextUsage?: (
+    notification: EffectAcpSchema.SessionNotification,
+  ) => ThreadTokenUsageSnapshot | undefined;
   readonly releaseRuntime?: (
     runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => Effect.Effect<void>;
@@ -179,20 +190,20 @@ export interface AcpAdapterV2Flavor {
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
     modeState: AcpSessionModeState | undefined,
     modelState: EffectAcpSchema.SessionModelState | null | undefined,
-  ) => Effect.Effect<void>;
+    options?: { readonly lastCatalogKey?: string | null },
+  ) => Effect.Effect<string | null | void>;
   readonly onUrlElicitation?: (input: {
     readonly elicitationId: string;
     readonly url: string;
     readonly message: string;
   }) => Effect.Effect<boolean>;
-  readonly extractElicitationForm?: (request: EffectAcpSchema.CreateElicitationRequest) =>
-    | {
-        readonly questions: ReadonlyArray<OrchestrationV2UserInputQuestion>;
-        readonly respond: (
-          answers: ProviderUserInputAnswers,
-        ) => EffectAcpSchema.CreateElicitationResponse;
-      }
-    | undefined;
+  /**
+   * The adapter applies the schema's `required` list to the returned form, so `respond` gets no
+   * entry for a single choice the user skipped and leaves that field out of its content.
+   */
+  readonly extractElicitationForm?: (
+    request: EffectAcpSchema.CreateElicitationRequest,
+  ) => ElicitationQuestionForm | undefined;
   readonly withRuntimeStartup?: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   /** Resolve with the first environment (relative PATH entries made absolute); launch with the second. */
   readonly resolveSessionLaunch?: (
@@ -265,10 +276,32 @@ export interface AcpAdapterV2Flavor {
     cwd: string,
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
+  /**
+   * Subagents the agent goes on running after its prompt, with no update when one ends. Asked
+   * when the prompt ends and whenever a reply ends, including mid-prompt and in a steered prompt
+   * that stays open; the native task ids it returns hold the turn open and the rest become idle.
+   */
   readonly subagentsOutlivingPrompt?: (input: {
     readonly sessionId: string;
     readonly nativeTaskIds: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<string>>;
+  /**
+   * Reads projected timeline entries for a subagent whose provider writes child work to a local
+   * transcript instead of streaming child ACP notifications. Called periodically while active and
+   * once more with `finalize: true` before transitioning the subagent to a terminal or idle state.
+   */
+  readonly readSubagentTranscript?: (input: {
+    readonly sessionId: string;
+    readonly nativeTaskId: string;
+    readonly childSessionId: string | null;
+    readonly launch: { readonly title: string | null; readonly prompt: string };
+    readonly siblings: ReadonlyArray<{
+      readonly nativeTaskId: string;
+      readonly title: string | null;
+      readonly prompt: string;
+    }>;
+    readonly finalize: boolean;
+  }) => Effect.Effect<ReadonlyArray<AcpSubagentTranscriptEntry>>;
   readonly supportsCompaction?: boolean;
   /** Sends `/compact` as a prompt, only to sessions whose advertised commands include `compact`. */
   readonly compactViaAdvertisedCommand?: boolean;
@@ -323,6 +356,8 @@ export interface AcpAdapterV2Flavor {
   readonly deferFinalizeForBackgroundWork?: AcpNegotiatedFlag;
   readonly replyEndsWithUsageUpdate?: boolean;
   readonly hasPendingReply?: (sessionId: string) => Effect.Effect<boolean>;
+  /** The model the agent ran the session's latest reply on, when ACP does not report it. */
+  readonly executedModel?: (sessionId: string) => Effect.Effect<string | undefined>;
   readonly wakeOnDetachedRequest?: boolean;
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */

@@ -23,6 +23,7 @@ export function buildCodexAssistantArtifacts(
     providerThread: OrchestrationV2ProviderThread;
     providerTurnId: ProviderTurnId;
     messagePhases: ReadonlyMap<string, AssistantMessagePhase>;
+    asyncMessageIds: ReadonlySet<string>;
   },
   item: { id: string; text: string },
   completed: boolean,
@@ -91,6 +92,7 @@ export function buildCodexAssistantArtifacts(
     updatedAt,
     type: "assistant_message",
     ...(context.messagePhases.has(item.id) ? { phase: context.messagePhases.get(item.id) } : {}),
+    ...(context.asyncMessageIds.has(item.id) ? { delivery: "async" as const } : {}),
     messageId,
     text: item.text,
     streaming: !completed,

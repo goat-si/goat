@@ -135,6 +135,7 @@ it.live("new launches read host changes made after adapter creation", () =>
                   ...(input.sessionEnvironment ?? { INSTANCE_VALUE: "instance" }),
                   GOAT_ACP_SESSION_LIFECYCLE: "1",
                 },
+                ...(input.sessionEnvironment === undefined ? { extendEnv: true } : {}),
                 shell: false,
               },
               onStderr: (text) => Deferred.succeed(received, text).pipe(Effect.asVoid),

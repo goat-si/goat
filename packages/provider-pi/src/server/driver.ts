@@ -143,6 +143,7 @@ const makePiFamilyDriver = (
         resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
           binaryPath,
           env,
+          npmCacheDir: pathService.join(host.paths.providerStatusCacheDir, "npm"),
           ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

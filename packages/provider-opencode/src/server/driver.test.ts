@@ -57,7 +57,7 @@ const layer = Layer.mergeAll(
   Layer.succeed(HostProcess.Environment, {
     HOME: "/fixture/opencode-test",
     XDG_DATA_HOME: "/fixture/opencode-test",
-    PATH: [NodePath.dirname(process.execPath), "/usr/bin", "/bin"].join(NodePath.delimiter),
+    PATH: "/fixture/bin",
   }),
   Layer.succeed(
     ProviderEventLoggers.ProviderEventLoggers,
@@ -184,12 +184,11 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       };
       const instance = yield* create({}, noHttp).pipe(
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
-        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
       );
       yield* Effect.flip(instance.snapshotForCwd!(process.cwd()));
       assert.isAtLeast(environments.length, 1);
       assert.isTrue(environments.every((env) => env.MISE_OFFLINE === "1"));
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(TestProviderHost.layer({ runBackgroundWork: false }))),
   );
   it.effect("does not scan with a lazy shim after an offline probe fails", () =>
     Effect.gen(function* () {
@@ -207,7 +206,6 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       serverStarts.length = 0;
       const instance = yield* create({}, noHttp).pipe(
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, lazyMiseShim),
-        Effect.provide(TestProviderHost.layer({ runBackgroundWork: false })),
       );
       yield* instance.orchestrationAdapter
         .openSession({
@@ -218,7 +216,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         })
         .pipe(Effect.scoped, Effect.flip);
       assert.deepStrictEqual(serverStarts, ["start"]);
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(TestProviderHost.layer({ runBackgroundWork: false }))),
   );
   it.effect("never starts a 1.x server for an OpenCode 2 instance", () =>
     Effect.gen(function* () {
@@ -638,7 +636,6 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         enabled: true,
         config: OpenCodeDriver.defaultConfig(),
       }).pipe(
-        Effect.provide(TestProviderHost.layer()),
         Effect.provideService(HttpClient.HttpClient, server),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
       );
@@ -657,7 +654,10 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         ["session", "weekly", "monthly"],
       );
       assert.strictEqual(goUsageReads, 1);
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(TestProviderHost.layer(), TestClock.layer())),
+    ),
   );
 
   it.effect.each([
@@ -703,12 +703,35 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
     "reads external workspace usage without local credentials, HTTP $status, $reason",
     (scenario) =>
       Effect.gen(function* () {
-        const requested: string[] = [];
-        const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret", requested);
+        const replay = replayOpenCodeServer(OPENCODE_2_RESPONSES, "secret");
         const server = HttpClient.make((request) => {
           assert.notInclude(request.url, "opencode.ai/zen");
-          if (request.url.endsWith("/api/experimental/usage/limits")) {
+          const path = new URL(request.url).pathname;
+          if (path === "/api/experimental/usage/limits" || path === "/api/provider") {
             assert.strictEqual(request.headers.authorization, "Basic b3BlbmNvZGU6c2VjcmV0");
+            if (Array.from(request.urlParams).length > 0) {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({ message: "Location not found" }, { status: 404 }),
+                ),
+              );
+            }
+            if (path === "/api/provider") {
+              return Effect.succeed(
+                HttpClientResponse.fromWeb(
+                  request,
+                  Response.json({
+                    location: { directory: "/work" },
+                    data: [
+                      { id: "opencode", integrationID: "opencode" },
+                      { id: "opencode-go", integrationID: "opencode" },
+                      { id: "github-copilot", integrationID: "github-copilot" },
+                    ],
+                  }),
+                ),
+              );
+            }
             return Effect.succeed(
               HttpClientResponse.fromWeb(
                 request,
@@ -778,8 +801,8 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
           usageReads += 1;
           assert.strictEqual(request.headers.authorization, "Bearer test-go-key");
           if (scenario.unsupported)
-            return Effect.succeed(
-              HttpClientResponse.fromWeb(request, new Response(null, { status: 403 })),
+            return Deferred.succeed(usageStarted, undefined).pipe(
+              Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 403 }))),
             );
           if (usageReads === 1)
             return Deferred.succeed(usageStarted, undefined).pipe(Effect.andThen(Effect.never));
@@ -855,21 +878,6 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
         enabled: scenario.enabled,
         config: OpenCodeDriver.defaultConfig(),
       }).pipe(
-        Effect.provide(
-          TestProviderHost.layer({
-            runBackgroundWork: scenario.demand,
-            settings: scenario.intervalOff
-              ? {
-                  ...DEFAULT_SERVER_SETTINGS,
-                  backgroundActivity: {
-                    ...DEFAULT_SERVER_SETTINGS.backgroundActivity,
-                    profile: "custom",
-                    overrides: { providerHealthRefreshInterval: Duration.zero },
-                  },
-                }
-              : DEFAULT_SERVER_SETTINGS,
-          }),
-        ),
         Effect.provideService(HttpClient.HttpClient, server),
         Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, runtime),
       );
@@ -881,7 +889,7 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
             Effect.forkChild,
           )
         : undefined;
-      if (scenario.enabled && !scenario.unsupported) yield* Deferred.await(usageStarted);
+      if (scenario.enabled) yield* Deferred.await(usageStarted);
       yield* TestClock.adjust("5 seconds");
       const failed = initial
         ? Array.from(yield* Fiber.join(initial))[0]
@@ -893,6 +901,8 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       const initialReason =
         scenario.enabled && !scenario.unsupported ? "probeFailed" : "unsupported";
       assert.strictEqual(failed?.usageLimits?.unavailable?.reason, initialReason);
+      // Let the startup catalog watch debounce settle before snapshotting read counts.
+      yield* TestClock.adjust("1 second");
       const catalogReads = modelReads;
       const starts = serverStarts;
 
@@ -926,7 +936,27 @@ it.layer(layer)("OpenCodeDriver runtime selection", (it) => {
       assert.strictEqual(usageReads, expectedReads);
       assert.strictEqual(modelReads, catalogReads);
       assert.strictEqual(serverStarts, starts);
-    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.merge(
+          TestProviderHost.layer({
+            runBackgroundWork: scenario.demand,
+            settings: scenario.intervalOff
+              ? {
+                  ...DEFAULT_SERVER_SETTINGS,
+                  backgroundActivity: {
+                    ...DEFAULT_SERVER_SETTINGS.backgroundActivity,
+                    profile: "custom",
+                    overrides: { providerHealthRefreshInterval: Duration.zero },
+                  },
+                }
+              : DEFAULT_SERVER_SETTINGS,
+          }),
+          TestClock.layer(),
+        ),
+      ),
+    ),
   );
 });
 

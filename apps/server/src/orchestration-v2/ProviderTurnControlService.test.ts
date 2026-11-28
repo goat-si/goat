@@ -462,7 +462,13 @@ it.effect(
               set: () => Effect.void,
               forThread: () =>
                 Effect.succeed([
-                  { itemId: "item-1", server: "srv", tool: "tool", text: "app note" },
+                  {
+                    itemId: "item-1",
+                    server: "srv",
+                    tool: "tool",
+                    text: "app note",
+                    updatedAt: "2026-11-23T14:02:17.000Z",
+                  },
                 ]),
             }),
           ),
@@ -524,7 +530,9 @@ it.effect(
       assert.isTrue(steered.every((text) => text.endsWith(message.text)));
       assert.deepEqual(
         contexts,
-        Array.from({ length: 3 }, () => [{ key: "mcp_app_item-1", text: "app note" }]),
+        Array.from({ length: 3 }, () => [
+          { key: "mcp_app_item-1", text: "app note", updatedAt: "2026-11-23T14:02:17.000Z" },
+        ]),
       );
     }),
 );

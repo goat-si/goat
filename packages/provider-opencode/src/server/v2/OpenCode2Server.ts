@@ -9,7 +9,9 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as P from "effect/Predicate";
+import * as PubSub from "effect/PubSub";
 import * as Redacted from "effect/Redacted";
+import * as Stream from "effect/Stream";
 import * as HttpClientError from "effect/http/HttpClientError";
 
 import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
@@ -53,6 +55,8 @@ export class OpenCode2Server extends Context.Service<
     ) => Effect.Effect<A, E | OpenCodeRuntime.OpenCodeRuntimeError, R>;
     /** Drops a configured server's verified connection, so the next use reads its version again. */
     readonly forget: Effect.Effect<void>;
+    /** Each newly verified connection; borrowing a running server publishes nothing. */
+    readonly connections: Stream.Stream<OpenCode2Connection>;
   }
 >()("@goat/provider-opencode/server/v2/OpenCode2Server") {}
 
@@ -163,12 +167,17 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
   const home = yield* HostProcess.HomeDirectory;
   let latest: OpenCode2Connection | undefined;
   const connections = new Map<string, OpenCode2Connection>();
+  const verified = yield* Effect.acquireRelease(
+    PubSub.unbounded<OpenCode2Connection>(),
+    PubSub.shutdown,
+  );
+  const connectionStream = Stream.fromPubSub(verified);
   const remember = (connection: OpenCode2Connection) =>
-    Effect.sync(() => {
+    Effect.suspend(() => {
       latest = connection;
       connections.set(connection.url, connection);
-      return connection.version;
-    });
+      return PubSub.publish(verified, connection);
+    }).pipe(Effect.as(connection.version));
 
   const currentEnvironment = input.currentEnvironment ?? Effect.succeed(input.environment);
   const serverUrl = input.serverUrl.trim();
@@ -192,6 +201,7 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
       forget: Effect.sync(() => {
         latest = undefined;
       }),
+      connections: connectionStream,
     });
   }
 
@@ -264,5 +274,6 @@ export const make = Effect.fn("OpenCode2Server.make")(function* (input: {
       }, launch);
     }),
     forget: Effect.void,
+    connections: connectionStream,
   });
 });

@@ -5,7 +5,7 @@ import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRun
 
 const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../../scripts/acp-mock-agent.ts");
-export const mockAgentCommand = "node";
+export const mockAgentCommand = process.execPath;
 export const mockAgentArgs = [mockAgentPath];
 export const mockRuntimeOptions = {
   spawn: { command: mockAgentCommand, args: mockAgentArgs },

@@ -1,4 +1,4 @@
-import { ProviderDriverKind } from "@goat/contracts";
+import { ProviderDriverKind, ProviderThreadId, RunId, ThreadId } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
 import {
@@ -42,6 +42,17 @@ export const refusalCases = [
     new ProviderAdapter.ProviderAdapterProtocolError({
       driver: ProviderDriverKind.make("claudeAgent"),
       detail: "Claude provider query ended before the turn could start.",
+    }),
+  ],
+  // ACP rejects a model it cannot select before sending the prompt.
+  [
+    "an ACP start that rejected the model",
+    new ProviderAdapter.ProviderAdapterTurnStartError({
+      driver: ProviderDriverKind.make("grok"),
+      threadId: ThreadId.make("thread:acp-refused-start"),
+      providerThreadId: ProviderThreadId.make("provider-thread:acp-refused-start"),
+      runId: RunId.make("run:acp-refused-start"),
+      refusedBeforePrompt: true,
     }),
   ],
 ] as const;

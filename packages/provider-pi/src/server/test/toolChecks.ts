@@ -14,11 +14,11 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
+import { registerPiAsyncSubagentChecks } from "./asyncSubagentChecks.ts";
 
 const decodeUserInputQuestions = Schema.decodeUnknownSync(
   Schema.Array(OrchestrationV2UserInputQuestion),
 );
-
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 export function registerPiToolChecks({
@@ -317,7 +317,7 @@ export function registerPiToolChecks({
       });
       // The extension reads a bare number sent as the select's value as that option.
       yield* answerWithCustomText("ui-ask", "2");
-      yield* answerWithCustomText("ui-ask-parallel", "5");
+      yield* answerWithCustomText("ui-ask-parallel", "3. Type something.");
       // Parallel dialogs can arrive before the follow-up input, including a multi-select of the
       // same question, which the extension asks as an input with a non-empty placeholder.
       const multiSelectTitle = `How many replicas?\n\n${lines.join("\n")}\n\nEnter the numbers of all that apply.`;
@@ -348,7 +348,7 @@ export function registerPiToolChecks({
       assert.equal((yield* takeWaitingRequest()).title, "Anything else?");
       for (const [id, value] of [
         ["ui-custom", "2"],
-        ["ui-custom-parallel", "5"],
+        ["ui-custom-parallel", "3. Type something."],
       ]) {
         yield* fake.emit({
           type: "extension_ui_request",
@@ -357,6 +357,14 @@ export function registerPiToolChecks({
           title: followUpTitle,
           placeholder: "",
         });
+        const nextTitle = `Next question after ${id}?`;
+        yield* fake.emit({
+          type: "extension_ui_request",
+          id: `next-${id}`,
+          method: "input",
+          title: nextTitle,
+        });
+        assert.equal((yield* takeWaitingRequest()).questions[0]?.id, `next-${id}`);
         const inputResponse = yield* fake.takeRequest("extension_ui_response");
         assert.deepEqual({ id: inputResponse["id"], value: inputResponse["value"] }, { id, value });
       }
@@ -561,117 +569,15 @@ export function registerPiToolChecks({
       assert.equal(resumed.nativeThreadRef?.nativeId, forkFile);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
-  it.effect("shows the members of an async pi-subagents workflow as running subagents", () =>
-    Effect.gen(function* () {
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      yield* fake.emit({ type: "agent_start" });
-      // Frames as pi-subagents 0.88.1 sends them for an async `runs.all([alpha, beta])` workflow.
-      const step = (key: string, state: string) => ({
-        id: key,
-        kind: "step",
-        label: key,
-        state,
-        startedAt: 1_000,
-        updatedAt: 2_000,
-        activity: { currentTool: "bash", turnCount: 1, toolCount: 1 },
-        agent: "scout",
-        model: "anthropic/claude-haiku-5-5",
-      });
-      const emitSnapshot = (state: string, alpha: string, beta: string) =>
-        fake.emit({
-          type: "extension_ui_request",
-          id: `widget-${state}`,
-          method: "setWidget",
-          widgetKey: "subagent-async",
-          widgetLines: [
-            `PI_SUBAGENT_ASYNC_JSON:${encodeJson({
-              kind: "pi-subagents.async-status-snapshot",
-              version: 1,
-              generatedAt: 2_000,
-              runs: [
-                {
-                  id: "wf-1",
-                  kind: "workflow",
-                  label: "scout, scout",
-                  state,
-                  startedAt: 1_000,
-                  updatedAt: 2_000,
-                  children: [step("alpha", alpha), step("beta", beta)],
-                },
-              ],
-            })}`,
-          ],
-        });
-      const collect = Effect.fnUntraced(function* (marker: string) {
-        yield* fake.emit({
-          type: "tool_execution_end",
-          toolCallId: marker,
-          toolName: marker,
-          result: { content: [{ type: "text", text: "after" }] },
-        });
-        const statuses = new Map<string, string>();
-        const pending: Array<boolean> = [];
-        while (true) {
-          const event = yield* takeEvent(
-            (event) =>
-              event.type === "subagent.updated" ||
-              event.type === "background_work.updated" ||
-              (event.type === "turn_item.updated" &&
-                event.turnItem.type === "dynamic_tool" &&
-                event.turnItem.toolName === marker),
-          );
-          if (event.type === "background_work.updated") pending.push(event.pending);
-          else if (event.type === "subagent.updated")
-            statuses.set(event.subagent.id, event.subagent.status);
-          else break;
-        }
-        return { statuses: [...statuses.values()].toSorted(), pending };
-      });
-      // The launch snapshot precedes the tool result that names the run.
-      yield* emitSnapshot("running", "running", "running");
-      yield* fake.emit({
-        type: "tool_execution_end",
-        toolCallId: "call_wf",
-        toolName: "subagent",
-        isError: false,
-        result: {
-          content: [{ type: "text", text: "Async workflow started: wf-1" }],
-          details: {
-            mode: "workflow",
-            runId: "wf-1",
-            asyncId: "wf-1",
-            results: [],
-            workflowChildren: {
-              version: 1,
-              parentToolCallId: "call_wf",
-              workflowRunId: "wf-1",
-              inventoryComplete: false,
-              workflowState: "running",
-              children: [],
-            },
-          },
-        },
-      });
-      assert.deepEqual(yield* collect("marker-1"), {
-        statuses: ["running", "running"],
-        pending: [true],
-      });
-      yield* emitSnapshot("failed", "running", "failed");
-      yield* emitSnapshot("failed", "complete", "failed");
-      assert.deepEqual(yield* collect("marker-2"), {
-        statuses: ["completed", "failed"],
-        pending: [false],
-      });
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
-  );
+  registerPiAsyncSubagentChecks({
+    makeFakePi,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
   it.effect("attaches an initial session at startup without a redundant extension reload", () =>
     Effect.gen(function* () {
       const source = yield* makeFakePi;
@@ -887,7 +793,7 @@ export function registerPiToolChecks({
         type: "tool_execution_end",
         toolCallId: "read-image",
         toolName: "read",
-        args: { path: "/workspace/shot.png" },
+        args: { path: "@/workspace/shot.png" },
         result: { content: [{ type: "text", text: "image" }] },
       });
       const event = yield* takeEvent(

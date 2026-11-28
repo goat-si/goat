@@ -156,6 +156,7 @@ export const makeRetryStallWatch = (input: {
         providerTurnId: event.providerTurnId,
         runOrdinal: event.runOrdinal,
         failureItemOrdinal: stalled.ordinal,
+        failureItemId: stalled.id,
         status: "failed",
         failure: { ...stalled.failure, retryable: false },
         retry: stalled.retry,

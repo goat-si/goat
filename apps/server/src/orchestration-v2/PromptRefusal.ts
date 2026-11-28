@@ -11,6 +11,7 @@ import * as Predicate from "effect/Predicate";
 export const CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL =
   "Claude provider query ended before the turn could start.";
 const isProtocolError = Schema.is(ProviderAdapter.ProviderAdapterProtocolError);
+const isTurnStartError = Schema.is(ProviderAdapter.ProviderAdapterTurnStartError);
 
 const PROMPT_REFUSAL_TAGS = [
   "ClaudeBackgroundWorkBlocksQueryReplacementError",
@@ -22,6 +23,7 @@ const PROMPT_REFUSAL_TAGS = [
 
 export const refusedBeforePrompt = (error: unknown): boolean =>
   PROMPT_REFUSAL_TAGS.some((tag) => Predicate.isTagged(error, tag)) ||
+  (isTurnStartError(error) && error.refusedBeforePrompt === true) ||
   (isProtocolError(error) &&
     error.driver === "claudeAgent" &&
     error.detail === CLAUDE_QUERY_ENDED_BEFORE_TURN_DETAIL) ||

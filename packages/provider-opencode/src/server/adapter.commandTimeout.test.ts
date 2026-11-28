@@ -98,7 +98,7 @@ it.effect.each(["list", "update"] as const)(
   (operation) =>
     Effect.gen(function* () {
       const root = "permission-timeout-root";
-      const rootSession = { id: root, time: { created: 1, updated: 1 } };
+      const rootSession = { id: root, directory: "/workspace", time: { created: 1, updated: 1 } };
       const childSession = { ...rootSession, id: "permission-timeout-child", parentID: root };
       const listed = promiseGate<AbortSignal | undefined>();
       const listing = promiseGate<{ data: Array<typeof childSession> }>();

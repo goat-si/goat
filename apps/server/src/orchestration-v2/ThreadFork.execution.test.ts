@@ -614,8 +614,8 @@ it.effect.each([
               contextHandoffId: null,
             },
           },
-          // Each message alone exceeds the default 16k handoff budget, so a
-          // portable handoff omits both whole items.
+          // Each message alone exceeds the default 64 KB handoff byte budget (16k tokens),
+          // so a portable handoff omits both whole items.
           {
             id: EventId.make("fork-compact-user-item"),
             type: "turn-item.updated",
@@ -631,7 +631,7 @@ it.effect.each([
               creationSource: "web",
               inputIntent: "turn_start",
               messageId: userMessageId,
-              text: "u".repeat(17_000),
+              text: "u".repeat(65_000),
               attachments: [],
             },
           },
@@ -647,7 +647,7 @@ it.effect.each([
               ordinal: 2,
               type: "assistant_message",
               messageId: MessageId.make("fork-compact-assistant-message"),
-              text: "a".repeat(17_000),
+              text: "a".repeat(65_000),
               streaming: false,
             },
           },

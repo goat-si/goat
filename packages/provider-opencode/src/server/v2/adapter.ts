@@ -39,13 +39,11 @@ export { goatMcpServerName, cuaMcpServerName } from "./mcpNames.ts";
 import { NativeGoal, decodeGoal, isMissingGoal } from "./nativeGoal.ts";
 import { makeShellJobs } from "./shellJobs.ts";
 import { validateOpenCodeCompatibility } from "../validateCompatibility.ts";
-import { finishIdleCommand } from "./commandCompletion.ts";
+import { finishIdleCommand, runOpenCode2Command } from "./commandCompletion.ts";
 import { makeExternalPrompts } from "./externalPrompts.ts";
 import {
   agentFor,
-  skillMentions,
-  availableSkillMentions,
-  listDirectorySkills,
+  resolveSkillMentions,
   formQuestions,
   formAnswer,
   approves,
@@ -239,6 +237,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const announced = new Map<string, EventOf<"session.created">["data"]>();
     const strays = new Map<string, ThreadState>();
     const busy = new Set<string>();
+    const commandStarts = new Map<string, Deferred.Deferred<void>>();
     const pending = new Map<RuntimeRequestId, PendingRequest>();
     const lock = yield* Semaphore.make(1);
     const clearing = new Map<string, Deferred.Deferred<void>>();
@@ -2075,6 +2074,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             else state.unsettledStarted = true;
           }
           busy.add(sessionId);
+          const commandStart = commandStarts.get(sessionId);
+          if (commandStart !== undefined) yield* Deferred.succeed(commandStart, undefined);
         } else if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
           busy.delete(sessionId);
         }
@@ -3366,9 +3367,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               .pipe(Effect.catchIf(isMissingGoal, () => Effect.void));
             return yield* finishControl;
           }
-          yield* client.session
-            .command({ sessionID, ...command })
-            .pipe(Effect.andThen(turnInput.inputDelivery?.submitted() ?? Effect.void));
+          const started = yield* runOpenCode2Command({
+            sessionId,
+            commandStarts,
+            sessionScope,
+            run: client.session.command({ sessionID, ...command }),
+            onSubmitted: turnInput.inputDelivery?.submitted(),
+          });
+          if (started) return;
           return yield* finishIdleCommand({
             client,
             sessionId,
@@ -3381,15 +3387,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           });
         }
       }
-      const mentions = skillMentions(text);
-      const skills =
-        mentions.length === 0
-          ? []
-          : yield* availableSkillMentions(
-              mentions,
-              listDirectorySkills(client, location),
-              readModels(location.directory),
-            );
+      const skills = yield* resolveSkillMentions(
+        text,
+        client,
+        location,
+        readModels(location.directory),
+      );
       if (state.active !== turn || turn.interrupted) return;
       const files = yield* promptFiles(turnInput.message.attachments);
       const messageText = turnInput.resume ? "" : yield* promptText(turnInput);
@@ -3465,13 +3468,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             policy,
             threadInput.threadId,
           );
-          const title = threadInput.title?.trim() || undefined;
-          // A session created with a title is never titled by OpenCode's own model.
+          // A session created with a title is never titled by OpenCode's own model, so leave it unset.
           const created = yield* client.session.create({
             location: Location.PublicRef.make({ directory: AbsolutePath.make(directory) }),
             model,
             permissions,
-            ...(title === undefined ? {} : { title }),
           });
           const createdAt = yield* DateTime.now;
           const providerThread: OrchestrationV2ProviderThread = {
@@ -3499,7 +3500,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               id: created.id,
               model: created.model,
               agent: created.agent,
-              title: title ?? created.title,
+              title: created.title,
               permissions,
             },
             directory,
@@ -3652,10 +3653,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               // Refresh stale mode rules; running subagent updates are best effort because they outlive
               // this turn, except one that newly denies subagents, which must land before the prompt.
               yield* writeRules(state, turnInput.runtimePolicy);
-              yield* writeTitle(state, turnInput.appThread.title).pipe(
-                Effect.timeout(REQUEST_REPLY_TIMEOUT),
-                Effect.ignore({ log: true }),
-              );
+              // A root thread's seed or generated title is left to OpenCode, which titles the session itself.
+              if (
+                turnInput.appThread.titleRenamed === true ||
+                turnInput.appThread.lineage?.parentThreadId != null
+              ) {
+                yield* writeTitle(state, turnInput.appThread.title).pipe(
+                  Effect.timeout(REQUEST_REPLY_TIMEOUT),
+                  Effect.ignore({ log: true }),
+                );
+              }
               for (const call of runningCalls(state)) {
                 if (call.child === undefined) continue;
                 const update = writeRules(call.child, turnInput.runtimePolicy).pipe(
@@ -3752,7 +3759,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (turn.settledInbox.has(inboxID)) return;
           turn.steers.add(inboxID);
           state.strandedSteers.delete(inboxID);
-          const { files, messageText } = yield* Effect.gen(function* () {
+          const { files, messageText, skills } = yield* Effect.gen(function* () {
             const files = yield* promptFiles(steerInput.message.attachments);
             const messageText = (yield* providerMessageTextWithAttachmentPaths({
               text: steerInput.message.text,
@@ -3760,7 +3767,14 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               resolveAttachmentPath: host.resolveAttachmentPath,
               resolveExtractedTextPath: host.resolveExtractedTextPath,
             })).trim();
-            return { files, messageText };
+            const directory = directoryOf(turn.input.runtimePolicy.cwd);
+            const skills = yield* resolveSkillMentions(
+              steerInput.message.text,
+              client,
+              { directory },
+              readModels(directory),
+            );
+            return { files, messageText, skills };
           }).pipe(
             Effect.onInterrupt(() =>
               lock.withPermit(
@@ -3797,6 +3811,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               id: inboxID,
               text: messageText,
               ...(files.length === 0 ? {} : { files }),
+              ...(skills.length === 0
+                ? {}
+                : { skills: skills.map((id) => ({ id: Skill.ID.make(id) })) }),
               delivery: "steer",
             })
             .pipe(

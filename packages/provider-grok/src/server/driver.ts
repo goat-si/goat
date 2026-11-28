@@ -268,6 +268,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env,
+        npmCacheDir: path.join(host.paths.providerStatusCacheDir, "npm"),
         ...(resolvedCommandPath === undefined ? {} : { resolvedCommandPath }),
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

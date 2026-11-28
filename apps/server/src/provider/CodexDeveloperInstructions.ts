@@ -14,8 +14,6 @@ import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/develo
 /** Codex silently truncates additionalContext values over 1,000 tokens, counted as UTF-8 bytes / 4. */
 export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
-const CODEX_ORCHESTRATION_SECTIONS = goatOrchestrationSections("tools.mcp__goat__");
-
 const GOAT_DEVICE_TOOL_INSTRUCTIONS = `## GOAT devices
 
 For iOS Simulator or Android Emulator work, run \`device.list\`, then \`device.open\` so the user can watch in their Device panel. Drive the device with the \`agent-device\` launcher path, host config, and session flags that \`device.open\` returns, on every command; prefer \`agent-device snapshot -i\` refs over coordinates, and use \`device.screenshot\` to see the screen. \`xcrun simctl\` and \`adb\` stay available for builds, logs, and anything else. If \`device.list\` reports a platform unavailable, say so.`;
@@ -23,6 +21,7 @@ For iOS Simulator or Android Emulator work, run \`device.list\`, then \`device.o
 export interface GoatToolAvailability {
   readonly browser: boolean;
   readonly device: boolean;
+  readonly nativeSubagents?: boolean;
   /** The managed `cua-driver` MCP server is attached to this turn. */
   readonly computerUse?: boolean;
   readonly screenCode?: boolean;
@@ -40,12 +39,10 @@ const normalizeAvailability = (
  * agent-browser, and raw simctl/adb, so leaving them in would talk it out of the only automation
  * it still has.
  */
-const toolInstructions = (availability: boolean | GoatToolAvailability): string => {
-  const tools = normalizeAvailability(availability);
-  return [goatBrowserInstructions(tools.browser), tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : ""]
+const toolInstructions = (tools: GoatToolAvailability): string =>
+  [goatBrowserInstructions(tools.browser), tools.device ? GOAT_DEVICE_TOOL_INSTRUCTIONS : ""]
     .filter(Boolean)
     .join("\n\n");
-};
 
 /** Sent on every turn, with or without GOAT MCP; the discipline does not depend on GOAT's tools. */
 export function buildCodexDevelopmentContext(): Record<
@@ -66,15 +63,18 @@ export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
   toolsAvailable: boolean | GoatToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
-  const tools = toolInstructions(toolsAvailable);
+  const availability = normalizeAvailability(toolsAvailable);
+  const tools = toolInstructions(availability);
   // Split values to fit per-entry caps; number keys because Codex emits them in key order.
   return {
     ...buildCodexDevelopmentContext(),
     ...Object.fromEntries(
-      CODEX_ORCHESTRATION_SECTIONS.map((section, index) => [
-        `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
-        { kind: "application" as const, value: section },
-      ]),
+      goatOrchestrationSections("tools.mcp__goat__", availability.nativeSubagents).map(
+        (section, index) => [
+          `goat_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+          { kind: "application" as const, value: section },
+        ],
+      ),
     ),
     goat_code_runtime: {
       kind: "application",

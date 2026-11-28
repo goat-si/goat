@@ -32,6 +32,10 @@ export interface FakePi {
   readonly emit: (record: PiRpcRecord, chunkBytes?: number) => Effect.Effect<void>;
   readonly takeRequest: (type: string) => Effect.Effect<PiRpcRecord>;
   readonly queueEntries: (data: unknown) => void;
+  readonly setSessionEntries: (
+    entries: ReadonlyArray<{ readonly id: string } & Record<string, unknown>>,
+    forkFile: string,
+  ) => void;
   readonly queueMessages: (data: unknown) => void;
   readonly vetoNextSwitch: () => void;
   readonly failNextFork: () => void;
@@ -70,7 +74,7 @@ export interface FakePi {
 }
 
 /** Pi omits `model` when none is selected and `sessionName` until one is set. */
-const recordedIdleState = (sessionFile: string) => ({
+export const recordedIdleState = (sessionFile: string) => ({
   thinkingLevel: "high",
   isStreaming: false,
   isCompacting: false,
@@ -87,10 +91,14 @@ const recordedIdleState = (sessionFile: string) => ({
 export const PI_COMPACTING_PROMPT_ERROR =
   "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.";
 
-export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
+export const makeFakePiWithResponses = Effect.fnUntraced(function* (
+  override?: (request: PiRpcRecord, response: PiRpcRecord) => Effect.Effect<PiRpcRecord>,
+) {
   const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
+  let sessionEntries: ReadonlyArray<{ readonly id: string } & Record<string, unknown>> | undefined;
+  let forkFile: string | undefined;
   const messagesQueue: Array<unknown> = [];
   const stateQueue: Array<Record<string, unknown>> = [];
   const statsQueue: Array<unknown> = [];
@@ -198,7 +206,11 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
       case "get_entries":
         return {
           ...base,
-          data: entriesQueue.shift() ?? { entries: [], leafId: null, hasMore: false },
+          data: entriesQueue.shift() ?? {
+            entries: sessionEntries ?? [],
+            leafId: sessionEntries?.at(-1)?.id ?? null,
+            hasMore: false,
+          },
         };
       case "get_messages":
         return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
@@ -208,6 +220,13 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         if (failFork) {
           failFork = false;
           return { ...base, success: false, error: "Invalid entry ID for forking" };
+        }
+        if (sessionEntries !== undefined && forkFile !== undefined) {
+          const index = sessionEntries.findIndex((entry) => entry.id === record["entryId"]);
+          if (index === -1)
+            return { ...base, success: false, error: "Invalid entry ID for forking" };
+          sessionEntries = sessionEntries.slice(0, index);
+          sessionFile = forkFile;
         }
         return { ...base, data: { text: "Hello pi", cancelled: false } };
       case "clear_queue":
@@ -244,7 +263,8 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         continue;
       }
       const response = respondTo(record);
-      if (response !== null) yield* emit(response);
+      if (response !== null)
+        yield* emit(override === undefined ? response : yield* override(record, response));
     }
   });
 
@@ -295,6 +315,10 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     emit,
     takeRequest,
     queueEntries: (data) => entriesQueue.push(data),
+    setSessionEntries: (entries, file) => {
+      sessionEntries = entries;
+      forkFile = file;
+    },
     queueMessages: (data) => messagesQueue.push(data),
     deferNextState: () => {
       deferState = true;
@@ -354,3 +378,5 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     lastSpawn: () => lastSpawn,
   } satisfies FakePi;
 });
+
+export const makeFakePi: Effect.Effect<FakePi> = makeFakePiWithResponses();

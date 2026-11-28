@@ -24,8 +24,10 @@ import type * as DateTime from "effect/DateTime";
 import type * as Deferred from "effect/Deferred";
 import type * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
+import type * as Semaphore from "effect/Semaphore";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import type { AcpToolCallState } from "./runtimeModel.ts";
+import type { AcpSubagentTranscriptEntry } from "./subagentTranscript.ts";
 
 export interface ActiveTextSegment {
   readonly nativeItemId: string;
@@ -146,6 +148,7 @@ export type AcpRuntimeTeardownState =
 
 export interface ActiveAcpSubagent {
   task: OrchestrationV2Subagent;
+  readonly rootSessionId: string;
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly turnItemId: OrchestrationV2TurnItem["id"];
@@ -165,6 +168,15 @@ export interface ActiveAcpSubagent {
   // ACP has no interrupted tool status; keep forced interruption across late updates.
   readonly interruptedToolIds: Set<string>;
   readonly toolSessionIds: Map<string, string>;
+  readonly transcriptEntryFingerprints: Map<string, string>;
+  readonly transcriptStartedAt: Map<string, DateTime.Utc>;
+  readonly transcriptOpenEntries: Map<string, AcpSubagentTranscriptEntry>;
+  readonly lastTranscriptEntryKinds: Map<string, AcpSubagentTranscriptEntry["kind"]>;
+  readonly transcriptDrainPermit: Semaphore.Semaphore;
+  transcriptFollowerStop: Deferred.Deferred<void> | undefined;
+  transcriptFollowerStarted: boolean;
+  transcriptTrailingDrainStop: Deferred.Deferred<void> | undefined;
+  transcriptTrailingDrainStarted: boolean;
 }
 
 export interface AcpNativeChildSession {

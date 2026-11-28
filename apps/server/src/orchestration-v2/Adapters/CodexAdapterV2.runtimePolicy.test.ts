@@ -8,6 +8,31 @@ import { buildCodexDevelopmentContext } from "../../provider/CodexDeveloperInstr
 
 describe("CodexAdapterV2 runtime policy", () => {
   const mcpKeys = ["goat_code_runtime", "goat_code_tools", "goat_code_orchestration_01"];
+
+  it.effect("routes subscription-sharing subagents through GOAT delegation", () =>
+    Effect.gen(function* () {
+      const build = (subscriptionSharing: boolean) =>
+        CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-delegation",
+          codexInput: [{ type: "text", text: "Ask a subagent to review this change." }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          hasGoatMcp: true,
+          subscriptionSharing,
+        });
+
+      const sharing = yield* build(true);
+      const sharingInstructions = sharing.additionalContext?.["goat_code_orchestration_01"]?.value;
+      assert.include(sharingInstructions, "Use `task.create` for subagents");
+      assert.notInclude(sharingInstructions, "Use native subagents");
+
+      const local = yield* build(false);
+      assert.include(
+        local.additionalContext?.["goat_code_orchestration_01"]?.value,
+        "Use native subagents",
+      );
+    }),
+  );
   it.effect.each([undefined, false, true])(
     "selects native collaboration modes without prompt overrides with hasGoatMcp=%s",
     (hasGoatMcp) =>

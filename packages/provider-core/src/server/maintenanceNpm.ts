@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { environmentCacheKey } from "./maintenanceEnvironmentCache.ts";
-import { runProbe } from "./maintenanceProbe.ts";
+import { NPM_REGISTRY_PROBE_TIMEOUT, runProbe } from "./maintenanceProbe.ts";
 import type { ProviderMaintenanceResolverServices } from "./maintenanceResolver.ts";
 
 const nonEmptyString = (value: unknown) =>
@@ -63,6 +63,7 @@ const runNpmGlobalLatestVersions = Effect.fn("runNpmGlobalLatestVersions")(funct
     env,
     // npm outdated exits 1 when updates are available.
     [0, 1],
+    NPM_REGISTRY_PROBE_TIMEOUT,
   );
   const outdatedEntries = outdated ? Option.getOrUndefined(decodeOutdated(outdated)) : undefined;
   // npm prints failures such as an unreachable registry as `{"error": ...}`, also exiting 1.
@@ -130,4 +131,45 @@ export const resolveNpmGlobalLatestVersion = Effect.fn("resolveNpmGlobalLatestVe
     return versions.value.get(packageName) ?? null;
   }
   return yield* resolveNpmGlobalLatestVersion(packageName, npmPrefix, env);
+});
+
+export const runConfiguredNpmView = Effect.fn("runConfiguredNpmView")(function* (input: {
+  readonly npmPath: string;
+  readonly packageName: string;
+  readonly prefix: string | undefined;
+  readonly env: NodeJS.ProcessEnv;
+  readonly npmCacheDir: string | undefined;
+}) {
+  const path = yield* Path.Path;
+  const fileSystem = yield* FileSystem.FileSystem;
+  // `npm view` downloads the whole packument into its cache's tmp directory and a killed npm
+  // leaves it there. A cache only GOAT writes to can drop that directory without touching another
+  // npm run's files, and lasting across lookups lets npm revalidate instead of re-downloading.
+  const cacheDir =
+    input.npmCacheDir && path.join(input.npmCacheDir, encodeURIComponent(input.packageName));
+  return yield* runProbe(
+    input.npmPath,
+    [
+      "view",
+      "--global",
+      ...(input.prefix ? ["--prefix", input.prefix] : []),
+      "--json",
+      `${input.packageName}@latest`,
+      "version",
+    ],
+    cacheDir ? { ...input.env, npm_config_cache: cacheDir } : input.env,
+    [0],
+    NPM_REGISTRY_PROBE_TIMEOUT,
+  ).pipe(
+    Effect.onInterrupt(() =>
+      cacheDir
+        ? Effect.ignore(
+            fileSystem.remove(path.join(cacheDir, "_cacache", "tmp"), {
+              recursive: true,
+              force: true,
+            }),
+          )
+        : Effect.void,
+    ),
+  );
 });

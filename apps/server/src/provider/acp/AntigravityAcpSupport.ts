@@ -11,6 +11,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
@@ -55,7 +56,7 @@ export interface AntigravityAcpRuntimeInput extends Omit<
   readonly onAuthorizationUrl?: (url: string) => Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Serve `fs/read_text_file` for runtimes whose native reader is not qualified. */
   readonly clientFileReads?: boolean;
-  /** The installed version, known before `initialize`; it picks the file reader and client name. */
+  /** The installed version, known before `initialize`; it picks the file reader. */
   readonly runtimeVersion?: string | null;
   /** Conversational sessions only; helpers and probes leave the system prompt untouched. */
   readonly sessionSystemPromptAppend?: string;
@@ -63,7 +64,7 @@ export interface AntigravityAcpRuntimeInput extends Omit<
 }
 
 function parseAntigravityVersion(version: string | null | undefined) {
-  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? "");
+  const match = /^(?:v|agy_acp_server_)?(\d+)\.(\d+)\.(\d+)/.exec(version?.trim() ?? "");
   return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
 }
 
@@ -97,7 +98,7 @@ export function isQualifiedAntigravityRelease(version: string | null | undefined
 }
 
 // `agy acp` 1.5.1 offers every model to every ACP client; older runtimes allowlist editors.
-const OPEN_MODEL_ACCESS_RELEASE = [1, 5, 1] as const;
+export const OPEN_MODEL_ACCESS_RELEASE = [1, 5, 1] as const;
 // `agy acp` 1.5.0 steers a running turn with the next prompt; the 1.4 harness queues it.
 const PROMPT_STEERING_RELEASE = [1, 5, 0] as const;
 
@@ -106,6 +107,12 @@ export const antigravitySteersWithPrompt = (
 ) => {
   const parsed = parseAntigravityVersion(initializeResult.agentInfo?.version);
   return parsed !== undefined && compareVersions(parsed, PROMPT_STEERING_RELEASE) >= 0;
+};
+
+/** Whether a runtime that reported its version serves GOAT, not only allowlisted editors. */
+export const antigravityServesGoat = (version: string) => {
+  const parsed = parseAntigravityVersion(version);
+  return parsed === undefined || compareVersions(parsed, OPEN_MODEL_ACCESS_RELEASE) >= 0;
 };
 
 /**
@@ -137,14 +144,6 @@ export function antigravitySessionMeta(
   return Object.keys(antigravity).length === 0 ? undefined : { antigravity };
 }
 
-/** Older releases offer non-Gemini models only to allowlisted clients such as Zed. */
-export function antigravityClientInfo(version: string | null | undefined) {
-  const parsed = parseAntigravityVersion(version);
-  return parsed !== undefined && compareVersions(parsed, OPEN_MODEL_ACCESS_RELEASE) >= 0
-    ? { name: "goat", title: "GOAT", version: packageJson.version }
-    : { name: "zed", version: "0.0.0" };
-}
-
 export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(function* (
   input: AntigravityAcpRuntimeInput,
 ): Effect.fn.Return<
@@ -159,7 +158,7 @@ export const makeAntigravityAcpRuntime = Effect.fn("makeAntigravityAcpRuntime")(
       authenticateEagerly: true,
       resumeMethod: "resume",
       cancelBehavior: "wait-for-prompt",
-      clientInfo: antigravityClientInfo(input.runtimeVersion),
+      clientInfo: { name: "goat", title: "GOAT", version: packageJson.version },
       sessionMeta: (initializeResult) =>
         antigravitySessionMeta(initializeResult, input.sessionSystemPromptAppend),
       clientCapabilities: {
@@ -213,17 +212,23 @@ export function antigravitySessionMode(
 
 const ANTIGRAVITY_GOAT_MCP_TITLE = /^Run mcp_goat_(?<tool>[A-Za-z0-9_]+)\??$/;
 
+// call_mcp_tool is the one call whose rawInput names a server and tool; in every other call
+// rawInput is the tool's own arguments.
+const ANTIGRAVITY_PROXIED_MCP_TITLE = /^MCP Tool (?<tool>[A-Za-z0-9_]+)\??$/;
+
 function isAntigravityGoatMcpRequest(request: EffectAcpSchema.RequestPermissionRequest): boolean {
+  const title = request.toolCall.title?.trim() ?? "";
   const rawInput = unknownRecord(request.toolCall.rawInput);
-  if (rawInput?.ServerName !== undefined) {
+  const proxiedTool = ANTIGRAVITY_PROXIED_MCP_TITLE.exec(title)?.groups?.tool;
+  if (proxiedTool !== undefined) {
     return (
-      rawInput.ServerName === "goat" &&
-      typeof rawInput.ToolName === "string" &&
-      GOAT_MCP_TOOL_NAMES.has(rawInput.ToolName)
+      rawInput?.ServerName === "goat" &&
+      rawInput.ToolName === proxiedTool &&
+      GOAT_MCP_TOOL_NAMES.has(proxiedTool)
     );
   }
   if (typeof rawInput?.CommandLine === "string") return false;
-  const tool = ANTIGRAVITY_GOAT_MCP_TITLE.exec(request.toolCall.title?.trim() ?? "")?.groups?.tool;
+  const tool = ANTIGRAVITY_GOAT_MCP_TITLE.exec(title)?.groups?.tool;
   return tool !== undefined && GOAT_MCP_TOOL_NAMES.has(tool);
 }
 
@@ -572,19 +577,15 @@ export const buildAntigravityPrompt = Effect.fn("buildAntigravityPrompt")(functi
           : bytes[0] === 0xfe && bytes[1] === 0xff
             ? "UTF-16BE"
             : "UTF-8";
-      const decoded = yield* Effect.try({
-        try: () => new TextDecoder(encoding, { fatal: true }).decode(bytes),
-        catch: () =>
-          EffectAcpErrors.AcpRequestError.invalidParams(
-            `Attachment '${attachment.name}' is not a ${encoding} text file.`,
-          ),
-      });
-      if (decoded.includes("\0")) {
-        return yield* EffectAcpErrors.AcpRequestError.invalidParams(
-          `Attachment '${attachment.name}' contains binary data.`,
-        );
+      const decoded = Option.liftThrowable((data: Uint8Array) =>
+        new TextDecoder(encoding, { fatal: true }).decode(data),
+      )(bytes);
+      // Other encodings and binary data stay path-only so the agent reads them with its own tools.
+      if (Option.isNone(decoded) || decoded.value.includes("\0")) {
+        totalBytes -= bytes.length;
+        continue;
       }
-      blocks.push({ type: "resource", resource: { uri, mimeType, text: decoded } });
+      blocks.push({ type: "resource", resource: { uri, mimeType, text: decoded.value } });
     }
   }
   if (blocks.length === 0) {

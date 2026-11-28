@@ -32,6 +32,7 @@ import { openCode2ReplayRuntime } from "./OpenCode2AdapterV2.testkit.ts";
 import {
   SESSION,
   WORK,
+  agentList,
   bigPickle,
   event,
   noOpenRequests,
@@ -48,6 +49,7 @@ import {
   providerTurnId,
   resumed,
   sessionInfo,
+  supervisedRules,
   terminalOf,
   threadId,
   turnInput,
@@ -823,5 +825,49 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       assert.deepEqual(last?.type === "dynamic_tool" ? last.input : null, input);
       assert.equal(last?.type === "dynamic_tool" ? last.output : null, "Reviewed");
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("creates the session without the thread title so OpenCode titles it", () =>
+    Effect.gen(function* () {
+      const runtime = yield* openCode2ReplayRuntime([
+        ...opening,
+        out("agent.list", "<any>"),
+        reply("agent.list", agentList),
+        out("session.create", {
+          location: { directory: WORK },
+          model: { providerID: "opencode", id: "big-pickle" },
+          permissions: supervisedRules,
+          title: null,
+        }),
+        replyData("session.create", sessionInfo({ permissions: supervisedRules })),
+      ]);
+      const created = yield* runtime
+        .ensureThread({
+          threadId,
+          title: "Seed prompt",
+          modelSelection: bigPickle,
+          runtimePolicy: policy("approval-required"),
+        })
+        .pipe(Effect.forkScoped);
+      yield* TestClock.adjust("250 millis");
+      assert.equal((yield* Fiber.join(created)).nativeThreadRef?.nativeId, SESSION);
+    }),
+  );
+
+  it.effect("does not write a seed title into the session before the first turn", () =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([
+        out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        promptAccepted,
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const terminal = yield* terminalOf(runtime).pipe(Effect.forkScoped);
+      const seeded = turnInput(thread);
+      yield* runtime.startTurn({
+        ...seeded,
+        appThread: { ...seeded.appThread, title: "Seed prompt" },
+      });
+      assert.equal((yield* Fiber.join(terminal))?.status, "completed");
+    }),
   );
 });

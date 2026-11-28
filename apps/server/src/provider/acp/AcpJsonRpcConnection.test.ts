@@ -472,35 +472,42 @@ describe("AcpSessionRuntime", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("does not restore ambient variables to a sanitized child environment", () =>
-    Effect.gen(function* () {
-      yield* Effect.acquireRelease(
-        Effect.sync(() => {
-          const previous = process.env.GOAT_ACP_RUNTIME_AMBIENT;
-          process.env.GOAT_ACP_RUNTIME_AMBIENT = "sentinel";
-          return previous;
-        }),
-        (previous) =>
+  // A provided env is the complete child environment, as in OpenCodeRuntime; the AppImage
+  // scrub deletes mount-only variables, which inheritance would put back.
+  it.effect.each([
+    { label: "with extendEnv false", extendEnv: false as const },
+    { label: "when extendEnv is unset", extendEnv: undefined },
+  ])(
+    "does not restore ambient variables to a sanitized child environment $label",
+    ({ extendEnv }) =>
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(
           Effect.sync(() => {
-            if (previous === undefined) delete process.env.GOAT_ACP_RUNTIME_AMBIENT;
-            else process.env.GOAT_ACP_RUNTIME_AMBIENT = previous;
+            const previous = process.env.GOAT_ACP_RUNTIME_AMBIENT;
+            process.env.GOAT_ACP_RUNTIME_AMBIENT = "sentinel";
+            return previous;
           }),
-      );
-      const runtime = yield* AcpSessionRuntime.make({
-        ...mockRuntimeOptions,
-        spawn: {
-          command: process.execPath,
-          args: mockAgentArgs,
-          extendEnv: false,
-          env: { GOAT_ACP_RUNTIME_EXPLICIT: "kept" },
-        },
-      });
-      yield* runtime.initialize();
-      expect(yield* runtime.request("_test/environment", {})).toEqual({
-        inherited: false,
-        explicit: true,
-      });
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+          (previous) =>
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.GOAT_ACP_RUNTIME_AMBIENT;
+              else process.env.GOAT_ACP_RUNTIME_AMBIENT = previous;
+            }),
+        );
+        const runtime = yield* AcpSessionRuntime.make({
+          ...mockRuntimeOptions,
+          spawn: {
+            command: process.execPath,
+            args: mockAgentArgs,
+            ...(extendEnv === undefined ? {} : { extendEnv }),
+            env: { GOAT_ACP_RUNTIME_EXPLICIT: "kept" },
+          },
+        });
+        yield* runtime.initialize();
+        expect(yield* runtime.request("_test/environment", {})).toEqual({
+          inherited: false,
+          explicit: true,
+        });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it("selects explicit or agent-managed authentication without choosing terminal auth", () => {

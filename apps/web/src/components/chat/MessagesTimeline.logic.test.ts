@@ -4282,22 +4282,25 @@ describe("cloud run card rows", () => {
         ...common,
         id: TurnItemId.make("turn-item:cloud-result:" + fixture.runId),
         type: "assistant_message",
+        delivery: undefined,
         messageId: MessageId.make("message:cloud-result:" + fixture.runId),
         text: "Cursor Cloud failed. Open the agent for details.",
         attachments: [],
         streaming: false,
       },
     ];
-    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
-      visibleTurnItems: items.map((item, position) => ({
-        ...source,
-        item,
-        position,
-        sourceItemId: item.id,
-      })),
-      optimisticMessages: [],
-    });
-    return { timelineEntries, runId: fixture.runId };
+    return {
+      timelineEntries: deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: items.map((item, position) => ({
+          ...source,
+          item,
+          position,
+          sourceItemId: item.id,
+        })),
+        optimisticMessages: [],
+      }),
+      runId: fixture.runId,
+    };
   }
   function card(runId: RunId, phase: "failed" | "succeeded" | "running") {
     const failed = phase !== "succeeded";
@@ -4316,24 +4319,19 @@ describe("cloud run card rows", () => {
   }
   const rowsFor = (
     timelineEntries: ReadonlyArray<TimelineEntry>,
-    cloudRun: ReturnType<typeof card>,
+    cloudRun?: ReturnType<typeof card>,
   ) =>
     deriveMessagesTimelineRows({
       timelineEntries,
       isWorking: false,
       turnDiffSummaries: [],
       supportsConversationRollback: false,
-      cloudRun,
+      ...(cloudRun === undefined ? {} : { cloudRun }),
     });
 
   it("shows a failed cloud run once, where its failure message was", () => {
     const { timelineEntries, runId } = cloudEntries();
-    const without = deriveMessagesTimelineRows({
-      timelineEntries,
-      isWorking: false,
-      turnDiffSummaries: [],
-      supportsConversationRollback: false,
-    });
+    const without = rowsFor(timelineEntries);
     expect(without.some((row) => row.kind === "message")).toBe(true);
     const rows = rowsFor(timelineEntries, card(runId, "failed"));
     expect(rows.filter((row) => row.kind === "cloud-run")).toHaveLength(1);

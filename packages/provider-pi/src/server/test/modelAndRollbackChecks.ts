@@ -243,7 +243,7 @@ export function registerPiModelAndRollbackChecks({
         }),
       );
       const route = (prefix: string) => ({
-        lines: [],
+        optionLines: [],
         sentinel: "1. Type something.",
         followUpTitlePrefix: prefix,
       });

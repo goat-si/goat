@@ -1166,10 +1166,10 @@ function normalizeAnswerForXAi(
   answer: unknown,
 ): NormalizedXAiAnswer | undefined {
   const values = answerValues(answer);
-  if (values.length === 0) {
-    return undefined;
-  }
-
+  if (values.length === 0)
+    return question.multiSelect === true && Array.isArray(answer)
+      ? { questionText: question.question, selectedLabels: [] }
+      : undefined;
   const optionByLabel = new Map(question.options.map((option) => [option.label, option]));
   const resolvedValues = values.map((value) => ({
     value,

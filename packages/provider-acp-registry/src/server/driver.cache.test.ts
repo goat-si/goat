@@ -43,6 +43,8 @@ it.live("refreshes the successful readiness probe when the effective profile cha
         }),
       search: () => Effect.die("unused"),
       prepare: () => Effect.die("unused"),
+      refreshIndex: () => Effect.succeed(false),
+      invalidateIndex: () => Effect.void,
       prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
       uninstallManagedBinary: () => Effect.die("unused"),
     };

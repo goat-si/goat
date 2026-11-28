@@ -1,170 +1,37 @@
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
-  EnvironmentId,
-  AntigravitySettings,
-  ProviderDriverKind,
+  isProviderWorkspaceSnapshotPending,
   ProviderInstanceId,
   ProviderSetupError,
   type RuntimeMode,
+  type ServerProvider,
   type ServerProviderUsageLimits,
 } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
+import * as EffectAcpErrors from "effect-acp/errors";
 
-import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import * as ServerConfig from "../config.ts";
-import * as ServerSettings from "../serverSettings.ts";
-import * as ProviderHostLive from "./ProviderHostLive.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
-import type { ServerProvider } from "@goat/contracts";
+import { buildAntigravityModelsFromSession } from "./AntigravityProvider.ts";
 import {
-  buildAntigravityModelsFromSession,
-  makeAntigravityProvider,
-} from "./AntigravityProvider.ts";
-import { modelConfig, modelOptions, sessionSetupResult } from "./AntigravityProvider.testkit.ts";
-
-const decodeSettings = Schema.decodeSync(AntigravitySettings);
-const instanceId = ProviderInstanceId.make("antigravity-test");
-const driver = ProviderDriverKind.make("antigravity");
-
-const initializeResult = {
-  protocolVersion: 1,
-  agentCapabilities: {
-    loadSession: true,
-    promptCapabilities: { image: true, audio: true, embeddedContext: true },
-    sessionCapabilities: { list: {}, resume: {} },
-  },
-  authMethods: [{ id: "oauth-personal", name: "Log in with Google" }],
-  agentInfo: {
-    name: "antigravity-acp",
-    title: "Google Antigravity",
-    version: "agy_acp_server_20260818_01_RC01",
-  },
-} satisfies EffectAcpSchema.InitializeResponse;
-
-const started = {
-  sessionId: "session-1",
+  commands,
+  expectedCommands,
   initializeResult,
+  layerTest,
+  makeHarness,
+  makeLayerTest,
+  modelConfig,
+  modelOptions,
   sessionSetupResult,
-  modelConfigId: "model",
-} satisfies AcpSessionRuntime.AcpSessionRuntimeStartResult;
+  started,
+} from "./AntigravityProvider.testkit.ts";
+import { mergeProviderSnapshot } from "./ProviderRegistry.ts";
 
-const commands = [
-  { name: "plan", description: "Create a plan", input: { type: "text", hint: "What to plan" } },
-  { name: "logout", description: "Sign out of Google" },
-] satisfies ReadonlyArray<EffectAcpSchema.AvailableCommand>;
-
-const expectedCommands = [
-  { name: "plan", description: "Create a plan", input: { hint: "What to plan" } },
-  { name: "logout", description: "Sign out of Google" },
-];
-
-const makeLayerTest = (background: boolean) =>
-  ProviderHostLive.layer.pipe(
-    Layer.provide(
-      Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-        getEnvironmentId: Effect.succeed(EnvironmentId.make("memory-host-fixture")),
-      }),
-    ),
-    Layer.provideMerge(
-      Layer.mock(BackgroundPolicy.BackgroundPolicy)({
-        shouldRunScopeWork: () => Effect.succeed(background),
-      }),
-    ),
-    Layer.provideMerge(ServerSettings.layerTest()),
-    Layer.provideMerge(ServerSecretStore.layer),
-    Layer.provide(
-      ServerConfig.layerTest(process.cwd(), { prefix: "goat-antigravity-provider-test-" }).pipe(
-        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
-      ),
-    ),
-  );
-const layerTest = makeLayerTest(false);
-
-type ProbeError = EffectAcpErrors.AcpError | ProviderSetupError;
-
-const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
-  options: {
-    readonly auth?: { readonly type: string; readonly label: string };
-    readonly enabled?: boolean;
-    readonly safe?: boolean;
-    readonly probeUsage?: Effect.Effect<ServerProviderUsageLimits>;
-    readonly clearUsage?: Effect.Effect<void>;
-    readonly currentProfile?: Effect.Effect<string>;
-    readonly environment?: Effect.Effect<NodeJS.ProcessEnv>;
-    readonly rememberedRuntimeModes?: ReadonlyArray<RuntimeMode>;
-  } = {},
-) {
-  const savedRuntimeModes = yield* Ref.make<ReadonlyArray<ReadonlyArray<RuntimeMode>>>([]);
-  const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
-  const probeCalls = yield* Ref.make(0);
-  const safetyCalls = yield* Ref.make(0);
-  const probe = yield* Ref.make<Effect.Effect<EffectAcpSchema.InitializeResponse, ProbeError>>(
-    Deferred.await(initialProbe),
-  );
-  const safety = yield* Ref.make<Effect.Effect<boolean>>(Effect.succeed(options.safe ?? true));
-  const provider = yield* makeAntigravityProvider(
-    decodeSettings({ enabled: options.enabled ?? true, customModels: ["do-not-seed-me"] }),
-    {
-      stampIdentity: (snapshot) => Effect.succeed({ ...snapshot, instanceId, driver }),
-      ...(options.auth ? { auth: options.auth } : {}),
-      ...(options.probeUsage ? { probeUsage: options.probeUsage } : {}),
-      ...(options.clearUsage ? { clearUsage: options.clearUsage } : {}),
-      ...(options.currentProfile ? { currentProfile: options.currentProfile } : {}),
-      ...(options.environment ? { environment: options.environment } : {}),
-      ...(options.rememberedRuntimeModes
-        ? { rememberedRuntimeModes: options.rememberedRuntimeModes }
-        : {}),
-      rememberRuntimeModes: (modes) => Ref.update(savedRuntimeModes, (saved) => [...saved, modes]),
-      probe: Ref.update(probeCalls, (count) => count + 1).pipe(
-        Effect.andThen(Ref.get(probe)),
-        Effect.flatten,
-      ),
-      supportsTextGeneration: Ref.update(safetyCalls, (count) => count + 1).pipe(
-        Effect.andThen(Ref.get(safety)),
-        Effect.flatten,
-      ),
-    },
-  );
-  const initialUpdate = yield* Stream.toPull(
-    provider.snapshot.streamChanges.pipe(
-      Stream.filter((snapshot) => snapshot.installed || snapshot.status === "error"),
-    ),
-  );
-  const initialize = Deferred.succeed(initialProbe, initializeResult).pipe(
-    Effect.andThen(initialUpdate),
-    Effect.asVoid,
-  );
-  // Subscribe before the trigger; yield the returned pull to await the publish.
-  const nextPublish = (predicate: (snapshot: ServerProvider) => boolean) =>
-    Stream.toPull(provider.snapshot.streamChanges.pipe(Stream.filter(predicate))).pipe(
-      Effect.map((pull) => pull.pipe(Effect.map((snapshots) => snapshots[0]))),
-    );
-  return {
-    provider,
-    probe,
-    probeCalls,
-    safety,
-    safetyCalls,
-    initialProbe,
-    initialUpdate,
-    initialize,
-    nextPublish,
-    savedRuntimeModes,
-  };
-});
+const instanceId = ProviderInstanceId.make("antigravity-test");
 
 it.layer(makeLayerTest(true))("Antigravity periodic checks", (it) => {
   it.effect("keeps a ready snapshot during a transient failed check and accepts sign-out", () =>
@@ -724,6 +591,71 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
         ).toEqual(rescanned);
       }),
     ),
+  );
+
+  it.effect("a session in an unscanned folder does not publish its skills as scanned", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        const unscanned = () =>
+          Effect.map(harness.provider.snapshot.getSnapshot, (snapshot) => {
+            const entry = snapshot.workspaceSnapshots?.find((item) => item.cwd === "/workspace");
+            // ProviderRegistry skips the skill scan for a current entry that is not pending.
+            return entry === undefined || isProviderWorkspaceSnapshotPending(entry);
+          });
+
+        yield* harness.provider.onSessionStarted(started, "/workspace");
+        expect(yield* unscanned()).toBe(true);
+        yield* harness.provider.onAvailableCommands(commands, "/workspace");
+        expect(yield* unscanned()).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("a skill scan leaves the folder entry it scanned from unchanged", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const harness = yield* makeHarness();
+        yield* harness.initialize;
+        yield* harness.provider.onSessionStarted(started, "/workspace");
+        const published = yield* harness.provider.snapshot.getSnapshot;
+        const entryOf = (provider: ServerProvider) =>
+          provider.workspaceSnapshots?.find((entry) => entry.cwd === "/workspace");
+        const skills = [{ name: "deploy", path: "/workspace/.agent/skills/deploy", enabled: true }];
+
+        yield* harness.provider.snapshotForCwd("/workspace", skills);
+        // ProviderRegistry saves the scan only if the entry it scanned from is still published.
+        const republished = mergeProviderSnapshot(
+          published,
+          yield* harness.provider.snapshot.getSnapshot,
+        );
+        expect(entryOf(republished)).toEqual(entryOf(published));
+      }),
+    ),
+  );
+
+  it.effect(
+    "keeps a scanned folder's own commands when another folder reports different ones",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness();
+          yield* harness.initialize;
+          yield* harness.provider.onAvailableCommands(commands, "/a");
+          yield* harness.provider.snapshotForCwd("/a", []);
+          yield* harness.provider.onAvailableCommands(commands.slice(1), "/b");
+          expect((yield* harness.provider.snapshotForCwd("/a", [])).slashCommands).toEqual(
+            expectedCommands,
+          );
+          yield* harness.provider.onSessionStarted(started, "/a");
+          expect(
+            (yield* harness.provider.snapshot.getSnapshot).workspaceSnapshots?.find(
+              (entry) => entry.cwd === "/a",
+            )?.slashCommands,
+          ).toEqual(expectedCommands);
+        }),
+      ),
   );
 
   it.effect("bounds workspace metadata without starting sessions for workspace lookup", () =>

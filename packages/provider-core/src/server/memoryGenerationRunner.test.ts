@@ -157,7 +157,10 @@ describe("memory generation runner", () => {
         modelSelection: selection,
         ...(yield* buildMemorySummaryPrompt(summary)),
       };
-      for (const extra of [{ attachments: [] }, { investigate: { timeoutMs: 10 } }])
+      for (const extra of [
+        { attachments: [] },
+        { investigate: { timeoutMs: 10, projectCwd: summary.cwd } },
+      ])
         expect((yield* Effect.exit(runner({ ...request, ...extra })))._tag).toBe("Failure");
       expect(calls).toBe(0);
     }),

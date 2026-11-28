@@ -4,7 +4,7 @@ import * as Equal from "effect/Equal";
 import type { AcpRegistryLiveConfiguration } from "./probe.ts";
 
 // Cache only successful authenticated probes so sign-in changes remain visible.
-const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
+export const PROBE_SUCCESS_TTL_MS = 15 * 60 * 1_000;
 const PROBE_PROVISIONAL_TTL_MS = 30 * 1_000;
 
 export function acpRegistryProbeTtlMs(provider: ServerProvider): number {
@@ -12,13 +12,28 @@ export function acpRegistryProbeTtlMs(provider: ServerProvider): number {
   return discoveredModels.length <= 1 ? PROBE_PROVISIONAL_TTL_MS : PROBE_SUCCESS_TTL_MS;
 }
 
-interface AcpRegistryEnrichmentCache {
+export interface AcpRegistryEnrichmentCache {
   readonly generation: number;
   readonly entry: {
     readonly provider: ServerProvider;
+    readonly launchIdentity?: string;
     readonly expiresAt: number;
     readonly environmentKey?: string;
   } | null;
+}
+
+export function isAcpRegistryCacheValid(
+  entry: NonNullable<AcpRegistryEnrichmentCache["entry"]>,
+  inspectedVersion: string | null,
+  local: boolean,
+  now: number,
+  inspectedLaunchIdentity?: string,
+): boolean {
+  return (
+    entry.expiresAt > now &&
+    ((local && inspectedVersion === null) || entry.provider.version === inspectedVersion) &&
+    (inspectedLaunchIdentity === undefined || entry.launchIdentity === inspectedLaunchIdentity)
+  );
 }
 
 export function updateAcpRegistryEnrichmentCache(
@@ -44,23 +59,23 @@ export function updateAcpRegistryEnrichmentCache(
     return { generation: cache.generation + 1, entry: null };
   }
   if (cache.entry === null) {
-    // No probe has landed yet, but the live session published its
-    // configuration to the snapshot. Advance the cache epoch so a probe that
-    // was still in flight cannot overwrite that newer state when it lands.
-    return { ...cache, generation: cache.generation + 1 };
+    // Only a live catalog update advances the epoch; options-only updates must not discard an in-flight probe.
+    return configuration.models.length > 0 ? { ...cache, generation: cache.generation + 1 } : cache;
   }
   const provider = merge(cache.entry.provider, configuration, customModels);
   if (Equal.equals(provider, cache.entry.provider)) return cache;
+  const catalogChanged = !Equal.equals(
+    cache.entry.provider.models.filter((model) => !model.isCustom).map((model) => model.slug),
+    provider.models.filter((model) => !model.isCustom).map((model) => model.slug),
+  );
   return {
     ...cache,
-    // The live session advanced the provider past what an in-flight probe
-    // started from; bump the epoch so the probe discards its stale result
-    // instead of overwriting this entry and publishing it.
-    generation: cache.generation + 1,
+    // Advance the epoch and renew TTL only when the live session actually changed the model catalog.
+    generation: catalogChanged ? cache.generation + 1 : cache.generation,
     entry: {
       ...cache.entry,
       provider,
-      expiresAt: now + acpRegistryProbeTtlMs(provider),
+      expiresAt: catalogChanged ? now + acpRegistryProbeTtlMs(provider) : cache.entry.expiresAt,
     },
   };
 }

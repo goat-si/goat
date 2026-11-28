@@ -1,3 +1,4 @@
+import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ModelSelection } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import {
@@ -40,6 +41,7 @@ function claudeContextWindow(modelSelection: ModelSelection): number | null {
 }
 export function claudeProviderTurnTokenUsage(
   usage: {
+    readonly iterations?: SDKAssistantMessage["message"]["usage"]["iterations"] | undefined;
     readonly input_tokens?: number | null | undefined;
     readonly cache_creation_input_tokens?: number | null | undefined;
     readonly cache_read_input_tokens?: number | null | undefined;
@@ -52,8 +54,11 @@ export function claudeProviderTurnTokenUsage(
   requestedAt?: DateTime.Utc,
   reportedMaxTokens?: number | null,
 ) {
-  const inputTokens = claudeMessageInputTokens(usage);
-  const outputTokens = optionalClaudeUsageTokenCount(usage.output_tokens) ?? 0;
+  // After an advisor call, the response totals can count the same context twice.
+  const sample = usage.iterations?.findLast((iteration) => iteration.type === "message") ?? usage;
+  const inputTokens = claudeMessageInputTokens(sample);
+  const outputTokens = optionalClaudeUsageTokenCount(sample.output_tokens) ?? 0;
+  const cachedInputTokens = optionalClaudeUsageTokenCount(sample.cache_read_input_tokens) ?? 0;
   const promptCacheTtlMs = claudePromptCacheTtlMs(usage.cache_creation);
   const maxTokens = reportedMaxTokens ?? claudeContextWindow(modelSelection) ?? null;
   // The cache lifetime starts with the request, not when its response ends.
@@ -65,7 +70,7 @@ export function claudeProviderTurnTokenUsage(
     usedTokens: inputTokens + outputTokens,
     maxTokens,
     inputTokens,
-    cachedInputTokens: optionalClaudeUsageTokenCount(usage.cache_read_input_tokens) ?? 0,
+    cachedInputTokens,
     outputTokens,
     reasoningOutputTokens: 0,
     ...(promptCacheTtlMs === undefined ? {} : { promptCacheTtlMs }),
@@ -78,15 +83,11 @@ export type ClaudeMessageUsage = Parameters<typeof claudeProviderTurnTokenUsage>
 // message_delta usage is per-message cumulative; null or absent fields retain message_start values and zeros replace them.
 export function mergeClaudeStreamUsage(
   current: ClaudeMessageUsage,
-  delta: {
-    readonly input_tokens?: number | null;
-    readonly cache_creation_input_tokens?: number | null | undefined;
-    readonly cache_read_input_tokens?: number | null | undefined;
-    readonly output_tokens?: number | null | undefined;
-  },
+  delta: ClaudeMessageUsage,
 ): ClaudeMessageUsage {
   return {
     ...current,
+    iterations: delta.iterations ?? current.iterations,
     input_tokens:
       optionalClaudeUsageTokenCount(delta.input_tokens) ??
       optionalClaudeUsageTokenCount(current.input_tokens) ??

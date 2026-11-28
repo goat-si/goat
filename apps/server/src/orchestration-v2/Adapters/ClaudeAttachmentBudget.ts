@@ -1,3 +1,4 @@
+import { ProviderDriverKind, type OrchestrationV2ProviderThread } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
 export const CLAUDE_ATTACHMENT_MAX_BYTES = 28 * 1024 * 1024;
@@ -62,4 +63,50 @@ export function isSupportedClaudeImageMimeType(
   mimeType: string,
 ): mimeType is SupportedClaudeImageMimeType {
   return supportedClaudeImageMimeTypes.has(mimeType);
+}
+
+export function decorateClaudeProviderThread(
+  providerThread: OrchestrationV2ProviderThread,
+  input: {
+    readonly appliedTitles: { readonly get: (nativeThreadId: string) => string | undefined };
+    readonly pdfBudgets: ReadonlyMap<string, ReturnType<typeof makeClaudeAttachmentBudget>>;
+    readonly applyAppContext: (
+      thread: OrchestrationV2ProviderThread,
+    ) => OrchestrationV2ProviderThread;
+    readonly clearedNativeSessions: ReadonlyMap<string, string>;
+  },
+): OrchestrationV2ProviderThread {
+  const nativeId = providerThread.nativeThreadRef?.nativeId ?? "";
+  let next = providerThread;
+  const appliedTitle = input.appliedTitles.get(nativeId);
+  if (appliedTitle !== undefined) {
+    next = { ...next, nativeMetadata: { ...next.nativeMetadata, title: appliedTitle } };
+  }
+  const budget = input.pdfBudgets.get(nativeId);
+  if (budget !== undefined) {
+    next = {
+      ...next,
+      nativeMetadata: {
+        ...next.nativeMetadata,
+        claudeAttachmentBudget: {
+          bytesUsed: budget.committed.bytes,
+          pagesUsed: budget.committed.pages,
+        },
+      },
+    };
+  }
+  next = input.applyAppContext(next);
+  const nativeSessionId = input.clearedNativeSessions.get(nativeId);
+  if (nativeSessionId !== undefined) {
+    next = {
+      ...next,
+      nativeThreadRef: {
+        driver: ProviderDriverKind.make("claudeAgent"),
+        nativeId: nativeSessionId,
+        strength: "strong",
+      },
+      nativeConversationHeadRef: null,
+    };
+  }
+  return next;
 }

@@ -66,7 +66,7 @@ export function piUiResponse(
 }
 
 export interface PiCustomAnswerRoute {
-  readonly lines: ReadonlyArray<unknown>;
+  readonly optionLines: ReadonlyArray<unknown>;
   readonly sentinel: string;
   readonly followUpTitlePrefix: string;
 }
@@ -148,6 +148,7 @@ export function piAskUserSingleSelectQuestion(
       if (!options.every((option, index) => lines[index] === rpivOptionLine(option, index))) {
         continue;
       }
+      const optionLines = lines.slice(0, -1);
       return {
         question: {
           id: questionId,
@@ -164,9 +165,9 @@ export function piAskUserSingleSelectQuestion(
         },
         // The follow-up repeats the option lines; only its trailing instruction is localized.
         customAnswerRoute: {
-          lines,
+          optionLines,
           sentinel,
-          followUpTitlePrefix: `${prefix}${text}\n\n${lines.slice(0, -1).join("\n")}\n\n`,
+          followUpTitlePrefix: `${prefix}${text}\n\n${optionLines.join("\n")}\n\n`,
         },
       };
     }
@@ -206,7 +207,7 @@ export class PiCustomAnswers {
       route === undefined ||
       typeof value !== "string" ||
       !value.trim() ||
-      route.lines.includes(value)
+      route.optionLines.includes(value)
     )
       return response;
     const queued = this.pending.get(route.followUpTitlePrefix) ?? [];

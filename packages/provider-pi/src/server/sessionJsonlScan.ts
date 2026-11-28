@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type { PiSessionEntry } from "./entries.ts";
 import { piRecordField, piRecordString } from "./rpc.ts";
 
 const MAX_LINE_BYTES = 1024 * 1024;
@@ -16,6 +17,7 @@ interface Entry {
   readonly id: string;
   readonly parentId: string | null;
   readonly isUser: boolean;
+  readonly isLabel: boolean;
   readonly timestamp: number | null;
 }
 
@@ -55,6 +57,7 @@ const scanSessionJsonl = Effect.fnUntraced(function* (
             isUser:
               piRecordField(record, "type") === "message" &&
               piRecordString(piRecordField(record, "message"), "role") === "user",
+            isLabel: piRecordField(record, "type") === "label",
             timestamp:
               timestamp === undefined
                 ? null
@@ -176,4 +179,30 @@ export const inspectSessionJsonl = Effect.fnUntraced(function* (
     skipped,
     walk,
   };
+});
+
+export const readBoundedSessionJsonl = Effect.fnUntraced(function* (
+  fs: FileSystem.FileSystem,
+  file: string,
+  account: (bytes: number) => Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>,
+  onSkip: () => void,
+) {
+  const entries = new Map<string, PiSessionEntry>();
+  let leafId: string | null = null;
+  yield* scanSessionJsonl(
+    fs,
+    file,
+    (entry) => {
+      entries.set(entry.id, {
+        parentId: entry.parentId,
+        isUserMessage: entry.isUser,
+        isLabel: entry.isLabel,
+        timestamp: entry.timestamp,
+      });
+      leafId = entry.id;
+    },
+    account,
+    onSkip,
+  );
+  return { entries, leafId };
 });

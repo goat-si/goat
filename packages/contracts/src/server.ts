@@ -311,6 +311,8 @@ export const ServerProvider = Schema.Struct({
   unavailableReason: Schema.optional(TrimmedNonEmptyString),
   models: Schema.Array(ServerProviderModel),
   modelsRetained: Schema.optionalKey(Schema.Boolean),
+  // Set by a ready check whose `models` may lack some the provider still offers, so they are kept.
+  modelsIncomplete: Schema.optionalKey(Schema.Boolean),
   // Kept apart from `models` so clients that predate it never offer them.
   updateRequiredModels: Schema.optionalKey(Schema.Array(ServerProviderUpdateRequiredModel)),
   slashCommands: Schema.Array(ServerProviderSlashCommand).pipe(

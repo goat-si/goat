@@ -14,8 +14,14 @@ const failureOf = (
   outcome:
     | OrchestrationV2ProviderFailure
     | { readonly failure: OrchestrationV2ProviderFailure }
+    | "completed"
     | undefined,
-) => (outcome !== undefined && "failure" in outcome ? outcome.failure : outcome);
+) =>
+  outcome === "completed"
+    ? assert.fail("expected no completed outcome")
+    : outcome !== undefined && "failure" in outcome
+      ? outcome.failure
+      : outcome;
 
 const USER_INPUT = 14;
 const PLANNER_RESPONSE = 15;
@@ -48,6 +54,13 @@ const STATUS_NOT_FOUND_ERROR = Buffer.concat([
   Buffer.from([0x12, 0x37]),
   Buffer.from(
     'NOT_FOUND (code 404): Requested entity was not found.\u001a\u0080\u0001HTTP 404 Not Found\n\n{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}',
+  ),
+]);
+// Antigravity 1.5 states the quota reset only as a Go duration in its message.
+const STATUS_QUOTA_ERROR = Buffer.concat([
+  Buffer.from([0x12, 0x6e]),
+  Buffer.from(
+    "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 4m42s.",
   ),
 ]);
 // The model's reply quoting the agent's quota notice is an ordinary planner response.
@@ -109,6 +122,13 @@ describe("watchAntigravityPromptOutcome", () => {
           retryable: true,
           resetAt: "1970-01-01T01:00:00.000Z",
         },
+      );
+      assert.deepInclude(
+        yield* turn([
+          [USER_INPUT, input],
+          [ERROR_MESSAGE, STATUS_QUOTA_ERROR],
+        ]),
+        { class: "usage_limit", resetAt: "1970-01-01T00:04:42.000Z" },
       );
       // The earlier error step is outside this turn.
       assert.isUndefined(
@@ -173,7 +193,11 @@ describe("watchAntigravityPromptOutcome", () => {
         [USER_INPUT, input],
         [ERROR_MESSAGE, STATUS_NOT_FOUND_ERROR],
       ]);
-      assert.isFalse(unknownModel !== undefined && "resumeWith" in unknownModel);
+      assert.isFalse(
+        unknownModel !== undefined &&
+          typeof unknownModel === "object" &&
+          "resumeWith" in unknownModel,
+      );
       assert.equal(failureOf(unknownModel)?.retryable, false);
       for (const error of [
         "messages.0.content.1.thinking.signature: Field required",

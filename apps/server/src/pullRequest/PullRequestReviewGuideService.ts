@@ -412,6 +412,7 @@ const make = Effect.gen(function* () {
             generated: textGeneration.generateReviewGuide({
               ...reviewGuideInputFromPullRequest(detail, activity, checkout.baseCommit),
               cwd: checkout.path,
+              projectCwd: workspaceRoot,
               modelSelection,
               instructions: projectSettings.reviewGuideInstructions,
               stack: checkout.stack,

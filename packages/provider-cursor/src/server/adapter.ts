@@ -38,6 +38,7 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import { CursorTransportFailure } from "./transportFailure.ts";
 import {
+  cursorLoadsProjectConfig,
   cursorMcpServers,
   cursorSubagentsDisabled,
   makeCursorAgentOptions,
@@ -1072,10 +1073,15 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           yield* Deferred.succeed(input.context.completed, undefined);
         });
 
-        const resolveWorkspaceMcpServers = (cwd: string | null) =>
-          cwd === null
+        const resolveWorkspaceMcpServers = (
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+        ) => {
+          const { cwd } = runtimePolicy;
+          return cwd === null
             ? Effect.succeed({})
-            : cursorWorkspaceMcpServers(cwd, env).pipe(
+            : cursorWorkspaceMcpServers(cwd, env, {
+                includeProject: cursorLoadsProjectConfig(runtimePolicy, platform),
+              }).pipe(
                 Effect.provideService(FileSystem.FileSystem, fileSystem),
                 Effect.provideService(Path.Path, path),
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -1087,6 +1093,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   }).pipe(Effect.as({})),
                 ),
               );
+        };
 
         const openAgent = Effect.fnUntraced(function* (
           openInput: CursorAgentSdk.CursorAgentOpenTarget & {
@@ -1321,9 +1328,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
             // A send-time set replaces the create-time set, so the workspace servers go only here and are
             // read again each turn from mcp.json and mcp-disabled.json; both merge with settingSources.
-            const workspaceMcpServers = yield* resolveWorkspaceMcpServers(
-              turnInput.runtimePolicy.cwd,
-            );
+            const workspaceMcpServers = yield* resolveWorkspaceMcpServers(turnInput.runtimePolicy);
             const mcpServers = { ...workspaceMcpServers, ...cursorMcpServers(mcpSession) };
             // Keep the correction owed by this turn across native active-run recovery.
             const memoryClaim = { claimed: memoryToolClaims.has(agent.nativeThreadId) };

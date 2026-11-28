@@ -1,4 +1,6 @@
 import { makeRegistryResolveWithRefresh } from "./registryResolveRefresh.ts";
+import { makeAcpRegistryIndexCache, registryLaunchIdentity } from "./registryIndexCache.ts";
+import { isSameResolvedPath, resolveAbsoluteLocalCommand } from "./localCommandPath.ts";
 import { makeRegistryRuntimeTemp, prepareRegistryRuntimeSpawn } from "./registryRuntimeTemp.ts";
 import type * as Scope from "effect/Scope";
 import { withoutNpmPrefix, withPreferredPath } from "./managedCommandPath.ts";
@@ -401,6 +403,7 @@ export type AcpRegistryInspection =
       readonly agentId: string;
       readonly version: string | null;
       readonly distribution: AcpRegistryDistributionKind | "local";
+      readonly launchIdentity?: string;
       readonly documentationUrl?: string;
     };
 
@@ -413,6 +416,11 @@ export class AcpRegistryCatalog extends Context.Service<
     readonly prepare: (
       input: AcpRegistryPrepareInput,
     ) => Effect.Effect<AcpRegistryPrepareResult, AcpRegistryError>;
+    readonly refreshIndex: (options?: {
+      readonly maxAgeMs?: number;
+      readonly failureBackoffMs?: number;
+    }) => Effect.Effect<boolean, AcpRegistryError>;
+    readonly invalidateIndex: () => Effect.Effect<void>;
     readonly inspect: (
       settings: AcpRegistrySettings,
       environment?: NodeJS.ProcessEnv,
@@ -511,11 +519,6 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       ? packageInstallRoot(agent, distribution)
       : path.join(packageInstallRoot(agent, distribution), "bin");
   const packageReceiptsDirectory = path.join(registryDirectory, "package-installs");
-  const registryRef = yield* Ref.make<AcpRegistryIndex | undefined>(undefined);
-  // When the network last served registryRef; unset while it holds the disk cache.
-  const registryFetchedAtMs = yield* Ref.make<number | undefined>(undefined);
-  const registryRevision = yield* Ref.make(0);
-  const registrySemaphore = yield* Semaphore.make(1);
   // Long installs must only block operations on the same agent.
   const installPermits = new Map<string, Semaphore.Semaphore>();
   const withInstallPermit = (agentId: string) => {
@@ -704,60 +707,12 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     return registry;
   });
 
-  const refreshRegistry = Effect.fn("AcpRegistryCatalog.refreshRegistry")(function* () {
-    const observedRevision = yield* Ref.get(registryRevision);
-    return yield* registrySemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        const currentRevision = yield* Ref.get(registryRevision);
-        const current = yield* Ref.get(registryRef);
-        if (current !== undefined && currentRevision !== observedRevision) return current;
-
-        const { registry, fetched } = yield* fetchRegistry().pipe(
-          Effect.map((registry) => ({ registry, fetched: true })),
-          Effect.catch((networkError) =>
-            readCachedRegistry.pipe(
-              Effect.flatMap(
-                Option.match({
-                  onNone: () => Effect.fail(networkError),
-                  onSome: (registry) => Effect.succeed({ registry, fetched: false }),
-                }),
-              ),
-            ),
-          ),
-        );
-        yield* Ref.set(registryRef, registry);
-        yield* Ref.set(registryFetchedAtMs, fetched ? yield* Clock.currentTimeMillis : undefined);
-        yield* Ref.update(registryRevision, (revision) => revision + 1);
-        return registry;
-      }),
-    );
-  });
-
-  const recentRegistry = Effect.fn("AcpRegistryCatalog.recentRegistry")(function* () {
-    const current = yield* Ref.get(registryRef);
-    const fetchedAtMs = yield* Ref.get(registryFetchedAtMs);
-    const now = yield* Clock.currentTimeMillis;
-    // A clock moved back makes the stamp untrustworthy, so it counts as stale.
-    if (
-      current !== undefined &&
-      fetchedAtMs !== undefined &&
-      now >= fetchedAtMs &&
-      now - fetchedAtMs < REGISTRY_SEARCH_MAX_AGE_MS
-    ) {
-      return current;
-    }
-    return yield* refreshRegistry();
-  });
-
-  const loadRegistry = Effect.fn("AcpRegistryCatalog.loadRegistry")(function* () {
-    const current = yield* Ref.get(registryRef);
-    if (current !== undefined) return current;
-
-    const cached = yield* readCachedRegistry;
-    if (Option.isNone(cached)) return yield* refreshRegistry();
-    yield* Ref.set(registryRef, cached.value);
-    return cached.value;
-  });
+  const { refreshRegistry, recentRegistry, refreshIndex, invalidateIndex, loadRegistry } =
+    yield* makeAcpRegistryIndexCache({
+      fetchRegistry,
+      readCachedRegistry,
+      defaultSearchMaxAgeMs: REGISTRY_SEARCH_MAX_AGE_MS,
+    });
 
   const runCommand = Effect.fn("AcpRegistryCatalog.runCommand")(function* (
     command: string,
@@ -964,6 +919,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       agent: AcpRegistryAgent,
       packageSpec: string,
       managerPath: string,
+      managedPrefix: string,
       environment: NodeJS.ProcessEnv,
     ) {
       const packageIdentity = parseNpxPackageSpec(packageSpec);
@@ -972,14 +928,23 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         timeout: PACKAGE_QUERY_TIMEOUT,
         truncatedOutputReason: "install_failed" as const,
       } as const;
-      const globalRoot = yield* runCommand(managerPath, ["root", "--global"], commandOptions).pipe(
-        Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)),
-      );
-      const globalPrefix = yield* runCommand(
+      const prefixArgs = ["--prefix", managedPrefix];
+      const globalRoot = yield* runCommand(
         managerPath,
-        ["prefix", "--global"],
+        ["root", "--global", ...prefixArgs],
         commandOptions,
       ).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      const globalPrefix = yield* runCommand(
+        managerPath,
+        ["prefix", "--global", ...prefixArgs],
+        commandOptions,
+      ).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      if (!(yield* isSameResolvedPath(fileSystem, path, platform, globalPrefix, managedPrefix))) {
+        return yield* new AcpRegistryError({
+          reason: "install_failed",
+          detail: `'${managerPath}' reported global prefix ${globalPrefix} instead of GOAT's managed prefix ${managedPrefix}. It may be a shim that ignores --prefix; put a real npm first on PATH.`,
+        });
+      }
       const packageRoot = path.join(globalRoot, ...packageIdentity.name.split("/"));
       const manifestPath = path.join(packageRoot, "package.json");
       const manifestInfo = yield* fileSystem.stat(manifestPath).pipe(Effect.option);
@@ -1116,7 +1081,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
     const discover =
       distribution === "npx"
-        ? () => discoverNpmGlobalPackage(agent, packageSpec, managerPath, packageEnvironment)
+        ? () =>
+            discoverNpmGlobalPackage(
+              agent,
+              packageSpec,
+              managerPath,
+              packageRoot,
+              packageEnvironment,
+            )
         : () => discoverUvGlobalPackage(agent, packageSpec, managerPath, packageEnvironment);
     const existing = yield* discover();
     if (Option.isSome(existing)) {
@@ -1127,11 +1099,15 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     const managerDirectory = yield* managerBinDirectory(managerPath);
     const installEnvironment = withPreferredPath(packageEnvironment, managerDirectory, platform);
     if (distribution === "npx") {
-      yield* runCommand(managerPath, ["install", "--global", packageSpec], {
-        env: installEnvironment,
-        timeout: PACKAGE_INSTALL_TIMEOUT,
-        truncatedOutputReason: "install_failed",
-      });
+      yield* runCommand(
+        managerPath,
+        ["install", "--global", packageSpec, "--prefix", packageRoot],
+        {
+          env: installEnvironment,
+          timeout: PACKAGE_INSTALL_TIMEOUT,
+          truncatedOutputReason: "install_failed",
+        },
+      );
     } else {
       yield* runCommand(managerPath, ["tool", "install", "--force", packageSpec], {
         env: installEnvironment,
@@ -1145,6 +1121,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         agent,
         packageSpec,
         managerPath,
+        packageRoot,
         packageEnvironment,
       );
       if (Option.isNone(installed)) {
@@ -1500,7 +1477,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
   const search: AcpRegistryCatalog["Service"]["search"] = Effect.fn("AcpRegistryCatalog.search")(
     function* (input) {
-      const registry = yield* recentRegistry();
+      const { index: registry } = yield* recentRegistry();
       const ranked = [];
       const managerAvailability = new Map<string, boolean>();
       for (const agent of registry.agents) {
@@ -1553,7 +1530,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
   const prepare: AcpRegistryCatalog["Service"]["prepare"] = Effect.fn("AcpRegistryCatalog.prepare")(
     function* (input) {
-      const registry = yield* refreshRegistry();
+      const { index: registry } = yield* refreshRegistry();
       const agent = yield* findAgent(registry, input.agentId);
       const distribution = yield* compatibleDistribution(agent, "auto");
       if (distribution.kind === "binary") {
@@ -1623,6 +1600,11 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
 
       const commandOverride = settings.commandPath.trim();
+      const launchIdentity = registryLaunchIdentity({
+        version: commandOverride.length > 0 ? null : agent.version,
+        distribution,
+        ...(commandOverride.length > 0 ? { commandOverride } : {}),
+      });
       if (commandOverride.length > 0) {
         const available =
           (yield* resolveExecutable(commandOverride, platform, environment ?? hostEnvironment)) !==
@@ -1633,6 +1615,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
               agentId,
               version: null,
               distribution: distribution.kind,
+              launchIdentity,
               ...(documentationUrl ? { documentationUrl } : {}),
             } as const)
           : ({
@@ -1682,6 +1665,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
               agentId,
               version: agent.version,
               distribution: "binary",
+              launchIdentity,
               ...(documentationUrl ? { documentationUrl } : {}),
             } as const;
           }),
@@ -1719,6 +1703,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         agentId,
         version: agent.version,
         distribution: distribution.kind,
+        launchIdentity,
         ...(documentationUrl ? { documentationUrl } : {}),
       } as const;
     },
@@ -1752,9 +1737,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       }
       yield* validateLocalExecutable(command);
       const env = options?.spawnEnvironment ?? environment ?? hostEnvironment;
+      const absoluteCommand = resolveAbsoluteLocalCommand(path, command);
       return {
         distribution: "local",
-        spawn: { command, args: settings.commandArgs, cwd, env, shell: false },
+        spawn: { command: absoluteCommand, args: settings.commandArgs, cwd, env, shell: false },
       } satisfies ResolvedAcpRegistryAgent;
     }
     const agentId = settings.agentId.trim();
@@ -1871,7 +1857,13 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       },
     } satisfies ResolvedAcpRegistryAgent;
   });
-  const resolve = makeRegistryResolveWithRefresh({ loadRegistry, refreshRegistry, resolveOnce });
+  const resolve = makeRegistryResolveWithRefresh({
+    loadRegistry,
+    refreshRegistry: () => refreshRegistry().pipe(Effect.map((result) => result.index)),
+    resolveDistribution: (agent, preference) =>
+      resolveAcpRegistryDistribution({ agent, preference, platformTarget }),
+    resolveOnce,
+  });
   const uninstallManagedBinary: AcpRegistryCatalog["Service"]["uninstallManagedBinary"] = (input) =>
     hostSettings
       .withSnapshot((settings) =>
@@ -1967,6 +1959,8 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
   return AcpRegistryCatalog.of({
     search,
     prepare,
+    refreshIndex,
+    invalidateIndex,
     inspect,
     resolve,
     prepareRuntimeSpawn: prepareRegistryRuntimeSpawn(acquireRuntimeTemp),

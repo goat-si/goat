@@ -3264,6 +3264,7 @@ export const layer = Layer.unwrap(
     const serverBrowser = yield* ServerBrowser.ServerBrowser;
     const previewSessions = yield* PreviewSessions.PreviewSessions;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
+    const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const sshHostSetup = yield* SshHostSetup.SshHostSetup;
     const codexRoutes = yield* CodexRoutes.CodexRouteService;
@@ -3335,7 +3336,16 @@ export const layer = Layer.unwrap(
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(Layer.merge(ProviderMaintenanceRunner.layer, starPromptLayer)),
+              // Installs outlive the connection that started them and lock across clients.
+              Layer.provide(
+                Layer.merge(
+                  Layer.succeed(
+                    ProviderMaintenanceRunner.ProviderMaintenanceRunner,
+                    providerMaintenanceRunner,
+                  ),
+                  starPromptLayer,
+                ),
+              ),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate),

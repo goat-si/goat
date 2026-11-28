@@ -195,6 +195,8 @@ createInterface({input: process.stdin}).on("line", (line) => {
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
         search: () => Effect.die("unexpected search"),
         prepare: () => Effect.die("unexpected prepare"),
+        refreshIndex: () => Effect.succeed(false),
+        invalidateIndex: () => Effect.void,
         inspect: () => Effect.die("unexpected inspect"),
         prepareRuntimeSpawn: (resolved) => Effect.succeed(resolved.spawn),
         uninstallManagedBinary: () => Effect.die("unexpected uninstall"),

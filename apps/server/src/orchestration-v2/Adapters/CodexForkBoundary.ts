@@ -3,9 +3,9 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Effect from "effect/Effect";
 
 import {
-  countTerminalTurnsAfterBoundary,
   isTerminalProviderTurn,
   providerTurnsForThread,
+  terminalTurnsAfterBoundary,
 } from "./CodexTurnHistory.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
@@ -16,11 +16,11 @@ const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkR
       return 0;
     }
 
-    const rollbackTurnCount = countTerminalTurnsAfterBoundary(
+    const rollbackTurns = terminalTurnsAfterBoundary(
       providerTurnsForThread(input.sourceProviderTurns, input.sourceProviderThread),
       input.providerTurnId,
     );
-    if (rollbackTurnCount === null) {
+    if (rollbackTurns === null) {
       return yield* new ProviderAdapter.ProviderAdapterForkThreadError({
         driver: CODEX_PROVIDER,
         providerThreadId: input.sourceProviderThread.id,
@@ -28,7 +28,7 @@ const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkR
       });
     }
 
-    return rollbackTurnCount;
+    return rollbackTurns.length;
   },
 );
 
@@ -53,35 +53,61 @@ export const resolveCodexForkBoundary = Effect.fn("CodexAdapterV2.resolveForkBou
   return { lastTurnId: nativeTurnId, rollbackTurnCount: 0 };
 });
 
-export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
-  function* (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) {
-    const providerTurns = input.providerThreadTurns;
-    switch (input.target.type) {
-      case "thread_start":
-        return providerTurns.filter(isTerminalProviderTurn).length;
-      case "provider_turn": {
-        if (input.target.providerTurn.providerThreadId !== input.providerThread.id) {
-          return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
-            driver: CODEX_PROVIDER,
-            providerThreadId: input.providerThread.id,
-            cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn belongs to provider thread ${input.target.providerTurn.providerThreadId}.`,
-          });
-        }
-
-        const rollbackTurnCount = countTerminalTurnsAfterBoundary(
-          providerTurns,
-          input.target.providerTurn.id,
-        );
-        if (rollbackTurnCount === null) {
-          return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
-            driver: CODEX_PROVIDER,
-            providerThreadId: input.providerThread.id,
-            cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn was not found in durable provider turn history.`,
-          });
-        }
-
-        return rollbackTurnCount;
+const resolveCodexRollbackTurns = Effect.fn("CodexAdapterV2.resolveRollbackTurns")(function* (
+  input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput,
+) {
+  const providerTurns = input.providerThreadTurns;
+  switch (input.target.type) {
+    case "thread_start":
+      return providerTurns.filter(isTerminalProviderTurn);
+    case "provider_turn": {
+      if (input.target.providerTurn.providerThreadId !== input.providerThread.id) {
+        return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+          driver: CODEX_PROVIDER,
+          providerThreadId: input.providerThread.id,
+          cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn belongs to provider thread ${input.target.providerTurn.providerThreadId}.`,
+        });
       }
+
+      const rollbackTurns = terminalTurnsAfterBoundary(providerTurns, input.target.providerTurn.id);
+      if (rollbackTurns === null) {
+        return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+          driver: CODEX_PROVIDER,
+          providerThreadId: input.providerThread.id,
+          cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn was not found in durable provider turn history.`,
+        });
+      }
+
+      return rollbackTurns;
     }
-  },
+  }
+});
+
+export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
+  (input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput) =>
+    resolveCodexRollbackTurns(input).pipe(Effect.map((turns) => turns.length)),
 );
+
+export const resolveCodexRollbackPlan = Effect.fn("CodexAdapterV2.resolveRollbackPlan")(function* (
+  input: ProviderAdapter.ProviderAdapterV2RollbackThreadInput,
+  nativeThreadId: string,
+) {
+  const rollbackTurns = yield* resolveCodexRollbackTurns(input);
+  const nativeConversationHeadRef =
+    input.target.type === "provider_turn" ? input.target.providerTurn.nativeTurnRef : null;
+  const keptNativeTurnId = nativeConversationHeadRef?.nativeId ?? null;
+  const nativeTurnIds = rollbackTurns.flatMap((turn) => turn.nativeTurnRef?.nativeId ?? []);
+  if (rollbackTurns.length > 0 && keptNativeTurnId === null && nativeTurnIds.length === 0) {
+    return yield* new ProviderAdapter.ProviderAdapterRollbackThreadError({
+      driver: CODEX_PROVIDER,
+      providerThreadId: input.providerThread.id,
+      cause: `Cannot roll back Codex thread ${nativeThreadId}: no recorded native turn IDs are available for the turns being removed.`,
+    });
+  }
+  return {
+    numTurns: rollbackTurns.length,
+    nativeConversationHeadRef,
+    keptNativeTurnId,
+    nativeTurnIds,
+  };
+});

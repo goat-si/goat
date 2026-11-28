@@ -5,8 +5,12 @@ import {
   ProviderTurnId,
   type OrchestrationV2ProviderTurn,
 } from "@goat/contracts";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { PI_PROVIDER } from "../adapter.ts";
 import type * as Fixture from "../adapter.test.ts";
 import type * as FakePiModule from "./fakePi.ts";
@@ -187,6 +191,81 @@ export function registerPiModelTailChecks({
         result.success.providerThread.nativeThreadRef?.nativeId,
         "/fake/rolled-back-session.jsonl",
       );
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("ends the session as stopped when Pi exits while no turn is running", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const adapter = yield* makeAdapter(fake, "");
+      const runtime = yield* adapter.openSession({
+        threadId: THREAD_ID,
+        providerSessionId: SESSION_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      const statuses: Array<{ status: string; lastError: string | null | undefined }> = [];
+      const drained = yield* runtime.events.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            if (event.type === "provider_session.updated")
+              statuses.push({
+                status: event.providerSession.status,
+                lastError: event.providerSession.lastError,
+              });
+          }),
+        ),
+        Effect.exit,
+        Effect.forkScoped,
+      );
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.closeStdout;
+      const exit = yield* Fiber.join(drained);
+      assert.isTrue(Exit.isSuccess(exit));
+      assert.deepEqual(statuses.at(-1), { status: "stopped", lastError: null });
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("does not show an empty text block that outlives the stream flush", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      const text = (event: Record<string, unknown>) =>
+        fake.emit({ type: "message_update", assistantMessageEvent: event });
+      // Gemini sends an empty text part on tool-use steps; it stays open past one flush.
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* text({ type: "text_start", contentIndex: 0 });
+      yield* text({ type: "text_delta", contentIndex: 0, delta: "" });
+      yield* fake.emit({ type: "tool_execution_start", toolCallId: "read-call", toolName: "read" });
+      yield* takeEvent((event) => event.type === "turn_item.updated");
+      yield* TestClock.adjust(Duration.millis(120));
+      yield* text({ type: "text_end", contentIndex: 0, content: "" });
+      yield* fake.emit({ type: "message_end", message: { role: "assistant" } });
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* text({ type: "text_end", contentIndex: 0, content: "Answer" });
+      yield* fake.emit({ type: "message_end", message: { role: "assistant" } });
+      yield* fake.emit({ type: "agent_settled" });
+      const texts: Array<string> = [];
+      while (true) {
+        const event = yield* takeEvent(
+          (event) => event.type === "message.updated" || event.type === "turn.terminal",
+        );
+        if (event.type !== "message.updated") break;
+        texts.push(event.message.text);
+      }
+      assert.deepEqual(texts, ["Answer"]);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 }

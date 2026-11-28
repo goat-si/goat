@@ -17,6 +17,8 @@ import { antigravityManagedPath, antigravityProfileRoot } from "./AntigravityPro
 const ERROR_STEP_TYPE = 17;
 // CORTEX_STEP_TYPE_PLANNER_RESPONSE: the model answered within this turn.
 const PLANNER_RESPONSE_STEP_TYPE = 15;
+// CORTEX_STEP_STATUS_DONE.
+const DONE_STEP_STATUS = 3;
 // The harness error text leads the payload; a Go stack trace follows it.
 const MAX_ERROR_PAYLOAD_BYTES = 16_384;
 // The Go harness's rendering of a Google API error, as the agent's api_errors.py reads it.
@@ -28,6 +30,8 @@ const QUOTA_EXHAUSTED = /\breason:QUOTA_EXHAUSTED\b/;
 const RESET_TIMESTAMP = /\bquotaResetTimeStamp:([^\s\]]+)/;
 const RESET_DELAY = /\bquotaResetDelay:((?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+)(?=[\s\]])/;
 const RETRY_DELAY = /\bretryDelay:((?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+)(?=[\s\]])/;
+// Antigravity 1.5 may state the reset only in the message: "... Resets in 4m42s.".
+const RESETS_IN = /\bResets in ((?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+)(?!\w|\.\d)/;
 const GO_DURATION_PART = /(\d+(?:\.\d+)?)(ns|us|µs|μs|ms|h|m|s)/g;
 const GO_DURATION_UNIT_MS: Record<string, number> = {
   ns: 1e-6,
@@ -43,6 +47,7 @@ const NATIVE_SESSION_ID = /^[\w-]+$/;
 
 interface LastStep {
   readonly type: number;
+  readonly status: number | null;
   readonly payload: Uint8Array | null;
   readonly reachedModel: boolean;
 }
@@ -70,9 +75,13 @@ const lastStepIndex = (database: NodeSqlite.DatabaseSync) => {
 const lastStepAfter =
   (index: number) =>
   (database: NodeSqlite.DatabaseSync): LastStep | undefined => {
+    const hasStatus =
+      database.prepare("SELECT 1 FROM pragma_table_info('steps') WHERE name = 'status'").get() !==
+      undefined;
     const row = database
       .prepare(
-        `SELECT step_type AS type, substr(step_payload, 1, ?) AS payload
+        `SELECT step_type AS type, ${hasStatus ? "status" : "NULL"} AS status,
+           substr(step_payload, 1, ?) AS payload
          FROM steps WHERE idx > ? ORDER BY idx DESC LIMIT 1`,
       )
       .get(MAX_ERROR_PAYLOAD_BYTES, index);
@@ -83,6 +92,7 @@ const lastStepAfter =
         .get(index, PLANNER_RESPONSE_STEP_TYPE) !== undefined;
     return {
       type: row.type,
+      status: typeof row.status === "number" ? row.status : null,
       payload: row.payload instanceof Uint8Array ? row.payload : null,
       reachedModel,
     };
@@ -92,7 +102,8 @@ function resetAtFrom(text: string, now: DateTime.Utc | undefined): string | unde
   // makeProviderFailure drops a timestamp that does not parse, so fall back to the delay.
   const timestamp = RESET_TIMESTAMP.exec(text)?.[1];
   if (timestamp !== undefined && Option.isSome(DateTime.make(timestamp))) return timestamp;
-  const delay = RESET_DELAY.exec(text)?.[1] ?? RETRY_DELAY.exec(text)?.[1];
+  const delay =
+    RESET_DELAY.exec(text)?.[1] ?? RETRY_DELAY.exec(text)?.[1] ?? RESETS_IN.exec(text)?.[1];
   if (delay === undefined || now === undefined) return undefined;
   let delayMs = 0;
   for (const [, amount, unit] of delay.matchAll(GO_DURATION_PART)) {
@@ -234,6 +245,15 @@ export const watchAntigravityPromptOutcome = Effect.fn("AntigravityTurnOutcome.w
           Effect.orElseSucceed(() => undefined),
         )
       : undefined;
-    return turnFailure(result.stopReason, step, options?.retired ? undefined : yield* DateTime.now);
+    const retired = options?.retired === true;
+    const now = retired ? undefined : yield* DateTime.now;
+    const failure = turnFailure(result.stopReason, step, now);
+    // The reply finished but session/prompt never answered.
+    const finished =
+      retired &&
+      failure === undefined &&
+      step?.type === PLANNER_RESPONSE_STEP_TYPE &&
+      step.status === DONE_STEP_STATUS;
+    return finished ? ("completed" as const) : failure;
   });
 });

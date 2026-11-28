@@ -15,6 +15,12 @@ import * as Schema from "effect/Schema";
 
 import { antigravityManagedPath, antigravityProfileRoot } from "./AntigravityProfilePaths.ts";
 import { boundAntigravityToolText, isCutAntigravityToolText } from "./AntigravityProtocol.ts";
+import {
+  readDiskSwarmMembersByConversationId,
+  swarmAddLaunches,
+  swarmRoleLabel,
+  type AntigravityChildLaunch,
+} from "./AntigravitySwarmWork.ts";
 
 // Field numbers from the runtime's trajectory protos (exa.cortex_pb).
 const STEP_METADATA = 5;
@@ -31,9 +37,9 @@ const MAX_STEP_BYTES = 1024 * 1024;
 const MAX_INVOKE_ROWS = 200;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 const MAX_CHILDREN = 16;
-const TRANSCRIPT_BYTE_CAP = 256 * 1024;
-const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
-const STEP_TEXT_CAP = 4_000;
+export const TRANSCRIPT_BYTE_CAP = 256 * 1024;
+export const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
+export const STEP_TEXT_CAP = 4_000;
 const TOOL_INPUT_CAP = 1_000;
 const MAX_MESSAGE_FILES = 256;
 const MAX_DETACHED_CHILDREN = 64;
@@ -41,22 +47,17 @@ const MAX_DETACHED_CHILDREN = 64;
 /** GOAT's title for a batch whose launch text it never saw. */
 export const ANTIGRAVITY_SUBAGENT_BATCH_TITLE = "Antigravity subagent batch";
 
-interface AntigravityChildLaunch {
-  readonly role: string;
-  readonly prompt: string;
-}
-
 const LaunchInput = Schema.Struct({ Role: Schema.String, Prompt: Schema.String });
 // agy 1.5 launches one child per call with a flat input; earlier releases send a batch.
 const decodeLaunchInput = Schema.decodeUnknownOption(
   Schema.Union([Schema.Struct({ Subagents: Schema.NonEmptyArray(LaunchInput) }), LaunchInput]),
 );
 
-/** `invoke_subagent` arguments, from the permission prompt or the persisted record. */
+/** `invoke_subagent` or native `swarm` (`action: "add"`) arguments. */
 export function antigravitySubagentLaunches(
   input: unknown,
 ): ReadonlyArray<AntigravityChildLaunch> | undefined {
-  return Option.getOrUndefined(
+  const classic = Option.getOrUndefined(
     Option.map(decodeLaunchInput(input), (decoded) =>
       ("Subagents" in decoded ? decoded.Subagents : [decoded]).map((entry) => ({
         role: entry.Role,
@@ -64,6 +65,7 @@ export function antigravitySubagentLaunches(
       })),
     ),
   );
+  return classic ?? swarmAddLaunches(input);
 }
 
 /** Batch title and prompt; reads match permission-prompt tool call ids against this exact text. */
@@ -122,7 +124,7 @@ const text = (bytes: Uint8Array | undefined, field: number) => {
   return value === undefined ? undefined : textDecoder.decode(value);
 };
 
-interface InvokeRecord {
+export interface InvokeRecord {
   readonly toolCallId: string | undefined;
   readonly launches: ReadonlyArray<AntigravityChildLaunch>;
   readonly children: ReadonlyArray<{
@@ -131,7 +133,7 @@ interface InvokeRecord {
   }>;
 }
 
-const NATIVE_ID = /^[A-Za-z0-9-]{1,64}$/;
+export const NATIVE_ID = /^[A-Za-z0-9-]{1,64}$/;
 
 /** Undefined for steps this reader cannot decode, so they never count as proof. */
 const safely =
@@ -179,7 +181,7 @@ const payloadOf = (row: unknown) =>
     ? row.step_payload
     : undefined;
 
-interface BatchLaunch {
+export interface BatchLaunch {
   readonly title: string | null;
   readonly prompt: string;
 }
@@ -320,7 +322,7 @@ const decodeTranscriptLine = Schema.decodeUnknownOption(Schema.fromJsonString(Tr
 
 // The runtime records each tool argument value as JSON text.
 const decodeArgument = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
-const toolArguments = (args: unknown) =>
+export const toolArguments = (args: unknown) =>
   Predicate.isObject(args)
     ? Object.fromEntries(
         Object.entries(args).map(([key, value]) => [
@@ -330,7 +332,7 @@ const toolArguments = (args: unknown) =>
       )
     : (args ?? {});
 
-const capText = (value: string, limit: number) =>
+export const capText = (value: string, limit: number) =>
   value.length <= limit ? value : `${value.slice(0, limit)}…`;
 
 /** Skips the runtime's opening envelope around the launch prompt the view already shows. */
@@ -368,10 +370,9 @@ function transcriptSteps(
 }
 
 /** Reads the tail of the transcript at the named child's own unlinked profile path. */
-async function readChildTranscript(
+export async function readChildTranscriptRaw(
   profileRoot: string,
   child: InvokeRecord["children"][number],
-  prompt: string,
   byteCap: number,
 ) {
   const expected = (
@@ -414,22 +415,75 @@ async function readChildTranscript(
     let lineStart = 0;
     if (tailStart > 0) {
       const newline = bytes.indexOf(0x0a);
-      if (newline === -1) return { steps: [], truncated: true };
+      if (newline === -1) return { contents: "", truncated: true };
       lineStart = newline + 1;
     }
     const contents = bytes.toString("utf8", lineStart);
-    return { steps: transcriptSteps(contents, prompt), truncated: tailStart > 0 };
+    return { contents, truncated: tailStart > 0 };
   } finally {
     await handle.close();
   }
 }
 
-class AntigravityChildWorkReadError extends Schema.TaggedError<AntigravityChildWorkReadError>()(
+async function readChildTranscript(
+  profileRoot: string,
+  child: InvokeRecord["children"][number],
+  prompt: string,
+  byteCap: number,
+) {
+  const raw = await readChildTranscriptRaw(profileRoot, child, byteCap);
+  if (raw === undefined) return undefined;
+  return {
+    steps: raw.contents.length === 0 ? [] : transcriptSteps(raw.contents, prompt),
+    truncated: raw.truncated,
+  };
+}
+
+export class AntigravityChildWorkReadError extends Schema.TaggedError<AntigravityChildWorkReadError>()(
   "AntigravityChildWorkReadError",
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
     return "Could not read Antigravity subagent records.";
+  }
+}
+
+export async function resolveAntigravityInvokeRecord(
+  profileRoot: string,
+  input: {
+    readonly rootSessionId: string;
+    readonly nativeTaskId: string;
+    readonly childSessionId?: string | null | undefined;
+    readonly launch: BatchLaunch;
+    readonly siblings: ReadonlyArray<BatchLaunch & { readonly nativeTaskId: string }>;
+  },
+): Promise<InvokeRecord | undefined> {
+  const detached = await findDetachedInvokeRecord(
+    profileRoot,
+    input.rootSessionId,
+    input.nativeTaskId,
+  );
+  if (detached !== undefined) return detached;
+  if (input.childSessionId != null && NATIVE_ID.test(input.childSessionId)) {
+    return {
+      toolCallId: input.nativeTaskId,
+      launches: [{ role: input.launch.title ?? "", prompt: input.launch.prompt }],
+      children: [{ conversationId: input.childSessionId }],
+    };
+  }
+  const databasePath = (
+    await antigravityManagedPath(
+      profileRoot,
+      ["antigravity-acp", "conversations", `${input.rootSessionId}.db`],
+      "file",
+    )
+  )?.path;
+  if (databasePath === undefined) return undefined;
+  const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+  try {
+    return findInvokeRecord(database, input);
+  } finally {
+    database.close();
   }
 }
 
@@ -447,27 +501,7 @@ export const readAntigravityChildWork = Effect.fn("readAntigravityChildWork")(fu
     try: async (): Promise<ReadonlyArray<OrchestrationV2NativeChildWork>> => {
       const profileRoot = await antigravityProfileRoot(input.profileDirectory);
       if (profileRoot === undefined) return [];
-      let record = await findDetachedInvokeRecord(
-        profileRoot,
-        input.rootSessionId,
-        input.nativeTaskId,
-      );
-      if (record === undefined) {
-        const databasePath = (
-          await antigravityManagedPath(
-            profileRoot,
-            ["antigravity-acp", "conversations", `${input.rootSessionId}.db`],
-            "file",
-          )
-        )?.path;
-        if (databasePath === undefined) return [];
-        const database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
-        try {
-          record = findInvokeRecord(database, input);
-        } finally {
-          database.close();
-        }
-      }
+      const record = await resolveAntigravityInvokeRecord(profileRoot, input);
       if (record === undefined) return [];
       const { launches, children } = record;
       // One budget for the whole batch, so the response stays small however many children ran.
@@ -580,7 +614,7 @@ function detachedLaunchCall(message: ChildMessage, rootSessionId: string) {
   const call = tool?.toolCall;
   return message.sender === rootSessionId &&
     (tool?.conversationId === undefined || tool.conversationId === rootSessionId) &&
-    call?.name === "invoke_subagent"
+    (call?.name === "invoke_subagent" || call?.name === "swarm")
     ? call
     : undefined;
 }
@@ -619,7 +653,7 @@ async function findDetachedInvokeRecord(
 ): Promise<InvokeRecord | undefined> {
   const childIds = await listDetachedChildIds(profileRoot, rootSessionId);
   if (childIds === undefined || childIds.length === 0) return undefined;
-  const matches: Array<InvokeRecord> = [];
+  const matches: Array<InvokeRecord & { readonly isSwarm: boolean }> = [];
   for (const childId of childIds) {
     const messages = await readInbox(profileRoot, childId).catch(() => undefined);
     // An unreadable or oversized sibling inbox could also claim this id, so uniqueness is unproven.
@@ -630,25 +664,50 @@ async function findDetachedInvokeRecord(
     if (launchMessage === undefined) continue;
     const subagent = await readDetachedSubagent(profileRoot, rootSessionId, childId);
     if (subagent === undefined) return undefined;
-    const argumentsJson = launchMessage.sourceMetadata?.tool?.toolCall?.argumentsJson;
+    const call = launchMessage.sourceMetadata?.tool?.toolCall;
+    const isSwarm = call?.name === "swarm";
+    const argumentsJson = call?.argumentsJson;
     const parsedArgs =
       argumentsJson === undefined
         ? undefined
         : Option.getOrUndefined(decodeArgument(argumentsJson));
-    const [fromArgs] = antigravitySubagentLaunches(parsedArgs) ?? [];
+    const argLaunches = antigravitySubagentLaunches(parsedArgs);
+    const descriptorLabel = swarmRoleLabel(subagent.subagentDescriptor?.role);
+    const matchedLaunch =
+      isSwarm && descriptorLabel !== undefined
+        ? (argLaunches?.find((entry) => entry.role.startsWith(descriptorLabel)) ?? {
+            role: descriptorLabel,
+            prompt: launchMessage.content ?? argLaunches?.[0]?.prompt ?? "",
+          })
+        : argLaunches?.[0];
     matches.push({
+      isSwarm,
       toolCallId: nativeTaskId,
       launches: [
-        fromArgs ?? {
-          role: subagent.subagentDescriptor?.role ?? "",
+        matchedLaunch ?? {
+          role: descriptorLabel ?? subagent.subagentDescriptor?.role ?? "",
           prompt: launchMessage.content ?? "",
         },
       ],
       children: [{ conversationId: childId }],
     });
   }
-  const [match] = matches;
-  return matches.length === 1 ? match : undefined;
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  if (matches.length > 1 && matches.every((entry) => entry.isSwarm)) {
+    const ordered = [...matches].sort((left, right) =>
+      (left.launches[0]?.role ?? "").localeCompare(right.launches[0]?.role ?? "", undefined, {
+        numeric: true,
+      }),
+    );
+    return {
+      toolCallId: nativeTaskId,
+      launches: ordered.flatMap((entry) => entry.launches),
+      children: ordered.flatMap((entry) => entry.children),
+    };
+  }
+  return undefined;
 }
 
 const PENDING_REPLY_TAIL_BYTES = 64 * 1024;
@@ -799,20 +858,32 @@ export const readAntigravityChildrenAtWork = Effect.fn("readAntigravityChildrenA
       const reported = new Set(
         (await readInbox(profileRoot, input.rootSessionId)).map((message) => message.sender),
       );
-      const atWork: Array<string> = [];
+      const swarmMembers = await readDiskSwarmMembersByConversationId(
+        profileRoot,
+        input.rootSessionId,
+        MAX_STEP_BYTES,
+        NATIVE_ID,
+      );
+      const atWork = new Set<string>();
       for (const childId of childIds) {
         if (reported.has(childId)) continue;
+        const swarmMember = swarmMembers.get(childId);
+        if (swarmMember?.killed === true || swarmMember?.parked === true) continue;
         // `manage_subagents` kill only marks the record; a killed child never reports.
         const subagent = await readDetachedSubagent(profileRoot, input.rootSessionId, childId);
         if (subagent?.state === "SUBAGENT_STATE_KILLED") continue;
+        const directTaskId = `swarm:${childId}`;
+        if (input.toolCallIds.includes(directTaskId)) {
+          atWork.add(directTaskId);
+        }
         for (const message of await readInbox(profileRoot, childId)) {
           const launch = detachedLaunchCall(message, input.rootSessionId);
           if (launch !== undefined && input.toolCallIds.includes(launch.id)) {
-            atWork.push(launch.id);
+            atWork.add(launch.id);
           }
         }
       }
-      return atWork;
+      return [...atWork];
     };
     return yield* Effect.tryPromise({
       try: read,

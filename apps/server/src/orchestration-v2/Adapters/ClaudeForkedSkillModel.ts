@@ -13,13 +13,12 @@ export function lastClaudeTranscriptModel(messages: ReadonlyArray<SessionMessage
 }
 
 type Registered = {
-  readonly runToolUseId: string | null;
   readonly task: Pick<OrchestrationV2Subagent, "model" | "status">;
 };
 
 /**
- * A `context: fork` skill has no Agent call and streams none of its own frames; only its
- * transcript, written after the fork reports its outcome, records the model it ran on.
+ * A `context: fork` skill, or a foreground subagent whose replies were never streamed,
+ * leaves no model on any frame; only its transcript records it, written once it finishes.
  */
 export const claudeForkedSkillModels = Effect.fn("ClaudeForkedSkillModel.models")(function* <
   E,
@@ -38,12 +37,7 @@ export const claudeForkedSkillModels = Effect.fn("ClaudeForkedSkillModel.models"
   if (lookup === undefined) return updates;
   for (const taskId of input.taskIds) {
     const before = (yield* input.registered).get(taskId);
-    if (
-      before === undefined ||
-      before.runToolUseId !== null ||
-      before.task.model !== null ||
-      before.task.status === "running"
-    )
+    if (before === undefined || before.task.model !== null || before.task.status === "running")
       continue;
     const model = yield* lookup(taskId).pipe(
       Effect.catch(() =>

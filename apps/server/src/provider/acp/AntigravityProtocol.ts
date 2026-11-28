@@ -11,7 +11,13 @@ import * as Schema from "effect/Schema";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
+import type { AcpAdapterV2Flavor } from "@goat/provider-acp/server/adapter";
+import { parseElicitationForm } from "@goat/provider-acp/server/elicitationForm";
 import type { AcpToolCallState } from "@goat/provider-acp/server/runtimeModel";
+import {
+  ACP_RAW_INPUT_PATH_KEYS,
+  acpChangedPathsOfToolCall,
+} from "@goat/provider-acp/server/clientPolicy";
 
 import {
   ANTIGRAVITY_EDIT_DIFF_OMITTED,
@@ -19,6 +25,20 @@ import {
   isAntigravitySnippetPatch,
   readAntigravityPreEditFile,
 } from "./AntigravityEditLocation.ts";
+import {
+  antigravitySwarmAddChildSessionId,
+  antigravitySwarmAddModel,
+  identifyAntigravitySwarmToolCall,
+  normalizeAntigravitySwarmToolPresentation,
+  readAntigravityToolMeta,
+  type AntigravitySwarmToolName,
+} from "./AntigravitySwarmProtocol.ts";
+
+export {
+  antigravitySwarmAddChildSessionId,
+  antigravitySwarmAddModel,
+  type AntigravitySwarmToolName,
+};
 
 const TOOL_TEXT_LIMIT = 8_000;
 const TOOL_TEXT_TRUNCATED = "[Earlier output truncated]\n\n";
@@ -187,6 +207,36 @@ function boundQuestionText(text: string, limit: number): string {
 function questionLabel(option: EffectAcpSchema.PermissionOption): string {
   return boundQuestionText(option.name.trim() || option.optionId, QUESTION_LABEL_LIMIT);
 }
+
+const isAskQuestionForm = Schema.is(
+  Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Unknown) }),
+);
+const isAskQuestionField = Schema.is(
+  Schema.Struct({ title: Schema.String, description: Schema.optional(Schema.String) }),
+);
+
+/** agy's ask_question puts each question in its field's title and a count in the message. */
+export const extractAntigravityElicitationForm: NonNullable<
+  AcpAdapterV2Flavor["extractElicitationForm"]
+> = (request) => {
+  if (request.mode !== "form" || !isAskQuestionForm(request.requestedSchema)) return undefined;
+  const form = parseElicitationForm(request.requestedSchema, request.message);
+  if (form === undefined) return undefined;
+  const { properties } = request.requestedSchema;
+  return {
+    questions: form.questions.map((question, index) => {
+      const field = properties[question.id];
+      if (!isAskQuestionField(field) || field.description?.trim() || !field.title.trim()) {
+        return question;
+      }
+      return { ...question, header: `Question ${index + 1}`, question: field.title.trim() };
+    }),
+    respond: (answers) => {
+      const content = form.content(answers);
+      return content === undefined ? { action: "cancel" } : { action: "accept", content };
+    },
+  };
+};
 
 export function extractAntigravityUserInputQuestion(
   request: EffectAcpSchema.RequestPermissionRequest,
@@ -429,6 +479,34 @@ export function makeAntigravityReadRepair() {
   };
 }
 
+/** Stands in for a content entry the size limits removed or cut, so its paths read as unknown. */
+const UNREAD_TOOL_CONTENT = { type: "_t3_unknown", originalType: "unread", raw: null } as const;
+
+function namesSamePaths(
+  sent: { readonly content: ReadonlyArray<unknown> },
+  kept: { readonly content: ReadonlyArray<unknown> },
+): boolean {
+  const sentPaths = acpChangedPathsOfToolCall(sent);
+  const keptPaths = acpChangedPathsOfToolCall(kept);
+  if (sentPaths === "unknown" || keptPaths === "unknown") return sentPaths === keptPaths;
+  return (
+    sentPaths.length === keptPaths.length &&
+    sentPaths.every((path, index) => path === keptPaths[index])
+  );
+}
+
+/** The bounded raw input with each path the agent sent put back, or blanked when it is too long. */
+function withSentRawInputPaths(sent: unknown, bounded: unknown): unknown {
+  if (!Predicate.isObject(sent) || !Predicate.isObject(bounded)) return bounded;
+  const paths: Record<string, string> = {};
+  for (const key of ACP_RAW_INPUT_PATH_KEYS) {
+    const path = sent[key];
+    if (path === undefined || path === null || path === bounded[key]) continue;
+    paths[key] = typeof path === "string" && path.length <= TOOL_TEXT_LIMIT ? path : "";
+  }
+  return { ...bounded, ...paths };
+}
+
 export function normalizeAntigravitySessionUpdate(
   notification: EffectAcpSchema.SessionNotification,
 ): EffectAcpSchema.SessionNotification {
@@ -441,7 +519,11 @@ export function normalizeAntigravitySessionUpdate(
     const decoded = Option.getOrUndefined(
       decodeToolCallContent(sanitizeToolValue(entry, contentBudget, 0)),
     );
-    return decoded === undefined ? [] : [decoded];
+    const kept = decoded === undefined ? [] : [decoded];
+    // The size limits may drop an entry or cut its path; what is left is not the whole change.
+    return namesSamePaths({ content: [entry] }, { content: kept })
+      ? kept
+      : [...kept, UNREAD_TOOL_CONTENT];
   });
   const meta = sanitizeAntigravityToolPayload(update._meta);
   return {
@@ -450,7 +532,12 @@ export function normalizeAntigravitySessionUpdate(
       ...update,
       ...(typeof update.title === "string" ? { title: boundText(update.title) } : {}),
       ...(update.rawInput !== undefined
-        ? { rawInput: sanitizeAntigravityToolPayload(update.rawInput) }
+        ? {
+            rawInput: withSentRawInputPaths(
+              update.rawInput,
+              sanitizeAntigravityToolPayload(update.rawInput),
+            ),
+          }
         : {}),
       ...(update.rawOutput !== undefined
         ? { rawOutput: sanitizeAntigravityToolPayload(update.rawOutput) }
@@ -585,7 +672,7 @@ export function normalizeAntigravityToolCall(
       ...(exitCode !== undefined ? { exitCode } : {}),
     };
   }
-  return {
+  const normalized: AcpToolCallState = {
     ...toolCall,
     ...(kind !== undefined ? { kind } : {}),
     ...(command !== undefined ? { command } : {}),
@@ -597,6 +684,7 @@ export function normalizeAntigravityToolCall(
         : {}),
     data,
   };
+  return normalizeAntigravitySwarmToolPresentation(normalized, boundText);
 }
 
 export function isAntigravityOpenCommand(toolCall: AcpToolCallState): boolean {
@@ -612,19 +700,22 @@ const ANTIGRAVITY_SUBAGENT_TITLES = new Set([
   "Run invoke_subagent",
 ]);
 
-/** The ACP agent reports subagent calls as ordinary tools without child IDs or models. */
+/** Classifies native Antigravity subagent and `swarm` worker launch tool calls. */
 export function classifyAntigravitySubagentToolCall(
   toolCall: AcpToolCallState,
   rawPayload?: unknown,
 ): "subagent" | "mcp" | undefined {
-  if (
-    (toolCall.kind !== undefined && toolCall.kind !== "other") ||
-    toolCall.title === undefined ||
-    !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title)
-  )
+  if (toolCall.kind !== undefined && toolCall.kind !== "other") return undefined;
+  const swarm = identifyAntigravitySwarmToolCall(toolCall, rawPayload);
+  if (swarm !== undefined) {
+    if (swarm.tool !== "swarm") return undefined;
+    if (swarm.mcp) return "mcp";
+    return swarm.action?.toLowerCase() === "add" ? "subagent" : undefined;
+  }
+  if (toolCall.title === undefined || !ANTIGRAVITY_SUBAGENT_TITLES.has(toolCall.title)) {
     return undefined;
-  const update = Predicate.isObject(rawPayload) ? rawPayload.update : undefined;
-  const meta = Predicate.isObject(update) ? update._meta : toolCall.data.meta;
+  }
+  const meta = readAntigravityToolMeta(toolCall, rawPayload);
   return Predicate.isObject(meta) && meta.is_mcp_tool_call === true ? "mcp" : "subagent";
 }
 
@@ -642,4 +733,58 @@ export function isAntigravitySubagentReplayStart(rawPayload: unknown): boolean {
 export function antigravitySubagentOutput(toolCall: AcpToolCallState): string | undefined {
   const output = toolCall.data.rawOutput;
   return typeof output === "string" && output.trim() ? boundText(output.trim()) : undefined;
+}
+
+function antigravityUpdateSteps(
+  rawInput: unknown,
+):
+  | Extract<EffectAcpSchema.SessionUpdate, { readonly sessionUpdate: "plan" }>["entries"]
+  | undefined {
+  if (!Predicate.isObject(rawInput) || !Array.isArray(rawInput.steps)) return undefined;
+  const steps: ReadonlyArray<unknown> = rawInput.steps;
+  return steps.flatMap((step) =>
+    Predicate.isObject(step) && typeof step.title === "string"
+      ? [
+          {
+            content: step.title,
+            priority: "medium",
+            status:
+              step.status === "done"
+                ? "completed"
+                : typeof step.status === "string"
+                  ? step.status
+                  : "pending",
+          },
+        ]
+      : [],
+  );
+}
+
+/**
+ * agy reports its update_steps checklist only as tool calls, never as ACP `plan` updates. Each
+ * call carrying steps becomes a plan update; its other updates name it by id only and are dropped.
+ */
+export function makeAntigravityUpdateStepsPlans() {
+  const calls = new Set<string>();
+  return (
+    notification: EffectAcpSchema.SessionNotification,
+  ): EffectAcpSchema.SessionNotification | undefined => {
+    const update = notification.update;
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") {
+      return notification;
+    }
+    const key = `${notification.sessionId}\u0000${update.toolCallId}`;
+    if (
+      update.title === "Run update_steps" &&
+      (update.kind === undefined || update.kind === null || update.kind === "other")
+    ) {
+      calls.add(key);
+    }
+    if (!calls.has(key)) return notification;
+    if (update.status === "completed" || update.status === "failed") calls.delete(key);
+    const entries = antigravityUpdateSteps(update.rawInput);
+    return entries === undefined
+      ? undefined
+      : { ...notification, update: { sessionUpdate: "plan", entries } };
+  };
 }

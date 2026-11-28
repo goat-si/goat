@@ -16,6 +16,11 @@ import * as Schema from "effect/Schema";
 import * as EffectAcpSchema from "effect-acp/compat";
 import * as EffectAcpSchemaV1 from "effect-acp/schema-v1";
 import { deriveToolActivityPresentation, mergeToolActivityData } from "@goat/shared/toolActivity";
+import {
+  acpChangedPathsOfToolCall,
+  mergeAcpChangedPaths,
+  type AcpChangedPaths,
+} from "./clientPolicy.ts";
 import type {
   OrchestrationV2ProviderThreadNativeMetadata,
   ThreadTokenUsageSnapshot,
@@ -49,6 +54,11 @@ export interface AcpToolCallState {
   readonly command?: string;
   readonly detail?: string;
   readonly data: Record<string, unknown>;
+  /**
+   * Every path any notification of this call named, as sent, or unknown; absent when none did.
+   * It only grows: `data.locations` is what the tool card shows and a later update replaces it.
+   */
+  readonly changedPaths?: AcpChangedPaths;
 }
 
 export interface AcpAgentTerminalState {
@@ -919,7 +929,12 @@ function makeToolCallState(
     ...(command ? { command } : {}),
     ...(presentation?.detail ? { detail: presentation.detail } : {}),
     data,
+    ...changedPathsField(acpChangedPathsOfToolCall(input)),
   };
+}
+
+function changedPathsField(changedPaths: AcpChangedPaths): Pick<AcpToolCallState, "changedPaths"> {
+  return changedPaths === "unknown" || changedPaths.length > 0 ? { changedPaths } : {};
 }
 
 function parseTypedToolCallState(
@@ -964,6 +979,7 @@ export function mergeToolCallState(
     ...(command ? { command } : {}),
     ...(detail ? { detail } : {}),
     data,
+    ...changedPathsField(mergeAcpChangedPaths(previous?.changedPaths, next.changedPaths)),
   };
 }
 
@@ -1111,6 +1127,14 @@ export function withTrackedPermissionToolCall(
     },
   };
 }
+
+export {
+  withTrackedChangedPaths,
+  unreadToolCallUpdate,
+  MAX_UNREAD_TOOL_CALLS,
+  makeAcpUnreadToolCalls,
+  withUnknownChangedPaths,
+} from "./autoAcceptEdits.ts";
 
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
