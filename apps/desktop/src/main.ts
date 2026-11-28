@@ -166,6 +166,7 @@ function hostGaveUp(state: HostState): boolean {
 const HOST_SUFFIX: Partial<Record<HostState["phase"], string>> = {
   starting: "host starting",
   restarting: "host restarting",
+  stuck: "old host will not exit",
   "crash-loop": "host stopped",
   exited: "host not running",
   stopping: "quitting",

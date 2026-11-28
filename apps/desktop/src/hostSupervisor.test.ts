@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { HostSupervisor, groupAlive, parseAnnounce, type HostPhase, type HostState } from "./hostSupervisor.ts";
+import { HostSupervisor, groupAlive, killGroup, parseAnnounce, type HostPhase, type HostState } from "./hostSupervisor.ts";
 
 const FAKE_HOST = fileURLToPath(new URL("./test-fixtures/fake-host.mjs", import.meta.url));
 
@@ -41,6 +41,13 @@ async function until(check: () => boolean, timeoutMs = 10_000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
+
+/** killGroup that reports the group still alive (without touching it) the first time, then works. */
+function survivesFirstKill(): (pgid: number, graceMs: number, killWaitMs?: number) => Promise<boolean> {
+  let calls = 0;
+  return (pgid, graceMs, killWaitMs) => (++calls === 1 ? Promise.resolve(false) : killGroup(pgid, graceMs, killWaitMs));
+}
+
 
 async function harness(
   mode: string,
@@ -276,6 +283,64 @@ test("restart() replaces the host and its whole group, and is not a crash", asyn
   assert.equal(h.pids("host").length, 2, "restart() did not start exactly one replacement host");
   await h.supervisor.stop();
   for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
++test("restart() holds the replacement while the old group survives SIGKILL, then starts exactly one", async () => {
+  const h = await harness("grandchild,ignore-term", { killGroup: survivesFirstKill(), stuckRetryMs: 150 });
+  h.supervisor.start();
+  await h.reached("ready");
+  await until(() => h.pids("agent").length === 1);
+  const [oldHost] = h.pids("host");
+  assert.ok(oldHost !== undefined);
+  const restarting = h.supervisor.restart();
+  await h.reached("stuck");
+  assert.equal(h.supervisor.state.stuckGroup, oldHost);
+  h.supervisor.start();
+  await settle(100);
+  assert.equal(h.pids("host").length, 1, "a replacement started while the old group was still alive");
+  assert.equal(alive(oldHost), true);
+  await restarting;
+  await h.reached("ready");
+  assert.equal(alive(oldHost), false);
+  assert.equal(h.supervisor.state.stuckGroup, null);
+  await settle(200);
+  assert.equal(h.pids("host").length, 2);
+  await h.supervisor.stop();
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
+test("crash recovery holds the restart while the crashed group survives SIGKILL", async () => {
+  const h = await harness("grandchild,crash-first-after-ready", { killGroup: survivesFirstKill(), stuckRetryMs: 300 });
+  h.supervisor.start();
+  await h.reached("stuck");
+  const [agent] = h.pids("agent");
+  assert.ok(agent !== undefined);
+  assert.equal(alive(agent), true);
+  h.supervisor.start();
+  await settle(150);
+  assert.equal(h.pids("host").length, 1, "recovery or start() spawned beside a surviving group");
+  await until(() => h.pids("host").length === 2);
+  assert.equal(alive(agent), false);
+  await h.reached("ready");
+  await h.supervisor.stop();
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
+test("stop() while an old group is stuck returns without waiting out the retry interval", async () => {
+  const h = await harness("grandchild,ignore-term", { killGroup: survivesFirstKill(), stuckRetryMs: 60_000 });
+  h.supervisor.start();
+  await h.reached("ready");
+  const [oldHost] = h.pids("host");
+  assert.ok(oldHost !== undefined);
+  void h.supervisor.restart();
+  await h.reached("stuck");
+  const started = Date.now();
+  await h.supervisor.stop();
+  assert.ok(Date.now() - started < 3_000, "stop() waited for the stuck-group retry");
+  assert.equal(h.supervisor.state.phase, "stopped");
+  assert.equal(h.pids("host").length, 1);
+  // The simulated survivor is still alive; end it so the test leaves nothing behind.
+  process.kill(-oldHost, "SIGKILL");
 });
 
 test("stop() during restart() ends the old group and starts nothing", async () => {
