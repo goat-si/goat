@@ -74,8 +74,7 @@ function failureToast(title: string, error: unknown) {
 export function useThreadActionMenu(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly projectCwd: string | null;
-  readonly onStartRename: () => void;
-  /** Hide project actions and title edits for the global agent. */
+  readonly onStartRename?: (() => void) | undefined;
   readonly globalAgent?: boolean | undefined;
   readonly onFind?: ((threadRef: ScopedThreadRef) => void) | undefined;
   readonly canShareWithGuest: boolean;
@@ -141,15 +140,12 @@ export function useThreadActionMenu(input: {
     onError: (error) => failureToast("Failed to copy thread ID", error),
   });
 
-  const openMenu = (position: { x: number; y: number }) => {
-    if (threadRef === null) return;
-    void (async () => {
-      const api = readLocalApi();
-      if (!api) return;
+  const readMenu = () => {
+    if (threadRef === null) return null;
       const thread = readThreadShell(threadRef);
       if (!thread) {
         failureToast("Thread actions unavailable", new Error("This thread has not loaded yet."));
-        return;
+        return null;
       }
       const now = new Date();
       const supports = {
@@ -166,6 +162,7 @@ export function useThreadActionMenu(input: {
         canOperate: readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
         canFollowWithBot: webThreadFollowAvailable(threadRef),
         canFind: onFind !== undefined,
+        canRename: onStartRename !== undefined,
         branch: thread.branch ?? null,
         projectFilter: null,
         isPinned: thread.pinnedAt != null,
@@ -187,11 +184,9 @@ export function useThreadActionMenu(input: {
         canTurnIntoProject: canTurnThreadIntoProject(threadRef),
         fork: globalAgent ? null : readThreadForkMenuState(threadRef),
       });
-      const clicked = await settlePromise(() => api.contextMenu.show(items, position));
-      if (clicked._tag === "Failure" || clicked.value === null) return;
-      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
-      if (botAction) return await botAction;
-      const action: ThreadActionMenuId = clicked.value;
+    const run = async (action: ThreadActionMenuId) => {
+      const api = readLocalApi();
+      if (!api) return;
       if (
         threadActionRequiresOperate(action) &&
         !readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)
@@ -282,7 +277,7 @@ export function useThreadActionMenu(input: {
           );
           return;
         case "rename":
-          onStartRename();
+          onStartRename?.();
           return;
         case "regenerate-title": {
           if (isRegeneratingTitle) return;
@@ -388,6 +383,27 @@ export function useThreadActionMenu(input: {
         default:
           return;
       }
+    };
+    return { items, run };
+  };
+
+  const openMenu = (position: { x: number; y: number }) => {
+    void (async () => {
+      const api = readLocalApi();
+      if (!api || threadRef === null) return;
+      const menu = readMenu();
+      if (!menu) {
+        failureToast(
+          "Thread actions unavailable",
+          new Error("This thread has not loaded yet."),
+        );
+        return;
+      }
+      const clicked = await settlePromise(() => api.contextMenu.show(menu.items, position));
+      if (clicked._tag === "Failure" || clicked.value === null) return;
+      const botAction = handleWebThreadFollowAction(threadRef, clicked.value, position);
+      if (botAction) return await botAction;
+      await menu.run(clicked.value);
     })();
   };
 
@@ -395,5 +411,5 @@ export function useThreadActionMenu(input: {
     void readLocalApi()?.contextMenu.close();
   };
 
-  return { openMenu, closeMenu };
+  return { openMenu, closeMenu, readMenu };
 }
