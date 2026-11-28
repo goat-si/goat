@@ -31,7 +31,24 @@ fn a_late_item_after_its_run_finished_is_kept_but_does_not_replace_a_newer_answe
     let (card, fold) = replay(dir.path(), "t");
     assert_eq!(fold.counters.items, items_before + 1);
     assert_eq!(card.latest_answer_excerpt, excerpt);
-    assert!(!fold.active_run_reached_engine);
+    // A late r1 item while r3 runs (not yet accepted by the engine) leaves the excerpt alone and
+    // is not evidence that r3 reached the engine: r3 still settles as unknown with a resend hold.
+    store
+        .append(&t, vec![input("i3", "third"), started("r3", &["i3"])])
+        .unwrap();
+    let out = store
+        .append(&t, vec![answer("r1", "late2", "another late r1 answer")])
+        .unwrap();
+    assert_eq!(out.card.status, ThreadStatus::Running);
+    assert_eq!(out.card.latest_answer_excerpt, excerpt);
+    assert!(!out.fold.active_run_reached_engine);
+    drop(store);
+    let (store, report) = open(dir.path());
+    assert_eq!(report.settled.len(), 1);
+    assert_eq!(report.settled[0].outcome, RunOutcome::Unknown);
+    let card = store.card(&t).unwrap().unwrap();
+    assert_eq!(card.needs_you.unwrap().kind, RequestKind::Resend);
+    assert_eq!(card.latest_answer_excerpt, excerpt);
 }
 
 #[test]
