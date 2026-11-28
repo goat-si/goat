@@ -12,6 +12,7 @@ behaviour still open (shell only, no behaviour guessed).
 | id | Surface (board) | State | Backend / decision |
 |---|---|---|---|
 | `bot-chat` | Bot chat, composer, send-first (2R-1, 12P-1) | live | host + Codex |
+| `queued-inputs` | Queued messages banner above the composer (1MFK-1) | live | `edit_queued`, `cancel_queued`, `reorder_queued`, `promote_to_steer`, `resume_queue` (pending lane C) |
 | `worker-threads` | Right panel → Threads, open thread view (25D-0, C2Y-0) | live | host `thread.start` / child wake |
 | `thread-list` | Thread mode first entry, cached rows (LXD-0) | live | `subscribe_cards` |
 | `rail-add-bot` | Rail "…" → search, add bot to rail (1KL4-1) | live (local) | rail list in `ui-state.json`; cross-device sync planned |

@@ -18,6 +18,7 @@ in-page API: `get_jsx({nodeId, includeNodeIds:false})` -> `<id>.jsx`, `get_scree
 | 2PU-1 새 봇 | new bot face picker |
 | LXD-0 T0 스레드 모드 첫 진입 | cached rows + "Updating · N of M" |
 | C2Y-0 T1 스레드 Chat | thread view with the GOAT chat renderer |
+| 1MFK-1 T4 대기 메시지 | queued messages banner above the composer (v1 QueuedRunsControl): header list icon + "Queued" + count + chevron; rows grip, truncated text, Edit, Send now (promote to steer), Delete |
 
 Rule overrides newer than some boards: one blue dot `#0169CC` + black rail counts (no red `--color-decide`
 / green `--color-done`), moving face instead of spinners, English copy first, macOS top bar 52px.
