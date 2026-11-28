@@ -4,7 +4,7 @@ import type { ProviderFailureClass } from "./ProviderFailureClass.ts";
 /**
  * v1 `OrchestrationV2ProviderFailure`. Producers redact credentials before construction.
  */
-export type ProviderFailure = { class: ProviderFailureClass, message: string, code: string | null, retryable: boolean | null, 
+export type ProviderFailure = { class: ProviderFailureClass, message: string, code: string | null, retryable: boolean | null,
 /**
  * v1 `optional(NullOr(IsoDateTime))`: absent, `null` and a value are distinct.
  */

@@ -4,7 +4,7 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * v1 `DecisionItem.from` (local fields).
  */
-export type DecisionFrom = { threadId?: ThreadId, threadTitle?: string, 
+export type DecisionFrom = { threadId?: ThreadId, threadTitle?: string,
 /**
  * The local thread that launched or delegated the asking thread.
  */

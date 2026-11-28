@@ -18,15 +18,15 @@ import type { UserNotified } from "./UserNotified.ts";
 /**
  * One event line.
  */
-export type LogLine = { 
+export type LogLine = {
 /**
  * Line format version, [LOG_FORMAT_VERSION] when written by this build.
  */
-v: number, 
+v: number,
 /**
  * Per-thread sequence, starting at 1, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-seq: number, 
+seq: number,
 /**
  * RFC 3339 UTC timestamp.
  */

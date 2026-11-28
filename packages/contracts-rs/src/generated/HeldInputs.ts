@@ -7,7 +7,7 @@ import type { RunId } from "./RunId.ts";
  * Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the
  * front of `queuedInputs`; `dropped` discards them.
  */
-export type HeldInputs = { 
+export type HeldInputs = {
 /**
  * `resend:<runId>`.
  */

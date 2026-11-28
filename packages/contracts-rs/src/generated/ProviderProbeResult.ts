@@ -8,15 +8,15 @@ import type { ServerProviderState } from "./ServerProviderState.ts";
  * What `EngineFactory::probe()` returns: the v1 `ServerProvider` fields a probe can know
  * (install, version, auth, models). The host adds instance identity and settings.
  */
-export type ProviderProbeResult = { installed: boolean, version: string | null, 
+export type ProviderProbeResult = { installed: boolean, version: string | null,
 /**
  * Version reported by the installed CLI when it differs from `version` (v1).
  */
-installedVersion?: string | null, cli?: ServerProviderCli, 
+installedVersion?: string | null, cli?: ServerProviderCli,
 /**
  * Resolved executable path (GOAT 2; v1 kept it in provider settings).
  */
-binaryPath?: string, status: ServerProviderState, auth: ServerProviderAuth, models: Array<ServerProviderModel>, 
+binaryPath?: string, status: ServerProviderState, auth: ServerProviderAuth, models: Array<ServerProviderModel>,
 /**
  * RFC 3339 UTC timestamp of this probe.
  */

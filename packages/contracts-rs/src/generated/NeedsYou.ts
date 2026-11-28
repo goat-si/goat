@@ -4,7 +4,7 @@ import type { RequestKind } from "./RequestKind.ts";
 /**
  * The open human request summarised on the card.
  */
-export type NeedsYou = { kind: RequestKind, 
+export type NeedsYou = { kind: RequestKind,
 /**
  * At most [NEEDS_YOU_SUMMARY_MAX_CHARS] characters.
  */

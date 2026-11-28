@@ -490,6 +490,7 @@ impl Actor {
                         kind: RequestKind::Resend,
                         summary: "Not sure a message reached the agent. Resend or drop it?"
                             .to_owned(),
+                        context: None,
                         options: None,
                         recommended: None,
                     }));
@@ -876,6 +877,7 @@ impl Actor {
                         &summary,
                         goat2_contracts::limits::NEEDS_YOU_SUMMARY_MAX_CHARS,
                     ),
+                    context: None,
                     options: None,
                     recommended: None,
                 }));
@@ -924,6 +926,15 @@ impl Actor {
                 // is no live wire frame for it yet (structure/30_wire.md).
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
             }
+            EngineEvent::SteerUpdated {
+                turn_id, status, ..
+            } => {
+                // Owner decision: a cancelled steer is requeued as a followup with the same
+                // inputId (a second input.delivered {as: steer, outcome: declined}, which the
+                // store folds back into the queue). The host side of that lands in a later merge
+                // (lane E); until then the accepted delivery stands and this is only logged.
+                tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
+            }
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -970,6 +981,7 @@ impl Actor {
                     item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
                     kind: RequestKind::Signin,
                     summary: SIGNIN_SUMMARY.to_owned(),
+                    context: None,
                     options: None,
                     recommended: None,
                 })]);
@@ -1047,6 +1059,7 @@ impl Actor {
                 kind: RequestKind::Resend,
                 summary: "Not sure the last message reached the agent. Resend or drop it?"
                     .to_owned(),
+                context: None,
                 options: None,
                 recommended: None,
             }));

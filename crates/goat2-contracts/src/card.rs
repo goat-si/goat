@@ -181,6 +181,19 @@ pub struct ThreadCard {
     #[ts(as = "u64")]
     #[schemars(with = "u64")]
     pub card_seq: u64,
+    /// Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the
+    /// store. Omitted when 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub open_asks: u32,
+    /// Derived by the host when it serves a card: the thread's last item not from the person is
+    /// newer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state
+    /// is UI state, not thread history (PRD model.md, storage.md): the store never sets it, so it
+    /// is never written to `card.json` or `goat.jsonl` and is not part of the frozen format.
+    /// Omitted when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(as = "Option<bool>", optional)]
+    pub unread: bool,
 }
 
 /// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.
@@ -249,4 +262,11 @@ impl ThreadCard {
         }
         Ok(())
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }

@@ -30,6 +30,7 @@ fn decode(root: &str, value: Value) -> Result<Value, String> {
         "decision_item" => roundtrip::<DecisionItem>(value),
         "decision_request_input" => roundtrip::<DecisionRequestInput>(value),
         "provider_probe_result" => roundtrip::<ProviderProbeResult>(value),
+        "server_provider_entry" => roundtrip::<ServerProviderEntry>(value),
         _ => panic!("unknown root {root}"),
     }
 }
@@ -59,6 +60,7 @@ fn schema(root: &str) -> Value {
         "decision_item" => s!(DecisionItem),
         "decision_request_input" => s!(DecisionRequestInput),
         "provider_probe_result" => s!(ProviderProbeResult),
+        "server_provider_entry" => s!(ServerProviderEntry),
         _ => panic!("unknown root {root}"),
     }
 }
@@ -206,4 +208,92 @@ fn decision_reason_counts_utf16_units_like_v1() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn bot_instructions_limit_agrees_in_serde_and_schema() {
+    let mut value = common::fixtures()
+        .into_iter()
+        .find(|f| f.root == "bot_profile")
+        .unwrap()
+        .value;
+    for (text, ok) in [
+        ("\u{e9}".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS), true),
+        ("a".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS + 1), false),
+        (
+            "\u{e9}".repeat(limits::BOT_INSTRUCTIONS_MAX_CHARS + 1),
+            false,
+        ),
+    ] {
+        value["instructions"] = serde_json::json!(text);
+        assert_eq!(
+            serde_json::from_value::<BotProfile>(value.clone()).is_ok(),
+            ok
+        );
+        assert_eq!(validator("bot_profile").is_valid(&value), ok);
+    }
+}
+
+#[test]
+fn sign_in_urls_are_http_only_in_serde_and_schema() {
+    let probe = common::fixtures()
+        .into_iter()
+        .find(|f| f.root == "provider_probe_result" && f.name == "registry_signin")
+        .unwrap()
+        .value;
+    for (url, ok) in [
+        ("https://auth.example.invalid/x", true),
+        ("HTTP://auth.example.invalid/x", true),
+        ("https://auth.example.invalid/a b", true),
+        ("javascript:alert(1)", false),
+        ("vscode://auth/cb", false),
+        (" https://padded.invalid", false),
+        ("https://padded.invalid ", false),
+        ("https://padded.invalid\t", false),
+        ("https://padded.invalid\n", false),
+        ("https://padded.invalid\u{3000}", false),
+        ("https://padded.invalid\u{feff}", false),
+    ] {
+        let mut value = probe.clone();
+        value["auth"]["action"]["url"] = serde_json::json!(url);
+        assert_eq!(
+            serde_json::from_value::<ProviderProbeResult>(value.clone()).is_ok(),
+            ok,
+            "serde {url:?}"
+        );
+        assert_eq!(
+            validator("provider_probe_result").is_valid(&value),
+            ok,
+            "schema {url:?}"
+        );
+    }
+}
+
+#[test]
+fn required_nullable_keys_must_be_present() {
+    let install = serde_json::json!({
+        "driver": "codex", "operationId": null, "phase": "idle", "downloadedBytes": 0,
+        "totalBytes": null, "version": null, "installedVersion": null, "canRemove": false,
+        "message": null
+    });
+    assert!(serde_json::from_value::<ProviderInstallState>(install.clone()).is_ok());
+    for key in [
+        "operationId",
+        "totalBytes",
+        "version",
+        "installedVersion",
+        "message",
+    ] {
+        let mut missing = install.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            serde_json::from_value::<ProviderInstallState>(missing).is_err(),
+            "{key} may not be omitted"
+        );
+    }
+    let note = serde_json::json!({"index": 0, "date": null, "text": "x"});
+    assert!(serde_json::from_value::<ChannelBotNote>(note.clone()).is_ok());
+    let mut missing = note;
+    missing.as_object_mut().unwrap().remove("date");
+    assert!(serde_json::from_value::<ChannelBotNote>(missing).is_err());
 }

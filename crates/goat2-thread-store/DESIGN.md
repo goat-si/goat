@@ -72,6 +72,13 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    of the active run count as restart evidence, and only an assistant message of the active run changes
    `latestAnswerExcerpt`, so a late item never replaces a newer answer (a late answer of the most
    recent run does not reach the card either).
+   A steer the engine accepted (`input.delivered {as: steer, accepted}`) moves from `queuedInputs` to
+   `steeredInputs` and stays there until the next `run.started`. If the engine later cancels it, the
+   host appends a second `input.delivered {as: steer, declined}`: the input goes to the end of
+   `queuedInputs` as a followup with the same id, text, source and attachments (v1 re-dispatches the
+   same message). A declined steer that is still queued stays where it is; one that is neither queued
+   nor in `steeredInputs` is refused. The checkpoint after `run.finished` can carry `steeredInputs`;
+   it is not one of the fold keys a checkpoint must have, so older checkpoints stay usable.
 3. Not in a run, or when the status changes, or when a run ends, the card is published, card.json and
    the index row are written through, and then thread subscribers are notified. A failed log sync returns the
    error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen

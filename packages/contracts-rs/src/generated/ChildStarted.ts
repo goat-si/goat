@@ -5,7 +5,7 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * `child.started` (parent log).
  */
-export type ChildStarted = { childThreadId: ThreadId, task: string, 
+export type ChildStarted = { childThreadId: ThreadId, task: string,
 /**
  * The parent's tool-call item that started the child.
  */

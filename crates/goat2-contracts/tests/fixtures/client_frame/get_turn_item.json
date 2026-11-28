@@ -1,0 +1,7 @@
+{
+  "type": "get_turn_item",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "threadId": "t",
+  "itemId": "i"
+}

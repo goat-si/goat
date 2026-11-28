@@ -108,6 +108,10 @@ export class FakeHost implements Transport {
         this.emit({ type: "page", reqId: frame.reqId, threadId: frame.threadId, lines: page, hasMore: older.length > page.length });
         return;
       }
+      case "subscribe_providers":
+        // The demo world has no provider instances; the providers UI (goat2_providers_ui) shows its empty state.
+        this.emit({ type: "providers", subId: frame.subId, providers: [] });
+        return;
       case "resync_item":
       case "pong":
         return;
@@ -254,7 +258,51 @@ export class FakeHost implements Transport {
         for (const sub of this.cardSubs) this.emit({ type: "bot_changed", subId: sub, bot });
         return this.ok({ botId, threadId });
       }
+      case "update_bot": {
+        const i = this.world.bots.findIndex((b) => b.botId === frame.botId);
+        if (i < 0) return this.unavailable("bot_not_found", "not_found", "No such bot.");
+        const prev = this.world.bots[i]!;
+        const bot: BotProfile = {
+          ...prev,
+          ...(frame.name !== undefined ? { name: frame.name } : {}),
+          ...(frame.purpose !== undefined ? { purpose: frame.purpose } : {}),
+          ...(frame.face !== undefined ? { face: frame.face } : {}),
+          ...(frame.defaultModelSelection !== undefined ? { defaultModelSelection: frame.defaultModelSelection } : {}),
+          ...(frame.instructions !== undefined ? { instructions: frame.instructions } : {}),
+        };
+        this.world.bots[i] = bot;
+        for (const sub of this.cardSubs) this.emit({ type: "bot_changed", subId: sub, bot });
+        return this.ok({ botId: bot.botId, bot });
+      }
+      case "get_turn_item": {
+        const t = this.world.threads[frame.threadId];
+        if (!t) return this.fail("thread_not_found", "No such thread.");
+        const item = t.lines.flatMap((l) => (l.type === "item.completed" && l.item.id === frame.itemId ? [l.item] : []))[0];
+        if (!item) return this.unavailable("item_not_found", "not_found", "No such item.");
+        return this.ok({ threadId: t.card.id, turnItem: item });
+      }
+      // The demo host keeps no read state (the real host stores lastReadSeq in ui-state.json),
+      // so mark_read is refused like the other commands it does not serve.
+      case "mark_read":
+      case "list_bot_notes":
+      case "write_bot_notes":
+      case "refresh_providers":
+      case "provider_install_start":
+      case "provider_install_cancel":
+      case "provider_auth_start":
+      case "provider_auth_cancel":
+      case "provider_auth_logout":
+      case "accept_acp_registry_url_auth":
+      case "search_acp_registry":
+      case "prepare_acp_registry_agent":
+      case "set_provider_instance":
+        // Not simulated: the demo host says so instead of pretending the command worked.
+        return this.unavailable("fake_host_unsupported", "unavailable", `The demo host does not serve ${frame.type}.`);
     }
+  }
+
+  private unavailable(reason: string, code: "not_found" | "unavailable", message: string): Omit<CommandResult, "reqId"> {
+    return { type: "command_result", ok: false, error: { code, reason, message, retryable: false } };
   }
 
   // ------------------------------------------------------------ log helpers

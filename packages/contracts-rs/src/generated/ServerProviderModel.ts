@@ -5,7 +5,7 @@ import type { ModelCapabilities } from "./ModelCapabilities.ts";
 /**
  * v1 `ServerProviderModel`: one model the provider offers.
  */
-export type ServerProviderModel = { slug: string, name: string, shortName?: string, subProvider?: string, aliases?: Array<string>, badge?: ModelBadge, isCustom: boolean, isDefault?: boolean, isLegacy?: boolean, 
+export type ServerProviderModel = { slug: string, name: string, shortName?: string, subProvider?: string, aliases?: Array<string>, badge?: ModelBadge, isCustom: boolean, isDefault?: boolean, isLegacy?: boolean,
 /**
  * False when sessions can use the model but application text generation cannot.
  */

@@ -153,6 +153,9 @@ async fn connection(socket: WebSocket, app: App) {
                                 });
                             }
                             ClientFrame::Pong { .. } => {}
+                            // Until the providers module lands, refuse the subscription with its
+                            // subId so the client can match the refusal to its request.
+                            ClientFrame::SubscribeProviders { sub_id } => error(&tx,Some(sub_id),None,"not_available","provider subscriptions are not available yet (providers module pending)"),
                             _ => error(&tx,None,None,"bad_frame","unsupported frame"),
                         }
                     }
@@ -737,6 +740,7 @@ mod tests {
             role: goat2_contracts::BotRole::Member,
             session_thread_id: "t".into(),
             default_model_selection: test_selection(),
+            instructions: None,
         };
         host.cards
             .send(CardUpdate::BotChanged(Arc::new(bot)))

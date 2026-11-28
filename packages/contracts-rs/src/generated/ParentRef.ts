@@ -5,7 +5,7 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * Parent link, written on the child (`parent: {threadId, byItemId}`).
  */
-export type ParentRef = { threadId: ThreadId, 
+export type ParentRef = { threadId: ThreadId,
 /**
  * The parent's tool-call item that started this child.
  */
