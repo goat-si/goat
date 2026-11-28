@@ -91,19 +91,26 @@ trap cleanup EXIT
 check_devbuild_path() {
   local repo="$1" real top
   [[ -d "$DEVBUILD" ]] || return 0
-  real="$(cd "$DEVBUILD" && pwd -P)"
+  real="$(realpath "$DEVBUILD")"
   top="$(git -C "$DEVBUILD" rev-parse --show-toplevel 2>/dev/null || true)"
-  [[ -n "$top" ]] && top="$(cd "$top" && pwd -P)"
+  [[ -n "$top" ]] && top="$(realpath "$top")"
   local main forbidden
   main="$(git -C "$repo" worktree list --porcelain | sed -n '1s/^worktree //p')"
   for forbidden in "$SOURCE_REPO" "$repo" "$main" "${INVOKED_REPO:-}"; do
     [[ -n "$forbidden" && -d "$forbidden" ]] || continue
-    if [[ "$real" == "$(cd "$forbidden" && pwd -P)" ]]; then
+    if [[ "$real" == "$(realpath "$forbidden")" ]]; then
       echo "$DEVBUILD is $forbidden, not the dedicated build worktree: not building" >&2
       exit 1
     fi
   done
-  if [[ "$top" != "$real" ]] || ! git -C "$repo" worktree list --porcelain | grep -qxF "worktree $real"; then
+  # Every path is compared in its on-disk form (realpath): on a case-insensitive disk git can record
+  # ~/Developer while the folder is ~/developer, and bash's pwd -P keeps the case it was given
+  # (seen on mac-studio).
+  local registered=0 path
+  while IFS= read -r path; do
+    if [[ -d "$path" && "$(realpath "$path")" == "$real" ]]; then registered=1; fi
+  done < <(git -C "$repo" worktree list --porcelain | sed -n 's/^worktree //p')
+  if [[ "$top" != "$real" || $registered != 1 ]]; then
     echo "$DEVBUILD exists but is not a registered worktree root of $repo: not building" >&2
     exit 1
   fi
