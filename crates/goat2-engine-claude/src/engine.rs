@@ -258,6 +258,9 @@ struct State {
     async_subagents: HashMap<String, BackgroundSubagent>,
     /// Background shell commands Claude runs (v1 local_bash roster, ClaudeBackgroundTasks.ts).
     background_commands: std::collections::BTreeSet<String>,
+    /// Subagent tasks Claude started and has not finished, by task id, whatever order the launch
+    /// acknowledgement, root result and notification arrive in (v1 sessionSubagentsByTaskId).
+    live_subagent_tasks: std::collections::BTreeSet<String>,
     ordinal: u32,
     exited: bool,
     shutting_down: bool,
@@ -384,6 +387,7 @@ async fn start_session(
             tasks: HashMap::new(),
             async_subagents: HashMap::new(),
             background_commands: std::collections::BTreeSet::new(),
+            live_subagent_tasks: std::collections::BTreeSet::new(),
             ordinal: 0,
             exited: false,
             shutting_down: false,
@@ -598,6 +602,7 @@ impl Inner {
                     state.model = model.clone();
                     state.exited = false;
                     state.background_commands.clear();
+                    state.live_subagent_tasks.clear();
                     state.stopping = false;
                     state.exit_hint = None;
                     true
@@ -834,8 +839,9 @@ impl Inner {
             return None;
         }
         state.exited = true;
-        // Background commands die with the process.
+        // Background commands and subagents die with the process.
         state.background_commands.clear();
+        state.live_subagent_tasks.clear();
         let reason = if state.shutting_down {
             "shutdown".to_string()
         } else {
@@ -919,7 +925,10 @@ impl Inner {
     fn bump_generation_unless_background(&self) -> Option<u64> {
         let _gate = self.frame_gate.lock();
         let state = self.state.lock().ok()?;
-        if !state.async_subagents.is_empty() || !state.background_commands.is_empty() {
+        if !state.async_subagents.is_empty()
+            || !state.background_commands.is_empty()
+            || !state.live_subagent_tasks.is_empty()
+        {
             return None;
         }
         Some(self.generation.fetch_add(1, Ordering::SeqCst) + 1)
@@ -1346,6 +1355,32 @@ impl Inner {
     fn track_background_commands(&self, state: &mut State, subtype: &str, message: &Value) {
         let is_command =
             |value: &Value| value.get("task_type").and_then(Value::as_str) == Some("local_bash");
+        // Subagent liveness: local_agent tasks from task_started until a terminal update.
+        let task_id = protocol::str_field(message, "task_id");
+        if let Some(task_id) = &task_id {
+            let terminal_update = subtype == "task_updated"
+                && matches!(
+                    message
+                        .get("patch")
+                        .and_then(|p| p.get("status"))
+                        .and_then(Value::as_str),
+                    Some("completed" | "failed" | "killed")
+                );
+            match subtype {
+                "task_started"
+                    if message.get("task_type").and_then(Value::as_str) == Some("local_agent") =>
+                {
+                    state.live_subagent_tasks.insert(task_id.clone());
+                }
+                "task_notification" => {
+                    state.live_subagent_tasks.remove(task_id);
+                }
+                _ if terminal_update => {
+                    state.live_subagent_tasks.remove(task_id);
+                }
+                _ => {}
+            }
+        }
         match subtype {
             "task_started" if is_command(message) => {
                 if message.get("is_backgrounded").and_then(Value::as_bool) == Some(false) {
