@@ -30,7 +30,7 @@ mapped to EngineError on the Rust side.
 
 | method | params | result |
 |---|---|---|
-| initialize | {protocol: 1, engine: cursor/opencode/muse/fake, threadId, cwd, resume: string or null, modelSelection, runtimeMode, mcp: {url, bearerToken}, instructions: string or null, launch: {binary?, args?, env?} or null} | {engineRef} (the engine's own session id, written to the card) |
+| initialize | {protocol: 1, engine: cursor/opencode/muse/fake, threadId, cwd, resume: string or null, modelSelection, runtimeMode, mcp: {url, bearerToken}, instructions: {appendSystemPrompt?, firstMessagePreamble?} or null, launch: {binary?, args?, env?} or null} | {engineRef} (the engine's own session id, written to the card) |
 | turn.start | {inputs: [{inputId, text, attachments}], settings: {modelSelection, runtimeMode}} | TurnStartResult |
 | turn.steer | {turnId, inputs} | SteerResult |
 | turn.interrupt | {turnId} | {} |
@@ -51,6 +51,8 @@ reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
 | item_completed | turnId, item, locator: {turnId, itemId} or null |
 | request_opened | turnId, key, itemId or null, kind: approval/question/signin, summary, item or null |
 | request_closed | key |
+| auth_required | turnId or null, url or null, message (sign-in needed; host opens a signin request) |
+| subagent_update | turnId or null, subagentId, status (TurnItemStatus), title or null, progress or null (not stored) |
 | turn_finished | turnId, outcome: {type: "done"} / {type: "failed", reason} / {type: "interrupted"} |
 | exited | reason (the engine is gone; the helper exits right after) |
 

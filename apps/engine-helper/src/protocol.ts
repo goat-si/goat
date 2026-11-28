@@ -26,6 +26,14 @@ export interface LaunchSpec {
   readonly env?: Readonly<Record<string, string>>;
 }
 
+/** goat2-engine-api `Instructions`: text GOAT adds to the engine's own instructions. */
+export interface Instructions {
+  /** Appended to the engine's system prompt. */
+  readonly appendSystemPrompt?: string | null;
+  /** Put before the first user message of a new session, for engines without a system slot. */
+  readonly firstMessagePreamble?: string | null;
+}
+
 export interface InitializeParams {
   readonly protocol: number;
   readonly engine: EngineKind;
@@ -35,7 +43,7 @@ export interface InitializeParams {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly mcp: McpEndpoint | null;
-  readonly instructions: string | null;
+  readonly instructions: Instructions | null;
   readonly launch: LaunchSpec | null;
 }
 
@@ -97,6 +105,20 @@ export type EngineEvent =
       readonly item: HelperItem | null;
     }
   | { readonly type: "request_closed"; readonly key: string }
+  | {
+      readonly type: "auth_required";
+      readonly turnId: string | null;
+      readonly url: string | null;
+      readonly message: string;
+    }
+  | {
+      readonly type: "subagent_update";
+      readonly turnId: string | null;
+      readonly subagentId: string;
+      readonly status: HelperItem["status"];
+      readonly title: string | null;
+      readonly progress: string | null;
+    }
   | { readonly type: "turn_finished"; readonly turnId: string; readonly outcome: TurnOutcome }
   | { readonly type: "exited"; readonly reason: string };
 
