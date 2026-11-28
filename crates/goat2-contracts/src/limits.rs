@@ -1,4 +1,11 @@
 //! Fixed bounds from the Part 1 design. Hosts enforce them; contracts only name them.
+//!
+//! Format freeze (owner, 2026-11-28): format v1 of `goat.jsonl` lines and `card.json` freezes at the
+//! goat2 merge where lane A's store first writes these files (`cards.sqlite` is a cache and may
+//! change freely). Before that, contract changes need no legacy readers. After it, persisted shapes
+//! change only additively (new optional fields, new event types that readers skip, see
+//! [crate::log::parse_log_line]) or bump the format version with a reader for the old one. The
+//! `frozen_v1` test pins a sample log and card file so a breaking change fails CI.
 
 /// Format version written on every `goat.jsonl` line (`v`). Readers understand older versions;
 /// the log is never migrated.

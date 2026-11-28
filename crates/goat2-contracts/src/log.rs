@@ -568,3 +568,38 @@ pub struct Checkpoint {
     pub card: ThreadCard,
     pub fold: Fold,
 }
+
+/// A `goat.jsonl` event line as a reader sees it: a known event, or a newer event type this build
+/// does not know, which readers skip (format freeze rule: new event types are additive).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedLine {
+    Known(Box<LogLine>),
+    Unknown { v: u32, seq: u64, type_tag: String },
+}
+
+/// Parse one event line (not the header). Unknown `type` values become [ParsedLine::Unknown];
+/// a known type with a bad payload is an error.
+pub fn parse_log_line(text: &str) -> Result<ParsedLine, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    let type_tag = value
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default();
+    if LogEvent::TYPE_TAGS.contains(&type_tag) {
+        return serde_json::from_value(value).map(|line| ParsedLine::Known(Box::new(line)));
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        v: u32,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        seq: u64,
+        #[serde(rename = "type")]
+        type_tag: String,
+    }
+    let envelope: Envelope = serde_json::from_value(value)?;
+    Ok(ParsedLine::Unknown {
+        v: envelope.v,
+        seq: envelope.seq,
+        type_tag: envelope.type_tag,
+    })
+}
