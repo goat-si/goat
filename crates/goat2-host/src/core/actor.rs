@@ -1041,6 +1041,8 @@ impl Actor {
                         .await;
                 }
             }
+            // A key that is live again is no longer waiting for a retried decline.
+            self.undeclined_signin_keys.retain(|k| k != &key);
             self.signin_keys.push((request_id.clone(), key));
         }
         match url.filter(|u| !u.trim().is_empty()) {
@@ -1381,6 +1383,7 @@ impl Actor {
                     )
                 })?;
             self.signin_keys.remove(index);
+            self.undeclined_signin_keys.retain(|k| k != &key);
         }
         // Engine request of the running turn: answer the engine first.
         let engine_key = match &self.phase {
@@ -1559,13 +1562,19 @@ impl Actor {
         };
         if session.session.answer_request(key, answer).await.is_err() {
             tracing::warn!(thread = %self.id, why, "failed to decline a sign-in; will retry");
-            self.undeclined_signin_keys.push(key.to_owned());
+            if !self.undeclined_signin_keys.iter().any(|k| k == key) {
+                self.undeclined_signin_keys.push(key.to_owned());
+            }
         }
     }
 
     /// Retry the declines that failed earlier; a key that fails again stays for the next try.
     async fn retry_undeclined_signin_keys(&mut self) {
         for key in std::mem::take(&mut self.undeclined_signin_keys) {
+            // Never decline a key that belongs to an open sign-in again.
+            if self.signin_keys.iter().any(|(_, live)| live == &key) {
+                continue;
+            }
             self.decline_signin_key(&key, "retrying an earlier decline")
                 .await;
         }

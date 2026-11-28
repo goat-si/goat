@@ -2206,3 +2206,68 @@ async fn a_late_keyed_signin_is_declined_and_a_failed_decline_is_retried() {
     );
     assert!(!data_contains(&t, "KEY-OLD-4402"));
 }
+
+#[tokio::test]
+async fn a_key_answered_after_a_failed_decline_is_never_declined_later() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-aba", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str, outcome: RequestOutcome| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: o, .. } if k == key && *o == outcome))
+            .count()
+    };
+    // A, then B while declines fail (A waits for a retry), then A again.
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    eventually("A decline failed", || {
+        answers("KEY-A-5501", RequestOutcome::Decline) == 1
+    })
+    .await;
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("B decline attempted", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 1
+    })
+    .await;
+    t.fake.fail_answers(false);
+    // The person accepts A; the run end must not decline it afterwards.
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-a".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answers("KEY-A-5501", RequestOutcome::Accept), 1);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B retried", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 2
+    })
+    .await;
+    assert_eq!(
+        answers("KEY-A-5501", RequestOutcome::Decline),
+        1,
+        "A was only declined while it was replaced"
+    );
+    let b_retries = answers("KEY-B-5502", RequestOutcome::Decline);
+    assert_eq!(b_retries, 2, "B is queued once and retried once");
+}
