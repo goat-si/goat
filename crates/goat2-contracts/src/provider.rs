@@ -1,7 +1,16 @@
+//! Provider setup on the host wire: the provider list entries, install and sign-in flows, and the ACP
+//! registry search/prepare results behind the `subscribe_providers` / `provider_*` commands.
+//!
+//! Lifted from GOAT v1 (goat origin/dev 916b5ccc): `packages/contracts/src/server.ts` (`ServerProvider`
+//! subset), `providerSetup.ts` (`ProviderAuthState`, `ProviderAuthMethod`, `ProviderAuthInteraction`,
+//! `ProviderInstallState`) and `acpRegistry.ts` (search and prepare results). Field names and literals
+//! are v1's; v1 string length checks are not carried (the host bounds provider input).
+
 use crate::{ProviderCapabilities, ProviderInstanceId, ProviderProbeResult};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+/// v1 `ServerProvider.setup`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSetup {
@@ -12,6 +21,7 @@ pub struct ProviderSetup {
     pub documentation_url: Option<String>,
 }
 
+/// v1 `ProviderAuthState.phase`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderAuthPhase {
@@ -24,6 +34,7 @@ pub enum ProviderAuthPhase {
     Cancelled,
 }
 
+/// v1 `ProviderAuthMethod.type`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderAuthMethodType {
@@ -32,6 +43,7 @@ pub enum ProviderAuthMethodType {
     Credentials,
 }
 
+/// v1 `ProviderInstallState.phase`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderInstallPhase {
@@ -44,6 +56,7 @@ pub enum ProviderInstallPhase {
     Cancelled,
 }
 
+/// v1 `ProviderInstallState.source`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderInstallSource {
@@ -51,6 +64,7 @@ pub enum ProviderInstallSource {
     Local,
 }
 
+/// v1 `AcpRegistryDistribution`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AcpRegistryDistribution {
@@ -59,6 +73,7 @@ pub enum AcpRegistryDistribution {
     Uvx,
 }
 
+/// v1 `AcpRegistryIntegrity`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum AcpRegistryIntegrity {
@@ -66,6 +81,7 @@ pub enum AcpRegistryIntegrity {
     Registry,
 }
 
+/// v1 `ProviderAuthMethod`: one way to sign in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderAuthMethod {
@@ -81,6 +97,7 @@ pub struct ProviderAuthMethod {
     pub r#type: ProviderAuthMethodType,
 }
 
+/// v1 `ProviderAuthInteraction`: what the person must do next in a sign-in flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(
     tag = "type",
@@ -113,18 +130,21 @@ pub enum ProviderAuthInteraction {
         fields: Vec<ProviderCredentialField>,
     },
 }
+/// v1 credentials interaction field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 pub struct ProviderCredentialField {
     pub name: String,
     pub label: String,
     pub secret: bool,
 }
+/// v1 `ProviderAuthState.credentialOwner`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum CredentialOwner {
     Provider,
     T3,
 }
+/// v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderAuthState {
@@ -150,13 +170,20 @@ pub struct ProviderAuthState {
     pub credential_owner: Option<CredentialOwner>,
 }
 
+/// v1 `ProviderInstallState` (`provider_install_*` results).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderInstallState {
     pub driver: String,
     pub operation_id: Option<String>,
     pub phase: ProviderInstallPhase,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub downloaded_bytes: u64,
+    #[serde(default, with = "crate::serde_util::safe_u64_opt")]
+    #[ts(as = "Option<u64>")]
+    #[schemars(with = "Option<u64>")]
     pub total_bytes: Option<u64>,
     pub version: Option<String>,
     pub installed_version: Option<String>,
@@ -180,6 +207,7 @@ pub struct ProviderInstallState {
     pub message: Option<String>,
 }
 
+/// v1 `AcpRegistrySearchAgent`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistrySearchAgent {
@@ -196,12 +224,14 @@ pub struct AcpRegistrySearchAgent {
     pub integrity: AcpRegistryIntegrity,
 }
 
+/// v1 `AcpRegistrySearchResult` (`search_acp_registry`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistrySearchResult {
     pub agents: Vec<AcpRegistrySearchAgent>,
 }
 
+/// v1 `AcpRegistryPrepareResult` (`prepare_acp_registry_agent`); `prepared` is always `true`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistryPrepareResult {
@@ -217,6 +247,8 @@ pub struct AcpRegistryPrepareResult {
     pub prepared: bool,
 }
 
+/// One row of the `providers` frame: the v1 `ServerProvider` fields the UI needs, with the probe result
+/// and any running sign-in or install flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerProviderEntry {

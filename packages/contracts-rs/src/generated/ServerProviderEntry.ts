@@ -6,4 +6,8 @@ import type { ProviderInstanceId } from "./ProviderInstanceId.ts";
 import type { ProviderProbeResult } from "./ProviderProbeResult.ts";
 import type { ProviderSetup } from "./ProviderSetup.ts";
 
+/**
+ * One row of the `providers` frame: the v1 `ServerProvider` fields the UI needs, with the probe result
+ * and any running sign-in or install flow.
+ */
 export type ServerProviderEntry = { instanceId: ProviderInstanceId, driver: string, displayName?: string, enabled: boolean, acpAgentId?: string, setup?: ProviderSetup, capabilities: ProviderCapabilities, probe: ProviderProbeResult, authFlow?: ProviderAuthState, install?: ProviderInstallState, };
