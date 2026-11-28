@@ -202,7 +202,7 @@
       "type": "string"
     },
     "Fold": {
-      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.",
+      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.\n\nSteers: `input.delivered {as: steer, outcome: accepted}` moves the input from\n`queuedInputs` to `steeredInputs`. A later `{as: steer, outcome: declined}` for an input in\n`steeredInputs` (the engine dropped an accepted steer, `EngineEvent::SteerUpdated` Cancelled)\nmoves it back to the END of `queuedInputs` with mode `followup`, same inputId, text, source\nand attachments (v1 re-dispatches through the normal queue). A declined steer still queued is\nunchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as\nthe turn ends still requeues.",
       "properties": {
         "activeRunId": {
           "anyOf": [
@@ -265,6 +265,13 @@
           "description": "Children started and not yet reported; `card.children.running` is its length.",
           "items": {
             "$ref": "#/$defs/ThreadId"
+          },
+          "type": "array"
+        },
+        "steeredInputs": {
+          "description": "Steers the engine accepted that are not settled yet (see the steer rules above). Omitted\nwhen empty; checkpoints written before this field read as empty.",
+          "items": {
+            "$ref": "#/$defs/QueuedInput"
           },
           "type": "array"
         }

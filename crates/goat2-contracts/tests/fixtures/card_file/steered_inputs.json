@@ -1,0 +1,59 @@
+{
+  "card": {
+    "appliedSeq": 1,
+    "botId": null,
+    "cardSeq": 1,
+    "children": {
+      "running": 1,
+      "total": 1
+    },
+    "engine": {
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "example"
+      },
+      "runtimeMode": "auto",
+      "cwd": "example"
+    },
+    "engineRef": null,
+    "epoch": "example",
+    "followUpMode": "steer",
+    "id": "example",
+    "kind": "bot",
+    "needsYou": null,
+    "parent": null,
+    "projectId": null,
+    "status": "idle",
+    "title": "example",
+    "updatedAt": "2026-11-28T10:00:00Z",
+    "latestAnswerExcerpt": "example",
+    "archivedAt": null
+  },
+  "fold": {
+    "activeRunId": null,
+    "activeRunInputIds": [],
+    "activeRunReachedEngine": true,
+    "counters": {
+      "inputs": 1,
+      "items": 1,
+      "runs": 1
+    },
+    "heldInputs": [],
+    "lastRunOutcome": null,
+    "openRequests": [],
+    "queuedInputs": [],
+    "runningChildIds": [],
+    "steeredInputs": [
+      {
+        "inputId": "input-steer-1",
+        "text": "also check the tests",
+        "mode": "steer",
+        "source": {
+          "kind": "user"
+        }
+      }
+    ]
+  },
+  "v": 1
+}
