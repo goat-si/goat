@@ -125,6 +125,7 @@ fn auth(status: ServerProviderAuthStatus) -> ServerProviderAuth {
         auth_type: None,
         label: None,
         email: None,
+        action: None,
         can_logout: None,
         subscription_sharing: None,
         profile_id: None,
