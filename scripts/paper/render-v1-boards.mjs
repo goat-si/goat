@@ -11,7 +11,7 @@ const scenes = {
   "1QYE-2": async (p) => { await p.goto(BASE + "/?fake=1QYE-2"); await p.getByRole("button", { name: "GOAT model: gpt-6.1-sol" }).click(); await p.getByText("GPT-6 Luna", { exact: true }).waitFor(); },
 };
 const serialize = () => {
-  const P = ["display","position","flex-direction","flex-wrap","flex-grow","flex-shrink","flex-basis","align-items","align-self","justify-content","row-gap","column-gap","grid-template-columns","grid-template-rows","padding-top","padding-right","padding-bottom","padding-left","margin-top","margin-right","margin-bottom","margin-left","border-top-width","border-right-width","border-bottom-width","border-left-width","border-top-style","border-right-style","border-bottom-style","border-left-style","border-top-color","border-right-color","border-bottom-color","border-left-color","border-top-left-radius","border-top-right-radius","border-bottom-right-radius","border-bottom-left-radius","background-color","background-image","opacity","box-shadow","transform","overflow-x","overflow-y","z-index","filter","outline-width","outline-style","outline-color","outline-offset"];
+  const P = ["display","position","flex-direction","flex-wrap","flex-grow","flex-shrink","flex-basis","align-items","align-self","justify-content","row-gap","column-gap","grid-template-columns","grid-template-rows","padding-top","padding-right","padding-bottom","padding-left","margin-top","margin-right","margin-bottom","margin-left","border-top-width","border-right-width","border-bottom-width","border-left-width","border-top-style","border-right-style","border-bottom-style","border-left-style","border-top-color","border-right-color","border-bottom-color","border-left-color","border-top-left-radius","border-top-right-radius","border-bottom-right-radius","border-bottom-left-radius","background-color","background-image","opacity","box-shadow","transform","overflow-x","overflow-y","filter","outline-width","outline-style","outline-color","outline-offset"];
   const T = ["color","font-size","font-weight","font-style","line-height","letter-spacing","text-align","text-transform","text-decoration-line","white-space","text-overflow","font-variant-numeric"];
   const SKIP = { "position":"static","flex-grow":"0","flex-shrink":"1","flex-basis":"auto","align-self":"auto","row-gap":"normal","column-gap":"normal","grid-template-columns":"none","grid-template-rows":"none","flex-wrap":"nowrap","flex-direction":"row","align-items":"normal","justify-content":"normal","background-color":"rgba(0, 0, 0, 0)","background-image":"none","opacity":"1","box-shadow":"none","transform":"none","overflow-x":"visible","overflow-y":"visible","z-index":"auto","filter":"none","backdrop-filter":"none","outline-style":"none","letter-spacing":"normal","text-transform":"none","text-decoration-line":"none","text-overflow":"clip","font-style":"normal","font-variant-numeric":"normal","white-space":"normal" };
   const fam = (f) => /mono|Menlo|SF Mono|ui-monospace|Courier/i.test(f) ? '"SF Mono", ui-monospace, monospace' : '"SF Pro", system-ui, sans-serif';
@@ -28,6 +28,13 @@ const serialize = () => {
     const r = el.getBoundingClientRect();
     if (r.right < 0 || r.bottom < 0 || r.left > W || r.top > H) return "";
     if (r.width === 0 && r.height === 0 && !el.children.length) return "";
+    if (el.tagName.toLowerCase() === "svg" && el.querySelector("image")) {
+      const im = el.querySelector("image"); const src = im.getAttribute("href") || im.getAttribute("xlink:href") || "";
+      const st = [`width:${r.width}px`,`height:${r.height}px`,"flex-shrink:0","object-fit:contain"];
+      if (inGrid || cs.position === "absolute" || cs.position === "fixed") st.push("position:absolute",`left:${r.left-ancPos.x}px`,`top:${r.top-ancPos.y}px`);
+      const cp = el.querySelector("clipPath rect, clipPath circle"); if (cp) { const rx = parseFloat(cp.getAttribute("rx") || (cp.tagName === "circle" ? "999" : "0")); if (rx) st.push(`border-radius:${rx >= 999 ? "50%" : (rx * r.width / (el.viewBox?.baseVal?.width || r.width)) + "px"}`); }
+      return `<img src="${src}" style="${st.join(";")}">`;
+    }
     if (el.tagName.toLowerCase() === "svg") {
       const c = el.cloneNode(true);
       const srcEls = [el, ...el.querySelectorAll("*")], dstEls = [c, ...c.querySelectorAll("*")];
@@ -64,19 +71,29 @@ const serialize = () => {
       const i = st.findIndex(s => s.startsWith("position:")); st[i] = "position:absolute"; for (let k = st.length - 1; k > i; k--) if (st[k] === "position:absolute") st.splice(k, 1);
       st.push(`left:${r.left-ancPos.x}px`, `top:${r.top-ancPos.y}px`);
       const ti = st.findIndex(s => s.startsWith("transform:")); if (ti >= 0 && /^matrix\(1, 0, 0, 1,/.test(cs.transform)) st.splice(ti, 1);
-    } else if (pos === "sticky") { const i = st.findIndex(s => s.startsWith("position:")); st[i] = "position:relative"; }
-    if (pos !== "static") my = { x: r.left + parseFloat(cs.borderLeftWidth), y: r.top + parseFloat(cs.borderTopWidth) };
+    } else if (/^matrix\(1, 0, 0, 1,/.test(cs.transform)) { const m = cs.transform.match(/matrix\(1, 0, 0, 1, ([-\d.e]+), ([-\d.e]+)\)/); const ti = st.findIndex(x => x.startsWith("transform:")); if (m && ti >= 0) st[ti] = `transform:translate(${m[1]}px, ${m[2]}px)`; }
+    if (pos !== "absolute" && pos !== "fixed" && cs.translate && cs.translate !== "none" && !st.some(x => x.startsWith("transform:"))) { const t = cs.translate.split(/\s+/); st.push(`transform:translate(${t[0]}, ${t[1] || "0px"})`); }
+    if (pos === "sticky") { const i = st.findIndex(s => s.startsWith("position:")); st[i] = "position:relative"; }
+    my = { x: r.left + parseFloat(cs.borderLeftWidth), y: r.top + parseFloat(cs.borderTopWidth) };
     if (pos === "static") { /* nothing */ }
     const inline = cs.display.startsWith("inline") && cs.display !== "inline-flex" && cs.display !== "inline-block" && cs.display !== "inline-grid";
     if (!inline) st.push(`width:${r.width}px`, `height:${r.height}px`, "flex-shrink:0");
+    // auto margins (mx-auto) can read back as 0px: pin the horizontal offset from the real box in block or column-flex parents
+    const par = el.parentElement, pcs = par && getComputedStyle(par);
+    if (!inline && !inGrid && pos !== "absolute" && pos !== "fixed" && pcs && (pcs.display === "block" || pcs.display === "flow-root" || (pcs.display.endsWith("flex") && pcs.flexDirection.startsWith("column")))) {
+      const pr = par.getBoundingClientRect(); const ml = r.left - (pr.left + parseFloat(pcs.borderLeftWidth) + parseFloat(pcs.paddingLeft)) + par.scrollLeft;
+      for (const k of ["margin-left","margin-right","align-self"]) { const z = st.findIndex(x => x.startsWith(k + ":")); if (z >= 0) st.splice(z, 1); }
+      if (Math.abs(ml) > 0.5) st.push(`margin-left:${ml}px`);
+      if (pcs.display.endsWith("flex")) st.push("align-self:flex-start");
+    }
     const hasText = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
     const isField = el.tagName === "INPUT" || el.tagName === "TEXTAREA";
     if (hasText || isField) { for (const p of T) { const v = cs.getPropertyValue(p); if (!v || SKIP[p] === v) continue; st.push(`${p}:${v}`); } st.push(`font-family:${fam(cs.fontFamily)}`); if (r.height < parseFloat(cs.lineHeight || cs.fontSize) * 1.6 && cs.whiteSpace === "normal") st.push("white-space:nowrap"); }
     if (pos !== "static" && !st.some(s => s.startsWith("position:"))) st.push("position:relative");
-    if (my !== ancPos && !st.some(s => s.startsWith("position:"))) st.push("position:relative");
-    const isGrid = cs.display === "grid" || cs.display === "inline-grid";
+    if (cs.display !== "contents" && !st.some(s => s.startsWith("position:"))) st.push("position:relative");
+    const isGrid = cs.display === "grid" || cs.display === "inline-grid" || !!(el.scrollTop || el.scrollLeft);
     let gridPos = my;
-    if (isGrid) { const gi = st.findIndex(x => x.startsWith("display:")); st[gi] = "display:block"; for (const k of ["grid-template-columns","grid-template-rows","row-gap","column-gap","align-items","justify-content"]) { const z = st.findIndex(x => x.startsWith(k + ":")); if (z >= 0) st.splice(z, 1); } if (!st.some(x => x.startsWith("position:"))) st.push("position:relative"); gridPos = { x: r.left + parseFloat(cs.borderLeftWidth), y: r.top + parseFloat(cs.borderTopWidth) }; }
+    if (isGrid) { const gi = st.findIndex(x => x.startsWith("display:")); if (gi >= 0) st[gi] = "display:block"; for (const k of ["grid-template-columns","grid-template-rows","row-gap","column-gap","align-items","justify-content"]) { const z = st.findIndex(x => x.startsWith(k + ":")); if (z >= 0) st.splice(z, 1); } if (!st.some(x => x.startsWith("position:"))) st.push("position:relative"); gridPos = { x: r.left + parseFloat(cs.borderLeftWidth), y: r.top + parseFloat(cs.borderTopWidth) }; }
     let inner = "";
     if (isField) {
       const val = el.value; const ph = el.getAttribute("placeholder") || "";
@@ -84,10 +101,9 @@ const serialize = () => {
     } else {
       for (const n of el.childNodes) {
         if (n.nodeType === 3) { const t = n.textContent.replace(/\s+/g, " "); if (t.trim()) inner += esc(t); }
-        else if (n.nodeType === 1) inner += emit(n, isGrid ? gridPos : my, isGrid);
+        else if (n.nodeType === 1) inner += emit(n, cs.display === "contents" ? ancPos : (isGrid ? gridPos : my), cs.display === "contents" ? inGrid : isGrid);
       }
     }
-    if ((el.scrollTop || el.scrollLeft) && inner) inner = `<div style="margin-top:${-el.scrollTop}px;margin-left:${-el.scrollLeft}px;display:${cs.display === "flex" ? "flex" : "block"};flex-direction:${cs.flexDirection};flex-shrink:0;width:${el.scrollWidth}px">${inner}</div>`;
     const tag = inline ? "span" : "div";
     if (cs.display === "contents") return inner;
     return `<${tag} style="${fixColors(st.join(";"))}">${inner}</${tag}>`;

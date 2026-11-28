@@ -35,7 +35,13 @@ DOM with computed styles inlined (colors resolved to hex, grids and portals flat
 offsets applied, system font stack), and the HTML replaces the board content in Paper (board ids kept). Script:
 `scripts/paper/render-v1-boards.mjs`. Regenerate this way after P2-M changes instead of redrawing.
 
-Pixel difference vs the browser screenshot (threshold 48/255): P1 2.4%, P2 3.3%, P3 0.6%, P4 0.8%, P5 0.6%.
-Known gaps: v1's privacy blur on emails is not reproduced (the fake host's scrambled placeholder shows); on P2 the
-providers card sits ~58px further left than in the browser; the Antigravity PNG logo and a few toggle thumbs render
-slightly differently. Data is the fake host's placeholder data.
+Pixel difference vs the browser screenshot (threshold 48/255; hot 16px tiles = tiles with >25% differing pixels):
+P1 0.8% / 13, P2 1.0% / 33, P3 0.5% / 20, P4 0.8% / 21, P5 0.3% / 10. Look at the side-by-side too: a low overall
+percentage hid stray icons once (z-index from the page lifted its logos above the dialog in Paper).
+
+Serializer rules Paper needs (in the script): no z-index (Paper paints in tree order, layers re-sorted after write);
+absolute boxes anchored to their direct parent; grid and scrolled containers flattened to absolute children at their
+real boxes; auto margins pinned from the real box; translate/CSS `translate` written as `translate()`; colors as hex;
+SVG `<image>` (Antigravity PNG) as `<img>`; no backdrop-filter.
+Known gaps: v1's email privacy blur and the dialog backdrop blur are not reproduced (Paper has no backdrop blur).
+Data is the fake host's placeholder data.
