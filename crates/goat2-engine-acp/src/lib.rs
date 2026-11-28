@@ -1,6 +1,7 @@
 //! GOAT 2 ACP driver: every ACP agent GOAT v1 supports (Grok, fx, Antigravity and the ACP
 //! registry agents), on Zed's official `agent-client-protocol` crate, behind `goat2-engine-api`.
 
+pub mod agents;
 pub mod capabilities;
 pub mod elicitation;
 pub mod engine;
