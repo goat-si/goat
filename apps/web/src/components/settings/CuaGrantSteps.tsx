@@ -244,7 +244,7 @@ export function CuaGrantSteps({
                 ) : null}
               </p>
               <p className="text-xs text-muted-foreground">Lets you press Esc to stop the agent.</p>
-              {grants.inputMonitoring === undefined && inputMonitoringOpener === undefined ? (
+              {grants.inputMonitoring !== true && inputMonitoringOpener === undefined ? (
                 <p className="text-xs text-muted-foreground">
                   In System Settings → Privacy &amp; Security → Input Monitoring, allow{" "}
                   {grants.name}.

@@ -347,11 +347,22 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
   });
 
   it("refuses 302 redirects to blocked hosts or non-http schemes without leaking response data", async () => {
+    let blockedHostHits = 0;
     const server = NodeHttp.createServer((request, response) => {
       const port = (server.address() as NodeNet.AddressInfo).port;
       if (request.url === "/page") {
         response.writeHead(200, { "content-type": "text/html" });
         response.end("<p>ok</p>");
+        return;
+      }
+      if (request.url === "/to-allowed") {
+        response.writeHead(302, { location: "/allowed-final" });
+        response.end();
+        return;
+      }
+      if (request.url === "/allowed-final") {
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.end("ALLOWED_REDIRECT_BODY");
         return;
       }
       if (request.url === "/to-blocked") {
@@ -365,6 +376,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         return;
       }
       if (request.url === "/hop") {
+        blockedHostHits++;
         response.writeHead(302, {
           location: `http://127.0.0.1:${port}/final`,
           "access-control-allow-origin": "*",
@@ -373,6 +385,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         return;
       }
       if (request.url === "/secret") {
+        blockedHostHits++;
         response.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
@@ -381,6 +394,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         return;
       }
       if (request.url === "/final") {
+        blockedHostHits++;
         response.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
@@ -401,7 +415,8 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       [Symbol.asyncDispose]: () => new Promise<void>((done) => server.close(() => done())),
     };
     const port = (server.address() as NodeNet.AddressInfo).port;
-    await page.goto(`http://127.0.0.1:${port}/page`);
+    const redirectPage = await context.newPage();
+    await redirectPage.goto(`http://127.0.0.1:${port}/page`);
     const blockedUrls: Array<string> = [];
     const validateUrl = (targetUrl: string) => {
       if (new URL(targetUrl).hostname === "localhost") {
@@ -409,15 +424,24 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         throw new Error("blocked_redirect_host");
       }
     };
+    const allowed = await inPageFetch(
+      redirectPage,
+      control,
+      { url: "/to-allowed" },
+      undefined,
+      validateUrl,
+    );
+    expect(allowed.text).toBe("ALLOWED_REDIRECT_BODY");
     await expect(
-      inPageFetch(page, control, { url: "/to-blocked" }, undefined, validateUrl),
+      inPageFetch(redirectPage, control, { url: "/to-blocked" }, undefined, validateUrl),
     ).rejects.toThrow("blocked_redirect_host");
     await expect(
-      inPageFetch(page, control, { url: "/bounce" }, undefined, validateUrl),
+      inPageFetch(redirectPage, control, { url: "/bounce" }, undefined, validateUrl),
     ).rejects.toThrow("blocked_redirect_host");
     await expect(
-      inPageFetch(page, control, { url: "/to-file" }, undefined, validateUrl),
-    ).rejects.toThrow(/Only http and https/);
+      inPageFetch(redirectPage, control, { url: "/to-file" }, undefined, validateUrl),
+    ).rejects.toThrow(/Only http and https|Refused redirect without a valid Location header/);
+    expect(blockedHostHits).toBe(0);
     expect(blockedUrls.some((entry) => entry.includes("/secret"))).toBe(true);
     expect(blockedUrls.some((entry) => entry.includes("/hop"))).toBe(true);
   });

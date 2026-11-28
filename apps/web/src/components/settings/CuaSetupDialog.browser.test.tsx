@@ -130,6 +130,15 @@ it("shows live Input Monitoring status and opens its settings pane without block
   expect(button("Open Settings")).toBeUndefined();
 });
 
+it("shows manual Input Monitoring instructions when not set and no desktop opener exists", async () => {
+  const f = fixture({ inputMonitoring: false });
+  await using _screen = await dialog(f);
+  await allowAll();
+  expect(text()).toContain("Not set");
+  expect(text()).toContain("Input Monitoring, allow");
+  expect(button("Open Settings")).toBeUndefined();
+});
+
 it("turns on only after both grants, then reports the step that failed and retries the check", async () => {
   const f = fixture();
   f.onVerify.mockResolvedValueOnce({

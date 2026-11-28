@@ -58,6 +58,11 @@ namespace Goat.ComputerUse
 
             public int Count { get { return items.Count; } }
 
+            public bool ContainsKey(TKey key)
+            {
+                return items.ContainsKey(key);
+            }
+
             public void Set(TKey key, TValue value)
             {
                 Entry existing;
@@ -154,7 +159,15 @@ namespace Goat.ComputerUse
                     Window = given == null ? IntPtr.Zero : WindowOf(given),
                     Arguments = given,
                 };
-                lock (gate) pending.Set(key, entry);
+                lock (gate)
+                {
+                    if (pending.Count >= MaxPendingEntries && !pending.ContainsKey(key))
+                    {
+                        refusal = "{\"jsonrpc\":\"2.0\",\"id\":" + Serialize(id) + ",\"error\":{\"code\":-32000,\"message\":\"Too many pending computer use calls; wait for earlier calls to finish.\"}}";
+                        return null;
+                    }
+                    pending.Set(key, entry);
+                }
             }
             return DropOutFiles(arguments) ? Serialize(message) : line;
         }

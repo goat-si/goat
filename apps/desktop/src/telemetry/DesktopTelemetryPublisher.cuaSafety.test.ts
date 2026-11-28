@@ -92,12 +92,27 @@ describe("DesktopTelemetryPublisher CUA safety routing", () => {
 
         yield* publisher.publishCuaSafety(locked);
         yield* publisher.publishCuaSafety(personStop);
+        yield* publisher.publishCuaReadiness({
+          version: 1,
+          type: "cuaReadiness",
+          generation: 5,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { privateMode: "supported", humanInput: "supported" },
+        });
         const reconnected = yield* collectTelemetry(publisher.encodedForSource("primary"));
         const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
         const replayed =
           reconnected.received.find((message) => message.type === "cuaSessionLock") ??
           (yield* reconnected.next("cuaSessionLock"));
-        assert.deepEqual(replayed, locked);
+        assert.deepEqual(replayed, { ...locked, generation: 5 });
         assert.isEmpty(reconnected.received.filter((message) => message.type === "cuaPersonStop"));
 
         yield* publisher.publishCuaSafety(personStop);

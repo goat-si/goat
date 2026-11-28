@@ -43,6 +43,11 @@ type PageOutcome =
       readonly invalidUrl?: boolean;
     }
   | {
+      readonly kind: "redirect";
+      readonly url: string;
+      readonly status: number;
+    }
+  | {
       readonly url: string;
       readonly status: number;
       readonly ok: boolean;
@@ -80,10 +85,13 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
   try {
     const response = await fetch(url, {
       credentials: "same-origin",
-      redirect: "follow",
+      redirect: "manual",
       cache: "no-store",
       signal: controller.signal,
     });
+    if (response.type === "opaqueredirect") {
+      return { kind: "redirect", url: response.url || url, status: response.status };
+    }
     const finalUrl = response.url || url;
     let finalProtocol = "";
     try { finalProtocol = new URL(finalUrl).protocol; } catch {}
@@ -324,104 +332,58 @@ type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
 
 const DNS_ERRORS = new Set(["net::ERR_NAME_NOT_RESOLVED", "net::ERR_NAME_RESOLUTION_FAILED"]);
 
-const watchFetchFailure = (page: FetchPage, url: string, validateUrl?: FetchUrlValidator) => {
+const watchFetchFailure = (page: FetchPage, url: string) => {
   const requested = url.split("#")[0];
   let failed: Request | undefined;
-  const seenUrls = new Set<string>();
-  const validations: Array<Promise<void>> = [];
-  let redirectError: unknown;
-  const recordError = (cause: unknown) => {
-    if (redirectError === undefined) redirectError = cause;
-  };
-  const checkHopUrl = (hopUrl: string) => {
-    if (seenUrls.has(hopUrl)) return;
-    seenUrls.add(hopUrl);
-    let checked: string;
-    try {
-      checked = assertHttpUrl(hopUrl);
-    } catch (cause) {
-      recordError(cause);
-      return;
-    }
-    if (!validateUrl) return;
-    validations.push(
-      Promise.resolve()
-        .then(() => validateUrl(checked))
-        .catch((cause: unknown) => {
-          recordError(cause);
-        }),
-    );
-  };
-  const requestChain = (request: Request) => {
-    const chain: Array<Request> = [];
-    for (let current: Request | null = request; current; current = current.redirectedFrom())
-      chain.push(current);
-    return chain;
-  };
-  const onRequest = (request: Request) => {
-    const chain = requestChain(request);
-    const first = chain.at(-1);
-    if (!first || request.resourceType() !== "fetch" || first.url() !== requested) return;
-    if (chain.length - 1 > MAX_REDIRECT_HOPS) {
-      recordError(
-        new ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `Fetching ${url} exceeded the maximum redirect limit (${MAX_REDIRECT_HOPS}).`,
-        ),
-      );
-      return;
-    }
-    for (let index = chain.length - 1; index >= 0; index--) {
-      const hop = chain[index];
-      if (hop && hop !== first) checkHopUrl(hop.url());
-    }
+  let redirectLocation: string | undefined;
+  let redirectSettled = false;
+  let resolveRedirect: ((value: string | undefined) => void) | undefined;
+  const redirectPromise = new Promise<string | undefined>((resolve) => {
+    resolveRedirect = resolve;
+  });
+  const settleRedirect = (value: string | undefined) => {
+    if (redirectSettled) return;
+    redirectSettled = true;
+    redirectLocation = value;
+    resolveRedirect?.(value);
   };
   const onResponse = (response: Response) => {
     const request = response.request();
-    const chain = requestChain(request);
-    const first = chain.at(-1);
-    if (!first || request.resourceType() !== "fetch" || first.url() !== requested) return;
+    if (request.resourceType() !== "fetch" || request.url() !== requested) return;
     const status = response.status();
     if (status < 300 || status >= 400) return;
-    const location = response.headers()["location"];
-    if (location === undefined || location.trim() === "") return;
-    let resolved: string;
-    try {
-      resolved = new URL(location, request.url()).href;
-    } catch {
-      recordError(
-        new ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          "Refused redirect to an invalid Location header.",
-        ),
-      );
+    const direct = response.headers()["location"];
+    if (direct !== undefined && direct.trim() !== "") {
+      settleRedirect(direct.trim());
       return;
     }
-    checkHopUrl(resolved);
+    void response
+      .headerValue("location")
+      .then((value) => {
+        settleRedirect(value !== null && value.trim() !== "" ? value.trim() : undefined);
+      })
+      .catch(() => {
+        settleRedirect(undefined);
+      });
   };
   const onFailed = (request: Request) => {
-    const first = requestChain(request).at(-1);
-    if (
-      failed === undefined &&
-      first &&
-      request.resourceType() === "fetch" &&
-      first.url() === requested
-    )
+    if (failed === undefined && request.resourceType() === "fetch" && request.url() === requested) {
       failed = request;
+      settleRedirect(undefined);
+    }
   };
-  page.on("request", onRequest);
   page.on("response", onResponse);
   page.on("requestfailed", onFailed);
   return {
     dispose: () => {
-      page.off("request", onRequest);
       page.off("response", onResponse);
       page.off("requestfailed", onFailed);
+      settleRedirect(undefined);
     },
-    assertRedirects: async () => {
-      if (validations.length > 0) await Promise.all(validations);
-      if (redirectError !== undefined) throw redirectError;
-    },
+    redirectLocation: (deadline: number) =>
+      redirectSettled
+        ? Promise.resolve(redirectLocation)
+        : beforeDeadline(redirectPromise, deadline, url),
     classify: (outcome: { readonly reachable?: boolean; readonly policyBlocked?: boolean }) => {
       if (outcome.policyBlocked)
         return {
@@ -511,40 +473,59 @@ const fetchInPage = async (
   gate?: DispatchGate,
   validateUrl?: FetchUrlValidator,
 ): Promise<InPageFetchResult> => {
-  const url = resolveFetchUrl(input.url, page.url());
-  await validateUrl?.(url);
+  const initialUrl = resolveFetchUrl(input.url, page.url());
   const format = input.format ?? "markdown";
   const maxChars = bounded(input.maxChars, DEFAULT_MAX_CHARS, 1, MAX_CHARS);
+  const maxSavedBytes = bounded(input.maxSavedBytes, MAX_SAVED_BYTES, 1, MAX_SAVED_BYTES);
   const deadline = Math.min(
     input.deadline ?? Number.POSITIVE_INFINITY,
     performance.now() + bounded(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, MAX_TIMEOUT_MS),
   );
-  const timeoutMs = Math.max(1, Math.floor(deadline - performance.now()));
-  const args = JSON.stringify({
-    url,
-    format,
-    maxChars,
-    maxBytes: MAX_BODY_BYTES,
-    maxSavedBytes: bounded(input.maxSavedBytes, MAX_SAVED_BYTES, 1, MAX_SAVED_BYTES),
-    timeoutMs,
-    secretPattern: SECRET_NAME.source,
-  });
-  const watch = watchFetchFailure(page, url, validateUrl);
-  try {
-    return await fetchHeld(
-      page,
-      args,
-      url,
+  let currentUrl = initialUrl;
+  for (let hop = 0; ; hop++) {
+    await validateUrl?.(currentUrl);
+    const timeoutMs = Math.max(1, Math.floor(deadline - performance.now()));
+    const args = JSON.stringify({
+      url: currentUrl,
       format,
       maxChars,
+      maxBytes: MAX_BODY_BYTES,
+      maxSavedBytes,
       timeoutMs,
-      deadline,
-      watch,
-      gate,
-      validateUrl,
-    );
-  } finally {
-    watch.dispose();
+      secretPattern: SECRET_NAME.source,
+    });
+    const watch = watchFetchFailure(page, currentUrl);
+    let step:
+      | { readonly kind: "done"; readonly result: InPageFetchResult }
+      | { readonly kind: "redirect"; readonly location: string | undefined };
+    try {
+      step = await fetchHeld(
+        page,
+        args,
+        currentUrl,
+        format,
+        maxChars,
+        timeoutMs,
+        deadline,
+        watch,
+        gate,
+        validateUrl,
+      );
+    } finally {
+      watch.dispose();
+    }
+    if (step.kind === "done") return step.result;
+    if (hop >= MAX_REDIRECT_HOPS)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        `Fetching ${initialUrl} exceeded the maximum redirect limit (${MAX_REDIRECT_HOPS}).`,
+      );
+    if (step.location === undefined)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "Refused redirect without a valid Location header.",
+      );
+    currentUrl = resolveFetchUrl(step.location, currentUrl);
   }
 };
 
@@ -559,7 +540,10 @@ const fetchHeld = async (
   watch: ReturnType<typeof watchFetchFailure>,
   gate?: DispatchGate,
   validateUrl?: FetchUrlValidator,
-): Promise<InPageFetchResult> => {
+): Promise<
+  | { readonly kind: "done"; readonly result: InPageFetchResult }
+  | { readonly kind: "redirect"; readonly location: string | undefined }
+> => {
   await gate?.();
   const expression = `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`;
   if (gate && !gate.channel) throw new Error("An action channel is required for fetch.");
@@ -597,13 +581,15 @@ const shapeOutcome = async (
   deadline: number,
   watch: ReturnType<typeof watchFetchFailure>,
   validateUrl?: FetchUrlValidator,
-): Promise<InPageFetchResult> => {
+): Promise<
+  | { readonly kind: "done"; readonly result: InPageFetchResult }
+  | { readonly kind: "redirect"; readonly location: string | undefined }
+> => {
   const outcome = await beforeDeadline(
     held.evaluate((value) => value.outcome, undefined),
     deadline,
     url,
   );
-  await watch.assertRedirects();
   if ("error" in outcome) {
     if (outcome.invalidUrl)
       throw new ServerBrowserOperationError("PreviewAutomationExecutionError", outcome.error);
@@ -625,6 +611,8 @@ const shapeOutcome = async (
       `Fetching ${url} failed: ${failed}`,
     );
   }
+  if (outcome.kind === "redirect")
+    return { kind: "redirect", location: await watch.redirectLocation(deadline) };
   const finalUrl = assertHttpUrl(outcome.url);
   await validateUrl?.(finalUrl);
   const cookies = await tabCookies(page, [url, finalUrl]);
@@ -636,10 +624,16 @@ const shapeOutcome = async (
     contentType: redact(outcome.contentType),
   };
   if (outcome.kind === "raw")
-    return { ...head, format: "raw", text: "", truncated: outcome.truncated };
+    return {
+      kind: "done",
+      result: { ...head, format: "raw", text: "", truncated: outcome.truncated },
+    };
   if (outcome.kind === "binary") {
     const body = await readHeldBody(held, outcome.size ?? 0, deadline, url);
-    return { ...head, format: "raw", text: "", truncated: false, [FETCHED_BODY]: body };
+    return {
+      kind: "done",
+      result: { ...head, format: "raw", text: "", truncated: false, [FETCHED_BODY]: body },
+    };
   }
   let shown: string;
   let wasTruncated = outcome.truncated;
@@ -655,9 +649,12 @@ const shapeOutcome = async (
   const text = redact(wasTruncated ? shown.replace(/\S+$/, "") : shown);
   const result = truncateText(text, maxChars);
   return {
-    ...head,
-    format: outcome.kind === "html" || outcome.kind === "html_markdown" ? format : "text",
-    text: result.text,
-    truncated: wasTruncated || result.truncated,
+    kind: "done",
+    result: {
+      ...head,
+      format: outcome.kind === "html" || outcome.kind === "html_markdown" ? format : "text",
+      text: result.text,
+      truncated: wasTruncated || result.truncated,
+    },
   };
 };

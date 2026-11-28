@@ -108,6 +108,7 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         let port = 0;
+        let blockedHopHits = 0;
         const services = yield* Layer.build(
           HttpRouter.serve(
             Layer.mergeAll(
@@ -124,12 +125,13 @@ it.effect(
               HttpRouter.add(
                 "GET",
                 "/hop",
-                Effect.sync(() =>
-                  HttpServerResponse.empty({
+                Effect.sync(() => {
+                  blockedHopHits += 1;
+                  return HttpServerResponse.empty({
                     status: 302,
                     headers: { location: `http://127.0.0.1:${port}/safe` },
-                  }),
-                ),
+                  });
+                }),
               ),
               HttpRouter.add(
                 "GET",
@@ -169,6 +171,7 @@ it.effect(
         expect(fetched._tag).toBe("Failure");
         if (fetched._tag === "Failure")
           expect(fetched.failure).toMatchObject({ reason: "blocked_url" });
+        expect(blockedHopHits).toBe(0);
         const pressed = yield* broker
           .invoke({ scope, tabId, operation: "press", input: { key: "Enter" } })
           .pipe(Effect.result);

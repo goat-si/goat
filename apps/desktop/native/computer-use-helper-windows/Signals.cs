@@ -237,14 +237,19 @@ namespace Goat.ComputerUse
             bool known = WindowsFacts.Focus(out pid, out password);
             if (targets.Count == 0)
             {
-                ReconcileAnywhere(all, IsConfirmedAnywherePrivateFocus(known, password) ? (Target?)Holder(pid) : (Target?)null);
+                Target? nextAnywhere = known
+                    ? (IsConfirmedAnywherePrivateFocus(known, password) ? (Target?)Holder(pid) : (Target?)null)
+                    : anywhereActive;
+                ReconcileAnywhere(all, nextAnywhere);
                 return;
             }
             foreach (Target target in targets)
             {
-                bool now = WindowAlive(target) && IsConfirmedPrivateFocus(known, password, pid, target.Pid);
                 bool was;
-                if (!all && active.TryGetValue(target.Key, out was) && was == now) continue;
+                bool had = active.TryGetValue(target.Key, out was);
+                bool now = WindowAlive(target) &&
+                    (known ? IsConfirmedPrivateFocus(known, password, pid, target.Pid) : (had && was));
+                if (!all && had && was == now) continue;
                 active[target.Key] = now;
                 outbox.Add(Frame(watchId, PrivateMode(target, now)), PrivateKey(watchId, target));
             }

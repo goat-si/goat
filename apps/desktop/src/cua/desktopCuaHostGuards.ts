@@ -25,6 +25,7 @@ export interface DesktopCuaPowerSource {
     event: DesktopCuaPowerEvent,
     listener: () => void,
   ) => Effect.Effect<void, never, Scope.Scope>;
+  readonly getSystemIdleState?: (idleThresholdSeconds: number) => Effect.Effect<string>;
   readonly handled?: () => void;
 }
 
@@ -154,6 +155,14 @@ export const makeDesktopCuaHostGuards = Effect.fn("desktop.cua.hostGuards.make")
       yield* Effect.forEach(registrations, ([event, listener]) => power.on(event, listener), {
         discard: true,
       });
+      if (power.getSystemIdleState !== undefined) {
+        const idleState = yield* power
+          .getSystemIdleState(1)
+          .pipe(Effect.orElseSucceed(() => "active"));
+        if (idleState === "locked") {
+          sessionLockGuard.reportPoll({ screenLocked: true });
+        }
+      }
     }
     if (deps.power !== undefined && deps.platform === "darwin") {
       yield* resetProofOn(deps.power, (event) =>

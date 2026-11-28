@@ -372,6 +372,7 @@ it("locator and coordinate clicks refuse native select and file input elements b
         <option value="ca">CA</option>
       </select>
       <input id="upload" type="file" style="position:absolute;left:10px;top:60px;width:200px;height:30px">
+      <label id="upload-label" for="upload" style="position:absolute;left:10px;top:160px;width:140px;height:30px;display:block"><span>Choose file</span></label>
       <div id="shadow-host" style="position:absolute;left:10px;top:110px"></div>
       <script>
         window.pointerEvents = [];
@@ -422,6 +423,34 @@ it("locator and coordinate clicks refuse native select and file input elements b
         beforeInput: true,
         clickRefusal: "special_element_refused",
         kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { locator: "#upload-label" })).rejects.toMatchObject(
+      {
+        tag: "PreviewAutomationExecutionError",
+        message: expect.stringContaining("goat_preview_upload"),
+        detail: {
+          beforeInput: true,
+          clickRefusal: "special_element_refused",
+          kind: "special_element_refused",
+        },
+      },
+    );
+    await expect(ServerBrowserPage.click(page, { x: 40, y: 175 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_upload"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: -50, y: -50 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      detail: {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
       },
     });
     expect(await page.evaluate("window.pointerEvents")).toEqual([]);

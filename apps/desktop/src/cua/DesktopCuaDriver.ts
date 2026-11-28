@@ -983,6 +983,9 @@ export const layer = Layer.effect(
   DesktopCuaDriver,
   Effect.gen(function* () {
     const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
-    return yield* make(dependencies, { on: powerMonitor.onSimpleEvent });
+    return yield* make(dependencies, {
+      on: powerMonitor.onSimpleEvent,
+      getSystemIdleState: powerMonitor.getSystemIdleState,
+    });
   }),
 );

@@ -117,6 +117,8 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     }
     return false;
   };
+  const targetLabel = enclosingLabel(element);
+  const targetControl = labelControl(targetLabel);
   let inside: boolean | undefined;
   let associated: boolean | undefined;
   if (at !== null) {
@@ -128,9 +130,7 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     }
     inside = within(hit, element);
     const hitLabel = enclosingLabel(hit);
-    const targetLabel = enclosingLabel(element);
     const hitControl = labelControl(hitLabel);
-    const targetControl = labelControl(targetLabel);
     associated =
       (hitLabel !== null &&
         (hitControl === element ||
@@ -147,6 +147,8 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
   return {
     tagName: typeof element.tagName === "string" ? element.tagName : "",
     inputType: typeof element.type === "string" ? element.type : undefined,
+    labelControlTagName: typeof targetControl?.tagName === "string" ? targetControl.tagName : "",
+    labelControlInputType: typeof targetControl?.type === "string" ? targetControl.type : undefined,
     rects: Array.from(element.getClientRects(), ({ x, y, width, height }) => ({
       x,
       y,
@@ -219,6 +221,16 @@ export const aimClickPoint = async (
       inputType: typeof measured.inputType === "string" ? measured.inputType : undefined,
     });
     if (!specialGuard.ok) throw await refusal("special_element_refused", specialGuard.message);
+    if (typeof measured.labelControlTagName === "string" && measured.labelControlTagName !== "") {
+      const labelGuard = checkSpecialElementClickGuard({
+        tagName: measured.labelControlTagName,
+        inputType:
+          typeof measured.labelControlInputType === "string"
+            ? measured.labelControlInputType
+            : undefined,
+      });
+      if (!labelGuard.ok) throw await refusal("special_element_refused", labelGuard.message);
+    }
     const frames: Array<FrameLink> = [];
     for (const element of elements) {
       const probe = await actionCall(gate, () => element.evaluate(probeElement, null));
@@ -326,11 +338,18 @@ const probePointElement = (at: readonly [number, number]) => {
   type PageNode = {
     readonly tagName?: string;
     readonly type?: string;
+    readonly control?: PageNode | null;
+    readonly htmlFor?: string;
+    readonly parentElement?: PageNode | null;
     readonly shadowRoot?: { elementFromPoint(x: number, y: number): PageNode | null } | null;
+    getRootNode?(): { getElementById?(id: string): PageNode | null };
   };
   const doc = (
     globalThis as unknown as {
-      readonly document?: { elementFromPoint(x: number, y: number): PageNode | null };
+      readonly document?: {
+        elementFromPoint(x: number, y: number): PageNode | null;
+        getElementById?(id: string): PageNode | null;
+      };
     }
   ).document;
   let hit = doc?.elementFromPoint(at[0], at[1]) ?? null;
@@ -339,12 +358,29 @@ const probePointElement = (at: readonly [number, number]) => {
     if (!inner || inner === hit) break;
     hit = inner;
   }
-  return hit
-    ? {
-        tagName: typeof hit.tagName === "string" ? hit.tagName : "",
-        inputType: typeof hit.type === "string" ? hit.type : undefined,
-      }
-    : null;
+  if (!hit) return null;
+  let label: PageNode | null = null;
+  for (let current: PageNode | null | undefined = hit; current; current = current.parentElement) {
+    if (current.tagName?.toUpperCase() === "LABEL") {
+      label = current;
+      break;
+    }
+  }
+  let control: PageNode | null = null;
+  if (label) {
+    if (label.control) control = label.control;
+    else if (label.control === undefined && label.htmlFor)
+      control =
+        label.getRootNode?.().getElementById?.(label.htmlFor) ??
+        doc?.getElementById?.(label.htmlFor) ??
+        null;
+  }
+  return {
+    tagName: typeof hit.tagName === "string" ? hit.tagName : "",
+    inputType: typeof hit.type === "string" ? hit.type : undefined,
+    labelControlTagName: typeof control?.tagName === "string" ? control.tagName : "",
+    labelControlInputType: typeof control?.type === "string" ? control.type : undefined,
+  };
 };
 
 export const assertCoordinateClickAllowed = async (
@@ -352,21 +388,58 @@ export const assertCoordinateClickAllowed = async (
   point: Point,
   gate: ReadinessGate,
 ): Promise<void> => {
-  let probed: { readonly tagName?: unknown; readonly inputType?: unknown } | null = null;
+  let probed: {
+    readonly tagName?: unknown;
+    readonly inputType?: unknown;
+    readonly labelControlTagName?: unknown;
+    readonly labelControlInputType?: unknown;
+  } | null = null;
   try {
     probed = await actionCall(gate, () =>
       frame.evaluate(probePointElement, [point.x, point.y] as const),
     );
   } catch (cause) {
     if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "Could not verify the click target at those coordinates, so nothing was clicked.",
+      {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
+      },
+    );
   }
-  if (probed !== null && typeof probed === "object") {
-    const guard = checkSpecialElementClickGuard({
-      tagName: typeof probed.tagName === "string" ? probed.tagName : "",
-      inputType: typeof probed.inputType === "string" ? probed.inputType : undefined,
+  if (probed === null || typeof probed !== "object") {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "No element was found at those coordinates, so nothing was clicked.",
+      {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
+      },
+    );
+  }
+  const guard = checkSpecialElementClickGuard({
+    tagName: typeof probed.tagName === "string" ? probed.tagName : "",
+    inputType: typeof probed.inputType === "string" ? probed.inputType : undefined,
+  });
+  if (!guard.ok) {
+    throw new ServerBrowserOperationError("PreviewAutomationExecutionError", guard.message, {
+      beforeInput: true,
+      clickRefusal: "special_element_refused",
+      kind: "special_element_refused",
     });
-    if (!guard.ok) {
-      throw new ServerBrowserOperationError("PreviewAutomationExecutionError", guard.message, {
+  }
+  if (typeof probed.labelControlTagName === "string" && probed.labelControlTagName !== "") {
+    const labelGuard = checkSpecialElementClickGuard({
+      tagName: probed.labelControlTagName,
+      inputType:
+        typeof probed.labelControlInputType === "string" ? probed.labelControlInputType : undefined,
+    });
+    if (!labelGuard.ok) {
+      throw new ServerBrowserOperationError("PreviewAutomationExecutionError", labelGuard.message, {
         beforeInput: true,
         clickRefusal: "special_element_refused",
         kind: "special_element_refused",

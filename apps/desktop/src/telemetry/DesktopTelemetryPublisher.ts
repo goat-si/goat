@@ -647,8 +647,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           ),
         );
         const readinessSubscription = yield* PubSub.subscribe(cuaReadinessChanges);
+        const currentReadiness = yield* Ref.get(latestCuaReadiness);
         const readiness = Stream.concat(
-          Option.match(yield* Ref.get(latestCuaReadiness), {
+          Option.match(currentReadiness, {
             onNone: () => Stream.empty,
             onSome: Stream.make,
           }),
@@ -657,9 +658,17 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
         const safetySubscription = yield* PubSub.subscribe(cuaSafetyReports);
         const currentPrivateMode = yield* Ref.get(activePrivateMode);
         const currentSessionLock = yield* Ref.get(activeSessionLock);
+        const replayedSessionLock = Option.map(currentSessionLock, (report) =>
+          Option.isSome(currentReadiness)
+            ? {
+                ...report,
+                generation: Math.max(report.generation ?? 0, currentReadiness.value.generation),
+              }
+            : report,
+        );
         const initialSafety = [
           ...(Option.isSome(currentPrivateMode) ? [currentPrivateMode.value] : []),
-          ...(Option.isSome(currentSessionLock) ? [currentSessionLock.value] : []),
+          ...(Option.isSome(replayedSessionLock) ? [replayedSessionLock.value] : []),
         ];
         const safety = Stream.concat(
           Stream.fromIterable(initialSafety),

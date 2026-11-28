@@ -200,7 +200,7 @@ private final class SystemWindowAXSubscription: WindowAXSubscription {
     case .success:
       registrations.append((element, notification))
       return .added
-    case .notificationUnsupported, .cannotComplete, .attributeUnsupported,
+    case .notificationUnsupported, .attributeUnsupported,
       .notImplemented, .notificationAlreadyRegistered:
       return .unsupported
     default:
