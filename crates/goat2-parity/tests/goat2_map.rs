@@ -295,3 +295,48 @@ fn requested_queue_observed_as_steer_keeps_steer() {
         "{out:?}"
     );
 }
+
+#[test]
+fn requested_steer_or_interrupt_observed_as_followup_keeps_observed_queue() {
+    use goat2_parity::scenario::SendMode;
+    for (requested, observed) in [
+        (SendMode::Steer, "followup"),
+        (SendMode::Steer, "collect"),
+        (SendMode::Interrupt, "followup"),
+        (SendMode::Interrupt, "collect"),
+    ] {
+        let mut m = AliasMap::default();
+        m.register_request_mode("req", "i1", requested.clone());
+        let event: LogEvent = serde_json::from_value(serde_json::json!({"type":"input.accepted","inputId":"raw","from":{"kind":"user"},"mode":observed,"text":"x","clientRequestId":"req"})).unwrap();
+        let out = m.map("t", &event).unwrap();
+        assert!(
+            matches!(
+                out.as_slice(),
+                [TraceEvent::InputAccepted {
+                    mode: SendMode::Queue,
+                    ..
+                }]
+            ),
+            "requested {requested:?} observed {observed}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn requested_start_observed_as_followup_maps_to_start() {
+    use goat2_parity::scenario::SendMode;
+    let mut m = AliasMap::default();
+    m.register_request_mode("req", "i1", SendMode::Start);
+    let event: LogEvent = serde_json::from_value(serde_json::json!({"type":"input.accepted","inputId":"raw","from":{"kind":"user"},"mode":"followup","text":"x","clientRequestId":"req"})).unwrap();
+    let out = m.map("t", &event).unwrap();
+    assert!(
+        matches!(
+            out.as_slice(),
+            [TraceEvent::InputAccepted {
+                mode: SendMode::Start,
+                ..
+            }]
+        ),
+        "{out:?}"
+    );
+}

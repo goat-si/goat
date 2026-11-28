@@ -281,11 +281,15 @@ impl AliasMap {
         if let (LogEvent::InputAccepted(source), Some(TraceEvent::InputAccepted { mode, .. })) =
             (event, result.first_mut())
         {
-            // Only followup/collect need the requested start/queue distinction; an observed steer or
-            // interrupt is kept as observed so a contradiction with the request shows up in compare.
+            // Only followup/collect need the requested start/queue distinction. The substitution is
+            // limited to a start or queue request: an observed steer/interrupt, or a requested
+            // steer/interrupt observed as followup/collect, keeps the observed mode so the
+            // contradiction with the request shows up in compare.
             if matches!(source.mode, InputMode::Followup | InputMode::Collect) {
                 if let Some(requested) = self.request_modes.get(&source.client_request_id) {
-                    *mode = requested.clone();
+                    if matches!(requested, SendMode::Start | SendMode::Queue) {
+                        *mode = requested.clone();
+                    }
                 } else if !matches!(source.from, InputSource::Child { .. }) {
                     return Err(MappingError::Ambiguous(source.input_id.to_string()));
                 }
