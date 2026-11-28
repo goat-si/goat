@@ -14,7 +14,6 @@ export const HOT_SPANS: ReadonlySet<string> = new Set([
   "OpenCodexQuotaPool.project",
   "OpenCodexQuotaPool.projectProvider",
   "OpenCodexQuotaPool.routeOf",
-  "OrchestrationEventStore.rowToV2StoredEvent",
   "ProjectionMaintenance.threadEventPages",
   "ProjectionMaintenance.threadItemPages",
   "SessionReceiptHold.replay",
