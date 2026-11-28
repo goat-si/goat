@@ -88,6 +88,8 @@ struct Shared {
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
     pgids: HashMap<ThreadId, i32>,
+    /// Fail every request answer (the error names the key, like a real driver's).
+    fail_answers: bool,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -151,6 +153,11 @@ impl FakeEngine {
             .expect("fake")
             .rss
             .insert(thread_id.clone(), bytes);
+    }
+
+    /// Make every request answer fail.
+    pub fn fail_answers(&self) {
+        self.shared.lock().expect("fake").fail_answers = true;
     }
 
     /// The turn currently running in a thread's fake process.
@@ -424,6 +431,9 @@ impl EngineSession for FakeSession {
     }
 
     async fn answer_request(&self, key: &str, _answer: RequestAnswer) -> Result<(), EngineError> {
+        if self.engine.shared.lock().expect("fake").fail_answers {
+            return Err(EngineError::Transport(format!("request {key} is gone")));
+        }
         self.engine
             .shared
             .lock()

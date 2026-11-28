@@ -305,7 +305,8 @@ async fn refused_turn_start_fails_closed_and_holds_the_queue() {
 
 #[tokio::test]
 async fn interrupt_goes_first_and_collect_merges() {
-    let t = setup(manual()).await;
+    // A collect window long enough that both collect inputs land in it on a loaded machine.
+    let t = setup_with(manual(), |o| o.collect_window = Duration::from_secs(1)).await;
     let id = start_user_thread(&t, "int", Some("long job")).await;
     eventually("running", || running(&t, &id)).await;
     let queued = send(&t, &id, "int-f", "later", InputMode::Followup)
@@ -2267,11 +2268,19 @@ async fn a_subagent_of_unknown_origin_stops_eviction_until_it_ends() {
     emit_item(&t, &id, &second, late_text(&id, "late-2", "still known"));
     eventually("turn 2 item", || item_run(&t, &id, "late-2").is_some()).await;
     assert_eq!(item_run(&t, &id, "late-2"), Some(run2));
-    // Once it ends, the next turn trims the record back under the cap: turn 3 is forgotten.
+    // Once it ends and its finished item is recorded, the next turn trims the record back under
+    // the cap: turn 3 is forgotten.
     t.fake.emit(
         &id,
         subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Completed),
     );
+    emit_item(
+        &t,
+        &id,
+        &second,
+        subagent_item(&id, "anon-2-item", Some("anon-2")),
+    );
+    eventually("anon-2 item", || item_run(&t, &id, "anon-2-item").is_some()).await;
     more_turns(&t, &id, 65, 1).await;
     emit_item(
         &t,
@@ -2326,6 +2335,142 @@ fn emit_item(t: &T, id: &ThreadId, turn: &str, item: goat2_contracts::TurnItem) 
             locator: None,
         },
     );
+}
+
+#[tokio::test]
+async fn an_ended_subagent_keeps_its_origin_until_its_item_arrives() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "ended-origin", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    // It reports its end; its finished item only comes after 65 more turns.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(&t, &id, &first, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("subagent result", || item_run(&t, &id, "bg-item").is_some()).await;
+    assert_eq!(item_run(&t, &id, "bg-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn an_ended_subagent_holds_the_idle_stop_until_its_item_arrives() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "ended-idle", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while its item is on the way"
+    );
+    emit_item(&t, &id, &turn, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-item").is_some());
+}
+
+#[tokio::test]
+async fn an_ended_subagent_whose_item_never_comes_stops_holding_after_the_grace() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "ended-grace", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(Some(turn), "bg", goat2_contracts::TurnItemStatus::Completed),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_failed_approval_answer_never_returns_the_engine_text() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "approval-fail", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-SECRET-1".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    let approval = || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .find(|r| r.kind == RequestKind::Approval)
+            .map(|r| r.request_id.clone())
+    };
+    eventually("approval open", || approval().is_some()).await;
+    t.fake.fail_answers();
+    let refused = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "approval-fail-1".into(),
+            thread_id: id.clone(),
+            request_id: approval().unwrap(),
+            outcome: RequestOutcome::Accept,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message, "the engine did not take the answer");
 }
 
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
