@@ -233,6 +233,34 @@ invalid_case!(await_call_unknown_call, |v: &mut serde_json::Value| {
         .unwrap()
         .push(serde_json::json!({"do":"await_call","id":"join","call":"unknown","timeoutMs":1}));
 });
+fn recording(v: &mut serde_json::Value) -> &mut serde_json::Value {
+    let p = &mut v["streams"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+        .next()
+        .unwrap()["provenance"];
+    p["recorded"] = serde_json::json!({"engine":"codex-cli 0.0.0","model":"m","date":"2026-11-29","scrubbed":"x"});
+    p
+}
+invalid_case!(recording_outside_v1_runner, |v: &mut serde_json::Value| {
+    // simple_turn's source is a v1 fixture path, which a recording may not claim.
+    recording(v);
+});
+invalid_case!(recording_with_transform, |v: &mut serde_json::Value| {
+    let p = recording(v);
+    p["source"] = "crates/goat2-parity/v1-runner/ParityMcpScenarios.integration.test.ts".into();
+    p["transform"] = "edited".into();
+});
+#[test]
+fn recording_naming_its_driver_loads() {
+    let f = Fixture::new();
+    f.edit(|v| {
+        recording(v)["source"] =
+            "crates/goat2-parity/v1-runner/ParityMcpScenarios.integration.test.ts".into();
+    });
+    LoadedScenario::load(&f.0).unwrap();
+}
 
 #[test]
 fn empty_v1_refs_is_rejected() {

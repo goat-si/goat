@@ -92,7 +92,7 @@
     },
     "goat2": {
       "status": "pending",
-      "reason": "no host yet"
+      "reason": "needs the goat2 process target and the Codex driver; the GOAT 2 rule (an errored steer is requeued as a followup with the same inputId) is unit-tested on goat2 9f903733f4d: crates/goat2-engine-codex/src/engine.rs:1664 maps a turn/steer RPC error to SteerResult::Declined (test crates/goat2-engine-codex/tests/engine.rs:607 declined_steer_is_reported, -32600 'turn is compacting'); crates/goat2-host/src/core/actor.rs:472 logs input.delivered declined and leaves the input queued; host test crates/goat2-host/tests/core_behaviour.rs:256 declined_steer_is_requeued_as_followup_with_the_same_input_id asserts the next turn carries the same inputId and no second input.accepted."
     }
   }
 }

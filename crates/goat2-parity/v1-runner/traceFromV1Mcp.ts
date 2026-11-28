@@ -32,6 +32,47 @@ export function traceFromV1Mcp(input: {
     if ((event.type === "run.created" || event.type === "run.updated") && input.callRuns.has(p.id) && p.userMessageId) messageAlias.set(p.userMessageId, input.callRuns.get(p.id)!);
     if (event.type === "turn-item.updated" && p.type === "user_message" && p.messageId && p.inputIntent) intent.set(p.messageId, p.inputIntent);
   }
+  // Child results: each delegated task's first terminal report names its parent input
+  // "<child>#<n>" (per child) and its wake "w<n>" (per parent), in report order (README).
+  const taskWake = new Map<string, { child: string; wake: string; input: string }>();
+  {
+    const reported = new Set<string>();
+    const perChild = new Map<string, number>();
+    const perParent = new Map<string, number>();
+    for (const { event } of sorted) {
+      const p = event.payload;
+      if (event.type !== "subagent.updated" || !p.childThreadId || !TERMINAL_TASK.has(p.status) || reported.has(p.id)) continue;
+      reported.add(p.id);
+      const child = alias(p.childThreadId);
+      const parent = alias(event.threadId);
+      const c = (perChild.get(child) ?? 0) + 1;
+      perChild.set(child, c);
+      const w = (perParent.get(parent) ?? 0) + 1;
+      perParent.set(parent, w);
+      taskWake.set(p.id, { child, wake: "w" + w, input: child + "#" + c });
+    }
+  }
+  // A delegated completion delivery (Orchestrator.ts:11315-11447): one cohort message per wake.
+  const wakeByMessage = new Map<string, { child: string; wake: string; input: string }>();
+  const unmappedCohort = new Map<string, string>();
+  for (const { event } of sorted) {
+    const p = event.payload;
+    if (event.type !== "message.updated" || p.delegatedCompletion === undefined || wakeByMessage.has(p.id) || unmappedCohort.has(p.id)) continue;
+    const taskIds: readonly string[] = p.delegatedCompletion.taskIds;
+    if (taskIds.length !== 1) { unmappedCohort.set(p.id, "multi-task completion cohorts are not mapped (message " + p.id + ")"); continue; }
+    const w = taskWake.get(taskIds[0]!);
+    if (w === undefined) throw new Error("completion for an unreported task " + taskIds[0]);
+    wakeByMessage.set(p.id, w);
+    messageAlias.set(p.id, w.input);
+  }
+  // v1 dispatches a completion queue_after_active (ProviderContinuationService.ts:173-193) and writes
+  // no user turn item for it; its mode here is what happened: queue when its run first waits queued
+  // behind another, start when the idle parent starts it directly.
+  const wakeMode = new Map<string, string>();
+  for (const { event } of sorted) {
+    const p = event.payload;
+    if ((event.type === "run.created" || event.type === "run.updated") && p.userMessageId && wakeByMessage.has(p.userMessageId) && !wakeMode.has(p.userMessageId)) wakeMode.set(p.userMessageId, p.status === "queued" ? "queue" : "start");
+  }
   const accepted = new Set<string>();
   const runAliases = new Map<string, string>();
   const runCount = new Map<string, number>();
@@ -84,7 +125,16 @@ export function traceFromV1Mcp(input: {
     if (event.type === "message.updated" && p.role === "user" && !accepted.has(p.id)) {
       accepted.add(p.id);
       const thread = alias(event.threadId);
-      if (p.delegatedCompletion !== undefined || p.notification !== undefined) { incomplete = "delegated completion / notification input mapping is not implemented (message " + p.id + ")"; continue; }
+      if (p.notification !== undefined) { incomplete = "notification input mapping is not implemented (message " + p.id + ")"; continue; }
+      if (p.delegatedCompletion !== undefined) {
+        const w = wakeByMessage.get(p.id);
+        if (w === undefined) { incomplete = unmappedCohort.get(p.id); continue; }
+        const mode = wakeMode.get(p.id);
+        if (mode === undefined) { incomplete = "completion delivered without a run (steered wake) is not mapped (message " + p.id + ")"; continue; }
+        messageText.set(p.id, { thread, input: w.input, text: p.text });
+        semantic.push({ sequence, event: { kind: "input.accepted", thread, input: w.input, from: "child", mode, text: p.text } });
+        continue;
+      }
       const inputAlias = messageAlias.get(p.id);
       if (inputAlias === undefined) throw new Error("unmapped user message " + p.id);
       const mode = MODE[intent.get(p.id) ?? ""];
@@ -106,11 +156,16 @@ export function traceFromV1Mcp(input: {
       const old = statuses.get(p.id);
       statuses.set(p.id, p.status);
       const inputAlias = p.userMessageId ? messageAlias.get(p.userMessageId) : undefined;
-      if (p.status === "queued" && old !== "queued") {
+      const wake = p.userMessageId ? wakeByMessage.get(p.userMessageId) : undefined;
+      if (wake !== undefined && p.status === "queued" && old !== "queued") {
+        semantic.push({ sequence, event: { kind: "parent.woken", thread, child: wake.child, wake: wake.wake, state: "queued" } });
+      } else if (wake !== undefined && p.status === "cancelled" && old === "queued") {
+        semantic.push({ sequence, event: { kind: "parent.woken", thread, child: wake.child, wake: wake.wake, state: "cancelled" } });
+      } else if (p.status === "queued" && old !== "queued") {
         if (!inputAlias) throw new Error("unmapped queued run input " + p.userMessageId);
         semantic.push({ sequence, event: { kind: "queue.changed", thread, input: inputAlias, op: "enqueued" } });
       }
-      if (p.status === "cancelled" && old === "queued") {
+      if (wake === undefined && p.status === "cancelled" && old === "queued") {
         if (!inputAlias) throw new Error("unmapped cancelled run input " + p.userMessageId);
         semantic.push({ sequence, event: { kind: "queue.changed", thread, input: inputAlias, op: p.terminationCause?.kind === "queued_replaced" ? "promoted" : "cancelled" } });
       }
@@ -120,6 +175,7 @@ export function traceFromV1Mcp(input: {
         runCount.set(thread, n);
         runAliases.set(p.id, "r" + n);
         semantic.push({ sequence, event: { kind: "run.started", thread, run: "r" + n, inputs: [inputAlias] } });
+        if (wake !== undefined) semantic.push({ sequence, event: { kind: "parent.woken", thread, child: wake.child, wake: wake.wake, state: "started", run: "r" + n } });
       }
       if (runAliases.has(p.id) && p.status !== old) {
         if (p.status === "completed") finish(sequence, { ...p, threadId: event.threadId }, "done");

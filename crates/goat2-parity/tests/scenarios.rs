@@ -57,7 +57,21 @@ fn pinned_prompts_match_source_when_available() {
         }
         let s = LoadedScenario::load(&dir).unwrap();
         for stream in s.scenario.streams.values() {
-            let data = fs::read(PathBuf::from(&v1).join(&stream.provenance.source)).unwrap();
+            // A session recorded by this crate's v1 runner has no v1 fixture: its source is the
+            // recording driver here, and its prompts are checked against the recording itself.
+            let data = if stream.provenance.recorded.is_some() {
+                let driver = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join(&stream.provenance.source);
+                assert!(
+                    driver.is_file(),
+                    "{}: missing recording driver",
+                    s.scenario.name
+                );
+                fs::read(dir.join(&stream.transcript)).unwrap()
+            } else {
+                fs::read(PathBuf::from(&v1).join(&stream.provenance.source)).unwrap()
+            };
             transcript::verify_hash(&data, &stream.provenance.source_sha256).unwrap();
             if stream.provenance.transform.is_none() {
                 assert_eq!(data, fs::read(dir.join(&stream.transcript)).unwrap());

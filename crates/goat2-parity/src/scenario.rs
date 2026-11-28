@@ -41,6 +41,21 @@ pub struct Provenance {
     pub sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transform: Option<String>,
+    /// Set for a session recorded by this crate's v1 runner (not lifted from a v1 fixture):
+    /// `source` then names the recording driver in this crate and `sourceSha256` equals `sha256`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recorded: Option<Recording>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Recording {
+    /// Engine binary and version that produced the frames, e.g. `codex-cli 0.167.0`.
+    pub engine: String,
+    pub model: String,
+    /// Recording date, `YYYY-MM-DD`.
+    pub date: String,
+    /// What was scrubbed from the frames before committing.
+    pub scrubbed: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -279,7 +294,18 @@ impl LoadedScenario {
             {
                 return Err(format!("untransformed source hash differs: {name}"));
             }
-            if let Some(v1) = std::env::var_os("GOAT_V1_ROOT") {
+            if stream.provenance.recorded.is_some() {
+                if stream.provenance.transform.is_some() {
+                    return Err(format!("a recording is not a transform: {name}"));
+                }
+                if !stream
+                    .provenance
+                    .source
+                    .starts_with("crates/goat2-parity/v1-runner/")
+                {
+                    return Err(format!("a recording names its v1-runner driver: {name}"));
+                }
+            } else if let Some(v1) = std::env::var_os("GOAT_V1_ROOT") {
                 let source_root = std::path::PathBuf::from(v1)
                     .canonicalize()
                     .map_err(|e| e.to_string())?;

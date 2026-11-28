@@ -1,49 +1,244 @@
 {
   "v": 1,
   "name": "child_wake_delegated",
-  "summary": "child wake delegated",
+  "summary": "a parent delegates a one-line task asynchronously and finishes its own turn; the child replies 'done' after the parent is idle, and its completion wakes the parent into a new run (real v1 Codex recording)",
   "spec": [
-    "docs/parity/README.md"
+    "docs/parity/child-wake.md"
   ],
   "v1Refs": [
-    "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson:1",
-    "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:105"
+    "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:158-252",
+    "apps/server/src/mcp/OrchestratorMcpService.ts:2103",
+    "apps/server/src/orchestration-v2/Orchestrator.ts:11257-11313",
+    "apps/server/src/orchestration-v2/ProviderContinuationService.ts:173-193",
+    "apps/server/src/orchestration-v2/delegatedCompletionWake.ts:3-25",
+    "apps/server/scripts/codexReplayRecordingRecords.ts:1-71"
   ],
   "streams": {
     "codex": {
       "engine": "codex",
       "transcript": "transcripts/codex.ndjson",
       "provenance": {
-        "source": "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson",
+        "source": "crates/goat2-parity/v1-runner/ParityMcpScenarios.integration.test.ts",
         "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
-        "sourceSha256": "4812b5ce112d3a125ed537a0cd4d4fca91bd3993451f348d349158e76a658973",
-        "sha256": "4812b5ce112d3a125ed537a0cd4d4fca91bd3993451f348d349158e76a658973"
+        "sourceSha256": "fe4eea8ed4906d38e6a05cd03d02bac53936104fd379ec84f69643ab5ad50de9",
+        "sha256": "fe4eea8ed4906d38e6a05cd03d02bac53936104fd379ec84f69643ab5ad50de9",
+        "recorded": {
+          "engine": "codex-cli 0.167.0",
+          "model": "gpt-6.1-terra",
+          "date": "2026-11-29",
+          "scrubbed": "isolated CODEX_HOME (provider base URL only, no credentials); workspace placeholder in outbound frames and machine identity per v1 codexReplayRecordingRecords.ts; the Codex home path replaced by /home/replay-user/.codex"
+        }
       }
     }
   },
   "threads": {
-    "t1": {
+    "p1": {
       "kind": "user",
       "stream": "codex"
+    },
+    "c1": {
+      "kind": "worker",
+      "stream": "codex",
+      "parent": "p1"
     }
   },
-  "steps": [],
-  "expect": {
-    "complete": false,
-    "exhaustive": [],
-    "threads": {
-      "t1": []
+  "steps": [
+    {
+      "do": "send",
+      "id": "s1",
+      "thread": "p1",
+      "input": "i1",
+      "text": "Run the shell command `sleep 5`, then reply with exactly: parent ok",
+      "mode": "start"
     },
-    "happensBefore": []
+    {
+      "do": "await",
+      "id": "a1",
+      "thread": "p1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "mcp",
+      "id": "m1",
+      "caller": "p1",
+      "path": "task.create",
+      "args": {
+        "task": "Run the shell command `sleep 25`, then reply with exactly: done",
+        "target": {
+          "providerInstanceId": "codex",
+          "model": "gpt-6.1-terra"
+        },
+        "mode": "async",
+        "clientRequestId": "parity-child-wake-1"
+      },
+      "call": "create",
+      "wait": true
+    },
+    {
+      "do": "await",
+      "id": "a2",
+      "thread": "c1",
+      "until": "idle"
+    },
+    {
+      "do": "await",
+      "id": "a3",
+      "thread": "p1",
+      "until": "run_status",
+      "run": "r2",
+      "status": "completed"
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
+    ],
+    "threads": {
+      "p1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "p1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Run the shell command `sleep 5`, then reply with exactly: parent ok"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "p1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "child.started",
+          "thread": "p1",
+          "child": "c1"
+        },
+        {
+          "id": "e4",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "create",
+          "path": "task.create",
+          "status": "ok"
+        },
+        {
+          "id": "e5",
+          "kind": "run.finished",
+          "thread": "p1",
+          "run": "r1",
+          "status": "done"
+        },
+        {
+          "id": "e6",
+          "kind": "child.reported",
+          "thread": "p1",
+          "child": "c1",
+          "status": "completed"
+        },
+        {
+          "id": "e7",
+          "kind": "input.accepted",
+          "thread": "p1",
+          "input": "c1#1",
+          "from": "child",
+          "mode": "start",
+          "text": "Delegated task node:delegated-task:command%3Amcp%3Amcp-provider-session-replay-p1%3Adelegate-task%3Aparity-child-wake-1 in child thread thread:delegated-task:command%3Amcp%3Amcp-provider-session-replay-p1%3Adelegate-task%3Aparity-child-wake-1 [completed]:\ndone"
+        },
+        {
+          "id": "e8",
+          "kind": "run.started",
+          "thread": "p1",
+          "run": "r2",
+          "inputs": [
+            "c1#1"
+          ]
+        },
+        {
+          "id": "e9",
+          "kind": "parent.woken",
+          "thread": "p1",
+          "child": "c1",
+          "wake": "w1",
+          "state": "started",
+          "run": "r2"
+        },
+        {
+          "id": "e10",
+          "kind": "run.finished",
+          "thread": "p1",
+          "run": "r2",
+          "status": "done"
+        }
+      ],
+      "c1": [
+        {
+          "id": "f1",
+          "kind": "input.accepted",
+          "thread": "c1",
+          "input": "create",
+          "from": "agent",
+          "mode": "start",
+          "text": "Run the shell command `sleep 25`, then reply with exactly: done"
+        },
+        {
+          "id": "f2",
+          "kind": "run.started",
+          "thread": "c1",
+          "run": "r1",
+          "inputs": [
+            "create"
+          ]
+        },
+        {
+          "id": "f3",
+          "kind": "run.finished",
+          "thread": "c1",
+          "run": "r1",
+          "status": "done"
+        }
+      ]
+    },
+    "happensBefore": [
+      [
+        "e3",
+        "f1"
+      ],
+      [
+        "e5",
+        "f3"
+      ],
+      [
+        "f3",
+        "e6"
+      ]
+    ]
   },
   "targets": {
     "v1": {
-      "status": "unsupported",
-      "reason": "v1 cannot be driven from recorded sessions: a delegated child's completion wakes the parent by steering its active turn or starting a wake run (Orchestrator.ts:5511-5572, ProviderContinuationService.ts:173), which needs recorded parent Codex frames (turn/steer or turn/start on the parent thread). The only GOAT-owned Codex delegation recording, fixtures/delegated_task_status, has no parent frames after the parent's first turn: the parent claims results through task.read while its turn stays active (OrchestratorMcpToolkit.integration.test.ts:509-560; replayed here as thread_tools_send_wait: child.reported with no wake). v1's wake tests use scripted adapters, not Codex replay (SteeringCompletionWake.integration.test.ts:22 SteeringHarness; goat/DelegatedLaneSettlement.integration.test.ts). Driving it needs a new recording, which this lane may not make."
+      "status": "supported"
     },
     "goat2": {
       "status": "pending",
-      "reason": "no host yet"
+      "reason": "needs the goat2 target and the Codex driver"
     }
   }
 }

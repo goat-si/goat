@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { McpSchema, McpServer } from "effect/ai";
 import * as CodexReplay from "effect-codex-app-server/replay";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { layerMemorySecretStore } from "../../../mcp/OrchestratorMcpToolkit.integration.testkit.ts";
@@ -46,6 +46,14 @@ import * as McpInvocationContext from "../../../mcp/McpInvocationContext.ts";
 import { layerPermissionProfilesOff } from "../../../mcp/McpToolAccess.testkit.ts";
 import { makeProviderSnapshot } from "../../../mcp/OrchestratorMcpToolkit.adapter.testkit.ts";
 import { traceFromV1Mcp } from "./traceFromV1Mcp.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveSpawnCommand } from "@goat/shared/shell";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as CodexClient from "effect-codex-app-server/client";
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { CODEX_DRIVER_KIND } from "../../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { codexReplayRecordingOutputRecords } from "../../../../scripts/codexReplayRecordingRecords.ts";
+import * as NodeOS from "node:os";
 
 // Lifted from v1 apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:77-157 (layers,
 // ids, MCP client) and :166-252 (layer composition, including its two Codex replay registry layers:
@@ -64,10 +72,8 @@ const layerOrchestratorToolkit = Layer.merge(
 const rootThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
 const codexInstanceId = ProviderInstanceId.make("codex");
-const codexModel = "gpt-5.4";
 // The recorded session names the parent thread this (v1 test :129-133 goatReplayTitles).
 const rootTitle = "MCP replay parent";
-const codexSelection = { instanceId: codexInstanceId, model: codexModel };
 const client = McpSchema.McpServerClient.of({
   clientId: 1,
   protocolVersion: "2025-06-18",
@@ -104,16 +110,75 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
   const stream = scenario.streams[streams[0]!];
   const cwd = yield* checkpointWorkspace("delegated-task-status");
   // Same reading path as v1's test (:111-127, :170-172).
-  const raw = yield* decodeProviderReplayNdjson(readFileSync(join(dir, stream.transcript), "utf8"));
-  const transcript: any = yield* CodexOrchestratorReplayHarness.decodeTranscript(materializeReplayTranscriptWorkspace(raw as any, cwd) as any);
+  // GOAT2_PARITY_RECORD=<file>: drive a real codex app-server (the user's Codex setup, e.g. the
+  // OpenCodex pool) and record its frames like v1's recorder
+  // (scripts/record-codex-app-server-replay-fixture.ts:1166-1248), instead of replaying.
+  const recordOut = process.env.GOAT2_PARITY_RECORD;
+  const transcript: any = recordOut !== undefined
+    ? { provider: "codex", protocol: "codex.app-server", version: "unknown", scenario: scenario.name, metadata: {}, entries: [] }
+    : yield* CodexOrchestratorReplayHarness.decodeTranscript(materializeReplayTranscriptWorkspace((yield* decodeProviderReplayNdjson(readFileSync(join(dir, stream.transcript), "utf8"))) as any, cwd) as any);
+  // A recording made through GOAT already carries GOAT's own setup reads and thread names.
+  const recordedThroughGoat = transcript.metadata?.source === "goat2-parity-record";
+  const codexModel = process.env.GOAT2_PARITY_MODEL ?? (typeof transcript.metadata?.model === "string" ? transcript.metadata.model : "gpt-5.4");
+  const codexSelection = { instanceId: codexInstanceId, model: codexModel };
   const marked = { ...transcript, entries: transcript.entries.map((entry) => ({ ...entry, parityOriginal: true })) };
   // Thread names the shared harness adds: the root title, then each delegated task's prompt.
   const titles = [rootTitle, ...scenario.steps.filter((s: any) => s.do === "mcp" && s.path === "task.create").map((s: any) => String(s.args.task))];
-  const augmented = withThreadSetupReads(withThreadNames(marked, titles));
+  const augmented = recordedThroughGoat ? marked : withThreadSetupReads(withThreadNames(marked, titles));
   const drivers: Array<{ driver: any; observed: Array<{ readonly cursor: number; readonly label: string | undefined; readonly frame: any }> }> = [];
   // Same construction as CodexOrchestratorReplayHarness.makeProviderAdapterRegistryLayer
   // (CodexAdapterV2.testkit.ts:297-319), keeping each driver for the stream report.
-  const makeRegistryLayer = () => Layer.unwrap(Effect.gen(function* () {
+  const recordDiagnostics: any[] = [];
+  const recorded: Array<Record<string, unknown>> = [];
+  let codexVersion = "unknown";
+  const recordingClientOptions = () => {
+    const outgoing = new Map<string, string>();
+    const incoming = new Map<string, string>();
+    return {
+      logIncoming: true,
+      logOutgoing: true,
+      logger: (event: any) => Effect.sync(() => {
+        if (event.stage === "raw") return;
+        const p = event.payload;
+        const id = p?.id === undefined || p?.id === null ? undefined : String(p.id);
+        const method = typeof p?.method === "string" ? p.method : undefined;
+        let correlated: string | undefined;
+        if (method !== undefined && id !== undefined) (event.direction === "outgoing" ? outgoing : incoming).set(id, method);
+        if (method === undefined && id !== undefined) {
+          const pending = event.direction === "incoming" ? outgoing : incoming;
+          correlated = pending.get(id);
+          pending.delete(id);
+        }
+        const agent = p?.result?.userAgent;
+        const version = typeof agent === "string" ? agent.match(/\/(\d+\.\d+\.\d+)/)?.[1] : undefined;
+        if (version !== undefined) codexVersion = version;
+        const label = method ?? correlated;
+        recorded.push({ type: event.direction === "outgoing" ? "expect_outbound" : "emit_inbound", ...(label ? { label } : {}), frame: p });
+      }),
+    } as any;
+  };
+  const makeRecordingRegistryLayer = () => CodexAdapterV2Testkit.layerWithClientFactory({
+    scenario: scenario.name,
+    clientFactory: {
+      open: (openInput: any) => Effect.gen(function* () {
+        const { VP_TOOL_RECURSION: _ignored, ...inherited } = yield* HostProcess.Environment;
+        // Record only from an isolated Codex home (provider base URL, no credentials or project
+        // trust list); HOME points there too so nothing falls back to the real ~/.codex.
+        const codexHome = inherited.GOAT2_PARITY_CODEX_HOME;
+        if (codexHome === undefined || codexHome === "") throw new Error("recording needs GOAT2_PARITY_CODEX_HOME (an isolated Codex home)");
+        const environment = { ...inherited, CODEX_HOME: codexHome, HOME: codexHome };
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const command = yield* resolveSpawnCommand(environment.GOAT_CODEX_BIN ?? environment.CODEX_BIN ?? "codex", ["app-server"], { env: environment });
+        const handle = yield* spawner.spawn(ChildProcess.make(command.command, command.args, { cwd, env: environment, extendEnv: false, shell: command.shell } as any));
+        const context = yield* Layer.build(CodexClient.layerChildProcess(handle, recordingClientOptions()));
+        return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(Effect.provide(context));
+      }).pipe(
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+        Effect.mapError((cause) => new ProviderAdapter.ProviderAdapterOpenSessionError({ driver: CODEX_DRIVER_KIND, providerSessionId: openInput.providerSessionId, cause })),
+      ),
+    } as any,
+  });
+  const makeRegistryLayer = () => recordOut !== undefined ? makeRecordingRegistryLayer() : Layer.unwrap(Effect.gen(function* () {
     const record = { driver: undefined as any, observed: [] as Array<{ readonly cursor: number; readonly label: string | undefined; readonly frame: any }> };
     record.driver = yield* CodexReplay.makeReplayDriver(augmented, {
       beforeEmitInbound: (entry) => Effect.flatMap(Ref.get(record.driver.state), (s: any) => Effect.sync(() => { record.observed.push({ cursor: s.cursor, label: entry.label, frame: entry.frame }); })),
@@ -123,7 +188,10 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
   }));
   const harness = { ...CodexOrchestratorReplayHarness, makeProviderAdapterRegistryLayer: makeRegistryLayer };
   const layerOrchestrator = ProviderReplayHarness.layerProviderReplay(
-    { name: scenario.name + "/codex", transcript, commands: [], runtimePolicyOverride: { cwd } }, harness as any);
+    { name: scenario.name + "/codex", transcript, commands: [], runtimePolicyOverride: { cwd } }, harness as any,
+    // A real v1 server runs the continuation worker (it delivers delegated completions); v1's MCP
+    // toolkit test, whose constructed fixture these other scenarios mirror, does not.
+    { runContinuationWorker: recordOut !== undefined || recordedThroughGoat });
   const layerOrchestration = Layer.merge(
     layerOrchestrator,
     ThreadManagementService.layer.pipe(
@@ -167,6 +235,13 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
       let max = 0;
       for (const id of threadIds.values()) max = Math.max(max, yield* orchestrator.getThreadEventSequence(id));
       return max;
+    });
+    const collectDiagnostics = recordOut === undefined ? Effect.void : Effect.gen(function* () {
+      recordDiagnostics.length = 0;
+      for (const [alias, id] of threadIds) {
+        const p: any = yield* orchestrator.getThreadProjection(id);
+        recordDiagnostics.push({ alias, runs: p.runs.map((r: any) => [r.ordinal, r.status, r.userMessageId, r.queueHeld ?? null]), subagents: p.subagents.map((t: any) => ({ status: t.status, completionWake: t.completionWake, completionDelivery: t.completionDelivery, origin: t.origin })), messages: p.messages.filter((m: any) => m.role === "user").map((m: any) => ({ id: m.id, delegated: m.delegatedCompletion !== undefined, text: String(m.text).slice(0, 80) })) });
+      }
     });
     // Child threads bind to the declared children of their parent in creation order.
     const bindChildren = Effect.gen(function* () {
@@ -233,9 +308,10 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
         }),
         Stream.filter((ok) => ok),
         Stream.runHead,
-        Effect.timeout("120 seconds"),
+        Effect.timeoutOption("120 seconds"),
       );
-      if (seen === undefined || (seen as any)._tag === "None") throw new Error("timed out waiting for " + what);
+      // Some(Some(true)) when the condition held; None on timeout, Some(None) if the stream ended.
+      if ((seen as any)._tag !== "Some" || (seen as any).value._tag !== "Some") { yield* collectDiagnostics; throw new Error("timed out waiting for " + what); }
     });
     const startedRuns = (projection: any) => projection.runs.filter((r: any) => r.startedAt !== null).sort((a: any, b: any) => a.ordinal - b.ordinal);
     const pending = new Map<string, any>();
@@ -270,13 +346,6 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
       toolResults.push({ watermark: mark, event: { kind: "tool.result", thread: step.caller, call: step.call, path: step.path, status: ok ? "ok" : "error", ...(code === undefined ? {} : { code }) } });
     });
 
-    if (process.env.GOAT2_PARITY_PROLOGUE === "1") {
-      yield* orchestrator.dispatch({ type: "thread.create", createdBy: "user", creationSource: "web", commandId: CommandId.make("command:mcp-replay-parent:create"), threadId: rootThreadId, projectId, title: rootTitle, modelSelection: codexSelection, runtimeMode: "full-access", interactionMode: "default", branch: null, worktreePath: cwd } as any);
-      threadIds.set(root, rootThreadId);
-      yield* orchestrator.dispatch({ type: "message.dispatch", createdBy: "user", creationSource: "web", commandId: CommandId.make("command:mcp-replay-parent:start"), threadId: rootThreadId, messageId: MessageId.make("message:mcp-replay-parent:start"), text: scenario.steps[0].text, attachments: [], modelSelection: codexSelection, dispatchMode: { type: "start_immediately" } } as any);
-      yield* orchestrator.streamStoredEventsFrom({ threadId: rootThreadId, afterSequence: 0 }).pipe(Stream.filter((s: any) => s.event.type === "provider-turn.updated" && s.event.payload.status === "running"), Stream.runHead, Effect.timeout("30 seconds"));
-      return;
-    }
     for (const step of scenario.steps) {
       if (step.do === "send") {
         if (step.thread !== root || !["start", "queue"].includes(step.mode)) throw new Error("MCP runner: unsupported send " + step.id);
@@ -306,6 +375,7 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
     }
     yield* worker.drain();
     yield* bindChildren;
+    yield* collectDiagnostics;
     const all = new Map<number, any>();
     for (const id of threadIds.values()) {
       const last = yield* orchestrator.getThreadEventSequence(id);
@@ -314,9 +384,25 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
       for (const s of collected) all.set(s.sequence, s);
     }
     events = [...all.values()];
+    // Diagnostic: GOAT2_PARITY_DUMP_EVENTS=<file> writes the stored v1 events the trace reads.
+    if (process.env.GOAT2_PARITY_DUMP_EVENTS) writeFileSync(process.env.GOAT2_PARITY_DUMP_EVENTS, events.map((e) => JSON.stringify(e) + "\n").join(""));
   }).pipe(Effect.provide(layerTest as any));
 
   const exit = yield* Effect.exit(run);
+  if (recordOut !== undefined) {
+    // Scrubbed like v1's recordings (codexReplayRecordingRecords.ts): workspace placeholder in
+    // outbound frames, machine home/hostname/checkout replaced.
+    const scrubbed = codexReplayRecordingOutputRecords(recorded, { workspace: cwd, machine: { home: NodeOS.homedir(), hostname: NodeOS.hostname(), checkout: join(process.cwd(), "../..") } });
+    // The isolated Codex home also appears in config/read and rollout paths.
+    const codexHome = process.env.GOAT2_PARITY_CODEX_HOME!;
+    const homes = [...new Set([realpathSync(codexHome), codexHome])].sort((a, b) => b.length - a.length);
+    const records = scrubbed.map((record) => JSON.parse(homes.reduce((text, home) => text.replaceAll(home, "/home/replay-user/.codex"), JSON.stringify(record))));
+    const header = { type: "transcript_start", provider: "codex", protocol: "codex.app-server", version: codexVersion, scenario: scenario.name,
+      metadata: { source: "goat2-parity-record", description: scenario.summary, model: codexModel, recordedWith: "goat2-parity v1-runner ParityMcpScenarios (GOAT v1 916b5ccc OrchestratorV2 + MCP toolkit, real codex app-server)" } };
+    writeFileSync(recordOut, [header, ...records].map((r) => JSON.stringify(r)).join("\n") + "\n");
+    writeFileSync(out, JSON.stringify({ recording: recordOut, frames: records.length, exit: Exit.isFailure(exit) ? Cause.pretty(exit.cause).slice(0, 3000) : "ok", toolResults, recordDiagnostics }, null, 2) + "\n");
+    return;
+  }
   const states = [];
   for (const d of drivers) states.push({ d, state: yield* Ref.get(d.driver.state) });
   const advanced = states.filter((s) => s.state.cursor > 0 || s.state.failure !== null);
