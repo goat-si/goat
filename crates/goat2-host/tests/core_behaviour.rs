@@ -2209,6 +2209,129 @@ async fn a_turn_with_a_live_subagent_outlives_the_turn_cap() {
     assert_eq!(item_run(&t, &id, "late-2"), None);
 }
 
+#[tokio::test]
+async fn a_subagent_without_a_turn_keeps_its_origin_through_the_turn_cap() {
+    // Reported without a turn while turn 1 runs: turn 1 is its origin.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-none", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-1", goat2_contracts::TurnItemStatus::Running),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(
+        &t,
+        &id,
+        &first,
+        subagent_item(&id, "anon-1-item", Some("anon-1")),
+    );
+    eventually("subagent result", || {
+        item_run(&t, &id, "anon-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "anon-1-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn a_subagent_of_unknown_origin_stops_eviction_until_it_ends() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-unknown", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    t.fake.finish_turn(&id, "ok");
+    eventually("idle", || count(&t, &id, "run.finished") == 1).await;
+    // No turn running: its origin is unknown, so no turn may be forgotten while it lives.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Running),
+    );
+    send(&t, &id, "cap-unknown-2", "turn 2", InputMode::Followup).await;
+    eventually("turn 2", || running(&t, &id)).await;
+    let (second, run2) = (t.fake.active_turn(&id).unwrap(), last_run(&t, &id).unwrap());
+    let mut third = None;
+    for n in 2..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(
+            &t,
+            &id,
+            &format!("cap-unknown-{}", n + 1),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 2 {
+            third = t.fake.active_turn(&id);
+        }
+    }
+    // 65 turns later turn 2 is still known.
+    emit_item(&t, &id, &second, late_text(&id, "late-2", "still known"));
+    eventually("turn 2 item", || item_run(&t, &id, "late-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-2"), Some(run2));
+    // Once it ends, the next turn trims the record back under the cap: turn 3 is forgotten.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Completed),
+    );
+    more_turns(&t, &id, 65, 1).await;
+    emit_item(
+        &t,
+        &id,
+        &third.unwrap(),
+        late_text(&id, "late-3", "forgotten"),
+    );
+    // Barrier: an item of the running turn, handled after the one above.
+    let now = t.fake.active_turn(&id).unwrap();
+    emit_item(&t, &id, &now, late_text(&id, "barrier", "current"));
+    eventually("barrier", || item_run(&t, &id, "barrier").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-3"), None);
+}
+
+/// Finish the running turn and start `n` more; `done` runs have finished before.
+async fn more_turns(t: &T, id: &ThreadId, done: usize, n: usize) {
+    for k in 1..=n {
+        t.fake.finish_turn(id, "ok");
+        eventually("run finished", || count(t, id, "run.finished") == done + k).await;
+        send(
+            t,
+            id,
+            &format!("more-{}-{}", id.as_str(), done + k),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(t, id)).await;
+    }
+}
+
+fn subagent_update(
+    turn_id: Option<String>,
+    subagent_id: &str,
+    status: goat2_contracts::TurnItemStatus,
+) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SubagentUpdate {
+        turn_id,
+        subagent_id: subagent_id.into(),
+        status,
+        title: None,
+        progress: None,
+    }
+}
+
+fn emit_item(t: &T, id: &ThreadId, turn: &str, item: goat2_contracts::TurnItem) {
+    t.fake.emit(
+        id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn.to_owned(),
+            item: Box::new(item),
+            locator: None,
+        },
+    );
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
