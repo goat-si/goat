@@ -1,0 +1,15 @@
+[package]
+name = "goat2-engine-api"
+version = "0.0.0"
+description = "Engine seam (traits and types) between goat2-host and the engine drivers."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+goat2-contracts = { path = "../goat2-contracts" }
+async-trait = "0.1"
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { version = "1", features = ["sync"] }
