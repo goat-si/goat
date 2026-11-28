@@ -6,15 +6,21 @@
 //! starts), `unfinishedStop.ts`. GOAT 2 stores finished items only, so a tool is written once it
 //! completes or fails, or when the turn ends with it open.
 
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use goat2_contracts::{
     FileChangeDetail, ItemId, MessageId, NativeItemRef, NativeRefStrength, NoticeSeverity, PlanId,
-    PlanStep, PlanStepStatus, ThreadId, TurnItem, TurnItemBody, TurnItemStatus, WebSearchResult,
+    PlanStep, PlanStepStatus, SubagentOrigin, ThreadId, TurnItem, TurnItemBody, TurnItemStatus,
+    WebSearchResult,
 };
 use goat2_engine_api::EngineEvent;
 use serde_json::{Map, Value, json};
 
+use crate::flavor::{
+    AcpFlavor, BackgroundMutation, BackgroundStatus, SubagentStatus, SubagentUpdate,
+};
 use crate::wire::text_field;
 
 pub(crate) fn now_ms() -> i64 {
@@ -356,6 +362,61 @@ struct Segment {
     started_ms: i64,
 }
 
+/// The flavor hooks the projector calls.
+#[derive(Clone)]
+struct Hooks(Arc<dyn AcpFlavor>);
+
+impl std::fmt::Debug for Hooks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.driver())
+    }
+}
+
+/// One agent-native subagent (v1 `ActiveAcpSubagent`, the fields GOAT 2 keeps).
+#[derive(Debug, Clone)]
+pub struct SubagentRecord {
+    pub native_task_id: String,
+    pub child_session_id: Option<String>,
+    pub prompt: String,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub status: SubagentStatus,
+    pub result: Option<String>,
+    terminal_projected: bool,
+}
+
+fn running_status(status: Option<&str>) -> bool {
+    !matches!(status, Some("completed" | "failed"))
+}
+
+/// v1 `setToolOutputText` / `appendToolContentText` (toolOutputText.ts) on GOAT 2's tool state.
+fn put_tool_output(tool: &mut ToolState, text: &str, append: bool) {
+    let mut content = match (&tool.content, append) {
+        (Some(Value::Array(list)), true) => list.clone(),
+        _ => Vec::new(),
+    };
+    let extended = content.last_mut().is_some_and(|last| {
+        if last.get("type").and_then(Value::as_str) != Some("content") {
+            return false;
+        }
+        match last.get_mut("content") {
+            Some(inner) if inner.get("type").and_then(Value::as_str) == Some("text") => {
+                let previous = inner
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                inner["text"] = json!(format!("{previous}{text}"));
+                true
+            }
+            _ => false,
+        }
+    });
+    if !extended {
+        content.push(json!({"type": "content", "content": {"type": "text", "text": text}}));
+    }
+    tool.content = Some(Value::Array(content));
+}
+
 /// Turns one prompt's session updates into engine events.
 #[derive(Debug)]
 pub struct TurnProjector {
@@ -372,6 +433,22 @@ pub struct TurnProjector {
     plan: Option<(PlanId, Vec<PlanStep>)>,
     /// Text of every finished assistant segment (the turn's answer, for diagnostics and tests).
     pub answer: String,
+    hooks: Option<Hooks>,
+    provider_instance_id: String,
+    launch_env: Vec<(String, String)>,
+    /// Tools shown as subagents instead (v1 `suppressNormalTool`).
+    suppressed_tools: Vec<String>,
+    /// v1 `toolCallIdsByBackgroundTaskId`.
+    background_tasks: Vec<(String, String)>,
+    /// v1 `persistentBackgroundTaskIds`.
+    persistent_tasks: HashSet<String>,
+    /// v1 `endedBackgroundTaskIds`: tasks a structured end closed.
+    ended_tasks: HashSet<String>,
+    /// v1 `awaitingBackgroundHydration`.
+    awaiting_hydration: HashSet<String>,
+    subagents: Vec<SubagentRecord>,
+    /// v1 `lastCapturedProposedPlan` for this turn: (item id, plan id, ordinal, markdown).
+    proposed: Option<(ItemId, PlanId, u32, String)>,
 }
 
 impl TurnProjector {
@@ -395,7 +472,30 @@ impl TurnProjector {
             written_tools: Vec::new(),
             plan: None,
             answer: String::new(),
+            hooks: None,
+            provider_instance_id: String::new(),
+            launch_env: Vec::new(),
+            suppressed_tools: Vec::new(),
+            background_tasks: Vec::new(),
+            persistent_tasks: HashSet::new(),
+            ended_tasks: HashSet::new(),
+            awaiting_hydration: HashSet::new(),
+            subagents: Vec::new(),
+            proposed: None,
         }
+    }
+
+    /// Let the flavor normalize tool calls and report subagents, background tasks and plan files.
+    pub fn with_flavor(
+        mut self,
+        flavor: Arc<dyn AcpFlavor>,
+        provider_instance_id: impl Into<String>,
+        launch_env: Vec<(String, String)>,
+    ) -> Self {
+        self.hooks = Some(Hooks(flavor));
+        self.provider_instance_id = provider_instance_id.into();
+        self.launch_env = launch_env;
+        self
     }
 
     pub fn next_ordinal(&self) -> u32 {
@@ -521,7 +621,9 @@ impl TurnProjector {
         out: &mut Vec<EngineEvent>,
     ) {
         let state = self.tools[index].clone();
-        if self.written_tools.contains(&state.tool_call_id) {
+        if self.written_tools.contains(&state.tool_call_id)
+            || self.suppressed_tools.contains(&state.tool_call_id)
+        {
             return;
         }
         self.written_tools.push(state.tool_call_id.clone());
@@ -554,6 +656,9 @@ impl TurnProjector {
             }
         };
         self.tools[index].merge(tool_call);
+        if let Some(hooks) = &self.hooks {
+            hooks.0.normalize_tool_call(&mut self.tools[index]);
+        }
         Some(self.tools[index].clone())
     }
 
@@ -612,10 +717,16 @@ impl TurnProjector {
                     return;
                 }
                 let id = text_field(update, "toolCallId").unwrap_or_default();
-                if let Some(index) = self.tools.iter().position(|t| t.tool_call_id == id)
-                    && self.tools[index].is_terminal()
-                {
-                    self.write_tool(index, None, out);
+                self.after_tool_update(&id, out);
+            }
+            // v1 adapter.ts:4047-4111: background output and subagent ends Grok injects as user text.
+            "user_message_chunk" => {
+                let content = update.get("content");
+                if content.and_then(|c| c.get("type")).and_then(Value::as_str) != Some("text") {
+                    return;
+                }
+                if let Some(text) = content.and_then(|c| c.get("text")).and_then(Value::as_str) {
+                    self.injected_user_text(text, out);
                 }
             }
             "plan" => {
@@ -681,10 +792,31 @@ impl TurnProjector {
 
     /// Record a proposed plan (v1 `captureProposedPlan`).
     pub fn proposed_plan(&mut self, markdown: String, out: &mut Vec<EngineEvent>) {
+        // v1 adapter.ts:1157-1192: trimmed, empty skipped, the same plan twice in a turn skipped; a
+        // changed plan updates the turn's one proposed-plan item.
+        let markdown = markdown.trim().to_owned();
+        if markdown.is_empty() {
+            return;
+        }
+        if self
+            .proposed
+            .as_ref()
+            .is_some_and(|(_, _, _, last)| *last == markdown)
+        {
+            return;
+        }
         self.close_segments(out);
-        let id = self.new_item_id("proposed-plan");
-        let plan_id = PlanId::new(id.as_str());
-        let item = self.item(
+        let (id, plan_id, ordinal) = match self.proposed.take() {
+            Some((id, plan_id, ordinal, _)) => (id, plan_id, ordinal),
+            None => {
+                let id = ItemId::new(format!("{}:proposed-plan", self.turn_id));
+                let ordinal = self.ordinal;
+                self.ordinal += 1;
+                (id.clone(), PlanId::new(id.as_str()), ordinal)
+            }
+        };
+        self.proposed = Some((id.clone(), plan_id.clone(), ordinal, markdown.clone()));
+        let mut item = self.item(
             id,
             None,
             TurnItemStatus::Completed,
@@ -696,7 +828,364 @@ impl TurnProjector {
                 streaming: false,
             },
         );
+        // `item` took the next ordinal; the plan keeps the one it was first given.
+        self.ordinal -= 1;
+        item.ordinal = ordinal;
         out.push(self.completed(item));
+    }
+
+    /// v1 `lastProposedPlanMarkdown` (adapter.ts:1252-1258): the plan captured in this turn.
+    pub fn last_proposed_plan(&self) -> Option<String> {
+        self.proposed
+            .as_ref()
+            .map(|(_, _, _, markdown)| markdown.clone())
+    }
+
+    fn background_tool_index(&self, task_id: &str) -> Option<usize> {
+        let tool_id = self
+            .background_tasks
+            .iter()
+            .find(|(task, _)| task == task_id)
+            .map(|(_, tool)| tool.clone())?;
+        self.tools.iter().position(|t| t.tool_call_id == tool_id)
+    }
+
+    /// After a tool call merged: plan files, background tasks, subagents, then the tool itself
+    /// (v1 `emitTool`, adapter.ts:2474-2642, with the plan capture of adapter.ts:3257-3264).
+    fn after_tool_update(&mut self, tool_call_id: &str, out: &mut Vec<EngineEvent>) {
+        let Some(index) = self
+            .tools
+            .iter()
+            .position(|t| t.tool_call_id == tool_call_id)
+        else {
+            return;
+        };
+        let tool = self.tools[index].clone();
+        let Some(hooks) = self.hooks.clone() else {
+            if tool.is_terminal() {
+                self.write_tool(index, None, out);
+            }
+            return;
+        };
+        let flavor = &hooks.0;
+        if let Some(markdown) = flavor.proposed_plan_markdown(&tool, &self.launch_env)
+            && !markdown.is_empty()
+        {
+            self.proposed_plan(markdown, out);
+        }
+        if let Some(task_id) = flavor.background_task_id(&tool) {
+            if !self
+                .background_tasks
+                .iter()
+                .any(|(task, _)| *task == task_id)
+            {
+                self.background_tasks
+                    .push((task_id.clone(), tool.tool_call_id.clone()));
+            }
+            if flavor.is_persistent_background_tool(&tool) {
+                self.persistent_tasks.insert(task_id);
+            }
+        }
+        let mut hydrated_registered_monitor = false;
+        for completion in flavor.background_task_completions(&tool) {
+            if completion.status != BackgroundStatus::Running {
+                self.awaiting_hydration.remove(&completion.task_id);
+            }
+            let Some(target) = self.background_tool_index(&completion.task_id) else {
+                continue;
+            };
+            hydrated_registered_monitor = true;
+            if self.tools[target].tool_call_id != tool.tool_call_id {
+                self.hydrate_background_tool(target, &completion, out);
+            }
+        }
+        // Monitor TaskOutput resembles subagent hydration; do not invent a subagent.
+        let subagent = if hydrated_registered_monitor {
+            None
+        } else {
+            flavor.subagent_update(&tool)
+        };
+        if let Some(update) = subagent {
+            let suppress = update.suppress_normal_tool;
+            self.emit_subagent(update, out);
+            if suppress {
+                if !self.suppressed_tools.contains(&tool.tool_call_id) {
+                    self.suppressed_tools.push(tool.tool_call_id.clone());
+                }
+                return;
+            }
+        }
+        if tool.is_terminal() {
+            self.write_tool(index, None, out);
+        }
+    }
+
+    /// v1 adapter.ts:2581-2615: a poll or kill reports on a registered background tool.
+    fn hydrate_background_tool(
+        &mut self,
+        index: usize,
+        completion: &BackgroundMutation,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        let tool = &mut self.tools[index];
+        tool.status = Some(
+            match completion.status {
+                BackgroundStatus::Running => "in_progress",
+                BackgroundStatus::Failed => "failed",
+                BackgroundStatus::Completed => "completed",
+            }
+            .into(),
+        );
+        if !completion.append_output.is_empty() {
+            let empty = tool_output_text(tool).is_none();
+            put_tool_output(tool, &completion.append_output, !empty);
+        }
+        if completion.status != BackgroundStatus::Running {
+            self.ended_tasks.insert(completion.task_id.clone());
+            self.write_tool(index, None, out);
+        }
+    }
+
+    /// v1 adapter.ts:4047-4111.
+    fn injected_user_text(&mut self, text: &str, out: &mut Vec<EngineEvent>) {
+        let Some(hooks) = self.hooks.clone() else {
+            return;
+        };
+        for mutation in hooks.0.background_tool_mutations(text) {
+            let Some(index) = self.background_tool_index(&mutation.task_id) else {
+                continue;
+            };
+            // An ended monitor stays open until its output is hydrated or the task ends.
+            if mutation.status != BackgroundStatus::Running {
+                self.awaiting_hydration.insert(mutation.task_id.clone());
+            }
+            let tool = &mut self.tools[index];
+            tool.status = Some("in_progress".into());
+            put_tool_output(tool, &mutation.append_output, true);
+        }
+        if let Some(notice) = hooks.0.subagent_end_notice(text)
+            && let Some(record) = self
+                .subagents
+                .iter()
+                .find(|s| s.child_session_id.as_deref() == Some(notice.child_session_id.as_str()))
+                .filter(|s| s.status.blocks_turn_settlement())
+                .cloned()
+        {
+            // Agents may answer without hydrating output; finish the subagent.
+            self.emit_subagent(
+                SubagentUpdate {
+                    native_task_id: record.native_task_id,
+                    prompt: record.prompt,
+                    title: record.title,
+                    model: record.model,
+                    status: notice.status,
+                    child_session_id: Some(notice.child_session_id),
+                    result: None,
+                    suppress_normal_tool: true,
+                },
+                out,
+            );
+        }
+    }
+
+    /// A structured background task start or end (v1 `applyBackgroundTaskMutation` and
+    /// `finishRegisteredBackgroundTool`, adapter.ts:3187-3213,5480-5530).
+    pub fn background_task(
+        &mut self,
+        task_id: &str,
+        status: BackgroundStatus,
+        output: Option<&str>,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        if status == BackgroundStatus::Running {
+            self.ended_tasks.remove(task_id);
+            return;
+        }
+        self.ended_tasks.insert(task_id.to_owned());
+        self.awaiting_hydration.remove(task_id);
+        let Some(index) = self.background_tool_index(task_id) else {
+            return;
+        };
+        if !running_status(self.tools[index].status.as_deref()) {
+            return;
+        }
+        let tool = &mut self.tools[index];
+        tool.status = Some(
+            if status == BackgroundStatus::Failed {
+                "failed"
+            } else {
+                "completed"
+            }
+            .into(),
+        );
+        if let Some(output) = output {
+            put_tool_output(tool, output, false);
+        }
+        self.write_tool(index, None, out);
+    }
+
+    /// v1 `emitSubagent` (adapter.ts:1790-2020): progress as `SubagentUpdate`, the finished
+    /// subagent as a `subagent` item.
+    pub fn emit_subagent(&mut self, update: SubagentUpdate, out: &mut Vec<EngineEvent>) {
+        let existing = self.subagents.iter().position(|s| {
+            s.native_task_id == update.native_task_id
+                || (update.child_session_id.is_some()
+                    && s.child_session_id == update.child_session_id)
+        });
+        let terminal = update.status.is_terminal();
+        if let Some(index) = existing {
+            let record = &self.subagents[index];
+            if record.status.is_terminal() && !terminal {
+                return;
+            }
+            if record.status == update.status && terminal && record.terminal_projected {
+                return;
+            }
+        } else if (update.prompt.is_empty() && update.title.is_none())
+            || !update.suppress_normal_tool
+        {
+            // Empty-prompt hydration must match an existing subagent; only spawns create one.
+            return;
+        }
+        let index = existing.unwrap_or_else(|| {
+            self.subagents.push(SubagentRecord {
+                native_task_id: update.native_task_id.clone(),
+                child_session_id: None,
+                prompt: update.prompt.clone(),
+                title: update.title.clone(),
+                model: None,
+                status: update.status,
+                result: None,
+                terminal_projected: false,
+            });
+            self.subagents.len() - 1
+        });
+        let record = &mut self.subagents[index];
+        if let Some(model) = update
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+        {
+            record.model = Some(model.to_owned());
+        }
+        record.status = update.status;
+        if update.result.is_some() {
+            record.result = update.result.clone();
+        }
+        if record.child_session_id.is_none() {
+            record.child_session_id = update.child_session_id.clone();
+        }
+        let record = record.clone();
+        out.push(EngineEvent::SubagentUpdate {
+            turn_id: Some(self.turn_id.clone()),
+            subagent_id: record.native_task_id.clone(),
+            status: record.status.item_status(),
+            title: record.title.clone(),
+            progress: None,
+        });
+        if terminal {
+            self.subagents[index].terminal_projected = true;
+            self.write_subagent(&record, record.status.item_status(), out);
+        }
+    }
+
+    fn write_subagent(
+        &mut self,
+        record: &SubagentRecord,
+        status: TurnItemStatus,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        self.close_segments(out);
+        let id = ItemId::new(format!(
+            "{}:subagent:{}",
+            self.turn_id, record.native_task_id
+        ));
+        let item = self.item(
+            id,
+            Some(record.native_task_id.clone()),
+            status,
+            record.title.clone(),
+            None,
+            TurnItemBody::Subagent {
+                subagent_id: record.native_task_id.clone(),
+                origin: SubagentOrigin::ProviderNative,
+                driver: self.driver.clone(),
+                provider_instance_id: self.provider_instance_id.clone(),
+                child_thread_id: None,
+                prompt: record.prompt.clone(),
+                progress: None,
+                result: record.result.clone(),
+            },
+        );
+        out.push(self.completed(item));
+    }
+
+    /// v1 `finishSubagentFromNotice` (adapter.ts:4675-4712): a subagent of this turn ended. False
+    /// when the turn does not know the child.
+    pub fn finish_subagent(
+        &mut self,
+        child_session_id: &str,
+        status: SubagentStatus,
+        result: Option<String>,
+        out: &mut Vec<EngineEvent>,
+    ) -> bool {
+        let Some(record) = self
+            .subagents
+            .iter()
+            .find(|s| s.child_session_id.as_deref() == Some(child_session_id))
+            .cloned()
+        else {
+            return false;
+        };
+        if record.status.blocks_turn_settlement() {
+            self.emit_subagent(
+                SubagentUpdate {
+                    native_task_id: record.native_task_id,
+                    prompt: record.prompt,
+                    title: record.title,
+                    model: record.model,
+                    status,
+                    child_session_id: Some(child_session_id.to_owned()),
+                    result,
+                    suppress_normal_tool: true,
+                },
+                out,
+            );
+        }
+        true
+    }
+
+    /// v1 `hasAcpDeferredBackgroundWork` (deferredBackground.ts:13-43) for flavors without
+    /// `toolOutlivesPrompt` / `wakeOnDetachedRequest`: hydration still owed, a non-persistent
+    /// background task still running, or a subagent still running.
+    pub fn has_deferred_background_work(&self) -> bool {
+        if !self.awaiting_hydration.is_empty() {
+            return true;
+        }
+        for (task_id, tool_id) in &self.background_tasks {
+            if self.persistent_tasks.contains(task_id) || self.ended_tasks.contains(task_id) {
+                continue;
+            }
+            if self
+                .tool(tool_id)
+                .is_some_and(|tool| running_status(tool.status.as_deref()))
+            {
+                return true;
+            }
+        }
+        self.subagents
+            .iter()
+            .any(|s| s.status.blocks_turn_settlement())
+    }
+
+    /// Subagents still running when the turn ends (v1 carryover subagents).
+    pub fn open_subagents(&self) -> Vec<SubagentRecord> {
+        self.subagents
+            .iter()
+            .filter(|s| s.status.blocks_turn_settlement())
+            .cloned()
+            .collect()
     }
 
     /// Close everything at the end of the prompt. Open tools take `open_tool_status`.
@@ -704,6 +1193,19 @@ impl TurnProjector {
         self.close_segments(out);
         for index in 0..self.tools.len() {
             self.write_tool(index, Some(open_tool_status), out);
+        }
+        // Subagents still open are written as they stand; an interrupted turn interrupts them
+        // (v1 `terminalizeOpenRunOwnedItems`, adapter.ts:6301-6328).
+        for record in self.subagents.clone() {
+            if record.terminal_projected {
+                continue;
+            }
+            let status = if open_tool_status == TurnItemStatus::Interrupted {
+                TurnItemStatus::Interrupted
+            } else {
+                record.status.item_status()
+            };
+            self.write_subagent(&record, status, out);
         }
         if let Some((plan_id, steps)) = self.plan.take()
             && !steps.is_empty()

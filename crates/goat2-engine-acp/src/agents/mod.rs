@@ -2,6 +2,12 @@
 pub mod antigravity;
 pub mod fx;
 pub mod grok;
+pub mod grok_auth;
+pub mod grok_model;
+pub mod grok_notifications;
+pub mod grok_plan;
+pub mod grok_skills;
+pub mod grok_tools;
 pub mod xai_requests;
 
 #[cfg(test)]
@@ -52,7 +58,11 @@ mod tests {
             }
         );
         assert_eq!(
-            Grok { has_api_key: true }.auth_policy(),
+            Grok {
+                has_api_key: true,
+                ..Default::default()
+            }
+            .auth_policy(),
             AuthPolicy::OnRequired {
                 method_id: Some("xai.api_key".into())
             }
@@ -60,7 +70,7 @@ mod tests {
         assert_eq!(
             g.ext_notification(
                 "_x.ai/session/prompt_complete",
-                &json!({"promptId":"p1","stopReason":"cancelled"})
+                &json!({"sessionId":"s","promptId":"p1","stopReason":"cancelled"})
             ),
             vec![FlavorEvent::PromptComplete {
                 prompt_id: Some("p1".into()),

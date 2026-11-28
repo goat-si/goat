@@ -31,10 +31,11 @@ use agent_client_protocol::v1::schema::{
 };
 use agent_client_protocol::{Agent, Client, Lines, Responder, UntypedMessage};
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 use goat2_contracts::{
-    ApprovalDecision, ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ProviderCapabilities,
-    ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId, TurnItem, TurnItemBody,
-    TurnItemStatus,
+    ApprovalDecision, ChatAttachment, ChatAttachmentType, EngineRef, ItemId, ModelSelection,
+    ProviderCapabilities, ProviderRequestKind, RequestId, RequestKind, RequestOutcome, ThreadId,
+    TurnItem, TurnItemBody, TurnItemStatus,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -46,9 +47,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::elicitation::{ElicitationForm, parse_elicitation_form};
 use crate::flavor::{
-    AcpFlavor, AuthPolicy, ExtAnswer, ExtRequest, FlavorEvent, ModelWrite, ResumeMethod, StdoutLine,
+    AcpFlavor, AuthPolicy, ExtAnswer, ExtRequest, FlavorEvent, ModelWrite, PromptContext,
+    ResumeMethod, StdoutLine,
 };
-use crate::items::{TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
+use crate::items::{SubagentRecord, TurnProjector, now_ms, rfc3339_ms, unfinished_stop_message};
 use crate::mcp::McpBridgeCommand;
 use crate::normalize::normalize_v1_session_update;
 use crate::policy::{
@@ -56,7 +58,10 @@ use crate::policy::{
     select_auto_approved_option, select_permission_option_id,
 };
 use crate::process::{ChildProcess, Launch};
-use crate::wire::{InitializeInfo, ModeState, SessionSetup, parse_modes, text_field};
+use crate::wire::{
+    InitializeInfo, ModeState, SessionSetup, config_option_id, parse_modes, select_values,
+    str_field, text_field,
+};
 
 type Conn = agent_client_protocol::v1::ConnectionTo<Agent>;
 type ValueResponder = Responder<Value, agent_client_protocol::V1>;
@@ -87,6 +92,10 @@ impl Default for AcpTimeouts {
     }
 }
 
+/// v1 `ACP_DEFERRED_FINALIZE_DEBOUNCE` (deferredBackground.ts:45-47): Grok summaries can trail
+/// hydrated tools by over two seconds.
+pub const DEFERRED_FINALIZE_DEBOUNCE: Duration = Duration::from_millis(3000);
+
 /// Starts ACP agent processes for one flavor.
 #[derive(Clone)]
 pub struct AcpEngineFactory {
@@ -96,6 +105,8 @@ pub struct AcpEngineFactory {
     client_version: String,
     /// GOAT's stdio MCP bridge for agents that do not take HTTP MCP (see [crate::mcp]).
     mcp_bridge: Option<McpBridgeCommand>,
+    /// How long a deferred turn waits after its background work ended before it finishes.
+    deferred_finalize: Duration,
 }
 
 impl AcpEngineFactory {
@@ -106,7 +117,14 @@ impl AcpEngineFactory {
             timeouts: AcpTimeouts::default(),
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             mcp_bridge: McpBridgeCommand::locate(),
+            deferred_finalize: DEFERRED_FINALIZE_DEBOUNCE,
         }
+    }
+
+    /// Use this debounce instead of [DEFERRED_FINALIZE_DEBOUNCE] (tests).
+    pub fn with_deferred_finalize(mut self, debounce: Duration) -> Self {
+        self.deferred_finalize = debounce;
+        self
     }
 
     /// Use this bridge command instead of [McpBridgeCommand::locate].
@@ -169,6 +187,13 @@ struct ActiveTurn {
     prompt_seq: u64,
     interrupted: bool,
     settled_tx: watch::Sender<bool>,
+    /// The prompt answered while background work ran (v1 `promptSettled` with
+    /// `deferFinalizeForBackgroundWork`): the turn finishes with this answer once the work ends.
+    prompt_settled: Option<Result<Value, String>>,
+    /// Bumped by every update during the deferral; a scheduled finalize runs only if current.
+    finalize_generation: u64,
+    /// An interrupt of a settled prompt keeps the agent running (v1 settled soft interrupt).
+    preserve_runtime: bool,
 }
 
 #[derive(Default)]
@@ -186,6 +211,10 @@ struct State {
     preamble: Option<String>,
     runtime_mode: Option<goat2_contracts::RuntimeMode>,
     model: Option<String>,
+    /// The whole selection last written (model options such as reasoning effort included).
+    model_selection: Option<ModelSelection>,
+    /// Subagents still running when their turn ended (v1 carryover subagents).
+    carryover: Vec<SubagentRecord>,
 }
 
 struct Shared {
@@ -203,6 +232,11 @@ struct Shared {
     timeouts: AcpTimeouts,
     resolver: Option<AttachmentResolver>,
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+    deferred_finalize: Duration,
+    provider_instance_id: String,
+    cwd: String,
+    program: PathBuf,
+    launch_env: Vec<(String, String)>,
 }
 
 fn emit(shared: &Shared, event: EngineEvent) {
@@ -266,6 +300,7 @@ impl Shared {
                     .flavor
                     .normalize_update(normalize_v1_session_update(params));
                 self.on_session_update(&params);
+                self.rearm_deferred_finalize();
             }
             "elicitation/complete" | "session/elicitation/complete" => {
                 if let Some(id) = text_field(&params, "elicitationId") {
@@ -286,6 +321,7 @@ impl Shared {
                 for event in self.flavor.ext_notification(method, &params) {
                     self.on_flavor_event(event);
                 }
+                self.rearm_deferred_finalize();
             }
         }
     }
@@ -337,6 +373,61 @@ impl Shared {
                     self.settle(&turn_id, seq, Err(message));
                 }
             }
+            FlavorEvent::BackgroundTask {
+                session_id,
+                task_id,
+                status,
+                output,
+            } => {
+                if self.session_id.get().is_some_and(|own| *own != session_id) {
+                    return;
+                }
+                let mut out = Vec::new();
+                if let Some(turn) = self.state.lock().expect("state").turn.as_mut() {
+                    turn.projector
+                        .background_task(&task_id, status, output.as_deref(), &mut out);
+                }
+                for event in out {
+                    emit(self, event);
+                }
+            }
+            FlavorEvent::SubagentFinished {
+                session_id,
+                child_session_id,
+                status,
+                result,
+            } => {
+                if self.session_id.get().is_some_and(|own| *own != session_id) {
+                    return;
+                }
+                let mut out = Vec::new();
+                {
+                    let mut state = self.state.lock().expect("state");
+                    let known = state.turn.as_mut().is_some_and(|turn| {
+                        turn.projector
+                            .finish_subagent(&child_session_id, status, result, &mut out)
+                    });
+                    // v1 `updateCarryoverSubagentStatus`: a subagent that outlived its turn.
+                    if !known
+                        && let Some(index) = state.carryover.iter().position(|s| {
+                            s.child_session_id.as_deref() == Some(child_session_id.as_str())
+                                || s.native_task_id == child_session_id
+                        })
+                    {
+                        let record = state.carryover.remove(index);
+                        out.push(EngineEvent::SubagentUpdate {
+                            turn_id: None,
+                            subagent_id: record.native_task_id,
+                            status: status.item_status(),
+                            title: record.title,
+                            progress: None,
+                        });
+                    }
+                }
+                for event in out {
+                    emit(self, event);
+                }
+            }
         }
     }
 
@@ -360,7 +451,7 @@ impl Shared {
         );
     }
 
-    fn on_session_update(&self, params: &Value) {
+    fn on_session_update(self: &Arc<Self>, params: &Value) {
         let Some(update) = params.get("update") else {
             return;
         };
@@ -368,6 +459,30 @@ impl Shared {
             && self.session_id.get().is_some_and(|own| *own != session)
         {
             return;
+        }
+        // v1 adapter.ts:3880-3899: a frame of the agent's own wake turn after the prompt answered.
+        // With background work still running it waits for a continuation run (which GOAT 2 does not
+        // start); otherwise the turn finishes now. Either way it is not part of this turn.
+        if self.flavor.is_wake_notification(params) {
+            let finish = {
+                let state = self.state.lock().expect("state");
+                match state.turn.as_ref() {
+                    Some(turn) if turn.prompt_settled.is_some() => Some((
+                        turn.turn_id.clone(),
+                        turn.prompt_seq,
+                        (!turn.projector.has_deferred_background_work())
+                            .then(|| turn.prompt_settled.clone())
+                            .flatten(),
+                    )),
+                    _ => None,
+                }
+            };
+            if let Some((turn_id, seq, result)) = finish {
+                if let Some(result) = result {
+                    self.finalize(&turn_id, seq, result);
+                }
+                return;
+            }
         }
         let kind = update
             .get("sessionUpdate")
@@ -418,9 +533,17 @@ impl Shared {
                     let _ = responder
                         .respond_with_error(agent_client_protocol::Error::method_not_found());
                 }
-                ExtRequest::CapturePlan { markdown, response } => {
+                ExtRequest::CapturePlan {
+                    markdown,
+                    fallback,
+                    response,
+                } => {
                     let mut out = Vec::new();
                     if let Some(turn) = self.state.lock().expect("state").turn.as_mut() {
+                        // v1 `extractXAiExitPlanMarkdown(params, lastProposedPlanMarkdown)`.
+                        let markdown = markdown
+                            .or_else(|| turn.projector.last_proposed_plan())
+                            .unwrap_or(fallback);
                         turn.projector.proposed_plan(markdown, &mut out);
                     }
                     for event in out {
@@ -736,6 +859,92 @@ impl Shared {
 
     /// The prompt of `turn_id` answered (or failed). Settles the turn unless a later prompt took over.
     fn settle(self: &Arc<Self>, turn_id: &str, prompt_seq: u64, result: Result<Value, String>) {
+        {
+            let mut state = self.state.lock().expect("state");
+            let Some(turn) = state.turn.as_mut() else {
+                return;
+            };
+            if turn.turn_id != turn_id
+                || turn.prompt_seq != prompt_seq
+                || turn.prompt_settled.is_some()
+            {
+                return;
+            }
+            // v1 `deferFinalizeForBackgroundWork`: a finished prompt with background tasks or
+            // subagents still running keeps the turn open until they end.
+            let finished = match &result {
+                Ok(response) => {
+                    let stop = response
+                        .get("stopReason")
+                        .and_then(Value::as_str)
+                        .unwrap_or("end_turn");
+                    stop != "cancelled" && unfinished_stop_message(stop).is_none()
+                }
+                Err(_) => false,
+            };
+            if finished
+                && !turn.interrupted
+                && self.flavor.defers_finalize_for_background_work()
+                && turn.projector.has_deferred_background_work()
+            {
+                turn.prompt_settled = Some(result);
+                return;
+            }
+        }
+        self.finalize(turn_id, prompt_seq, result);
+    }
+
+    /// v1 `makeRearmDeferredFinalize` / `makeDeferredFinalizeScheduler` (deferredBackground.ts:
+    /// 131-181, 224-233): once a deferred turn's background work has ended, finish it after the
+    /// debounce unless another update arrives first.
+    fn rearm_deferred_finalize(self: &Arc<Self>) {
+        let (turn_id, prompt_seq, generation) = {
+            let mut state = self.state.lock().expect("state");
+            let Some(turn) = state.turn.as_mut() else {
+                return;
+            };
+            if turn.prompt_settled.is_none()
+                || turn.interrupted
+                || turn.projector.has_deferred_background_work()
+            {
+                return;
+            }
+            turn.finalize_generation += 1;
+            (
+                turn.turn_id.clone(),
+                turn.prompt_seq,
+                turn.finalize_generation,
+            )
+        };
+        let shared = Arc::clone(self);
+        let debounce = self.deferred_finalize;
+        tokio::spawn(async move {
+            if !debounce.is_zero() {
+                tokio::time::sleep(debounce).await;
+            }
+            let result = {
+                let state = shared.state.lock().expect("state");
+                match state.turn.as_ref() {
+                    Some(turn)
+                        if turn.turn_id == turn_id
+                            && turn.prompt_seq == prompt_seq
+                            && turn.finalize_generation == generation
+                            && !turn.interrupted
+                            && !turn.projector.has_deferred_background_work() =>
+                    {
+                        turn.prompt_settled.clone()
+                    }
+                    _ => None,
+                }
+            };
+            if let Some(result) = result {
+                shared.finalize(&turn_id, prompt_seq, result);
+            }
+        });
+    }
+
+    /// End the turn with its prompt's answer.
+    fn finalize(self: &Arc<Self>, turn_id: &str, prompt_seq: u64, result: Result<Value, String>) {
         let mut out = Vec::new();
         let mut restart = false;
         {
@@ -776,12 +985,15 @@ impl Shared {
                 ),
             };
             turn.projector.finish(tool_status, &mut out);
+            let open_subagents = turn.projector.open_subagents();
+            let preserve_runtime = turn.preserve_runtime;
             let ordinal = turn.projector.next_ordinal();
             let _ = turn.settled_tx.send(true);
             state.ordinal = ordinal;
             state.turn = None;
+            state.carryover = open_subagents;
             self.cancel_pending(&mut state, &mut out);
-            if interrupted && self.flavor.restart_after_interrupt() {
+            if interrupted && self.flavor.restart_after_interrupt() && !preserve_runtime {
                 restart = true;
             }
             out.push(EngineEvent::TurnFinished {
@@ -898,7 +1110,7 @@ impl Shared {
             let state = self.state.lock().expect("state");
             (
                 state.runtime_mode != Some(settings.runtime_mode),
-                state.model.as_deref() != Some(settings.model_selection.model.as_str()),
+                state.model_selection.as_ref() != Some(&settings.model_selection),
             )
         };
         if mode_changed {
@@ -932,7 +1144,22 @@ impl Shared {
                 setup.config_options = state.config_options.clone();
                 setup
             };
-            match self.flavor.model_write(&settings.model_selection, &setup) {
+            let init = self.init.get().cloned().unwrap_or_default();
+            let write = self
+                .flavor
+                .model_write_for(&settings.model_selection, &setup, &init);
+            self.apply_model_write(write).await?;
+            let mut state = self.state.lock().expect("state");
+            state.model = Some(settings.model_selection.model.clone());
+            state.model_selection = Some(settings.model_selection.clone());
+        }
+        Ok(())
+    }
+
+    /// Run one [ModelWrite].
+    fn apply_model_write(&self, write: ModelWrite) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            match write {
                 ModelWrite::Keep => {}
                 ModelWrite::Unavailable { message } => return Err(message),
                 ModelWrite::ConfigOption { config_id, value } => {
@@ -960,10 +1187,46 @@ impl Shared {
                         .await
                         .map_err(|e| format!("session/set_model {model_id}: {e}"))?;
                 }
+                ModelWrite::Sequence(writes) => {
+                    for write in writes {
+                        self.apply_model_write(write).await?;
+                    }
+                }
+                ModelWrite::OrElse(first, second) => {
+                    if self.apply_model_write(*first).await.is_err() {
+                        self.apply_model_write(*second).await?;
+                    }
+                }
+                ModelWrite::OptionalConfigByCategory { category, value } => {
+                    let option = self
+                        .state
+                        .lock()
+                        .expect("state")
+                        .config_options
+                        .iter()
+                        .find(|o| {
+                            str_field(o, "type") == Some("select")
+                                && str_field(o, "category") == Some(category.as_str())
+                        })
+                        .cloned();
+                    let Some(option) = option else {
+                        return Ok(());
+                    };
+                    let offered = select_values(&option).iter().any(|(v, _)| *v == value);
+                    if !offered || str_field(&option, "currentValue") == Some(value.as_str()) {
+                        return Ok(());
+                    }
+                    let Some(config_id) = config_option_id(&option).map(str::to_owned) else {
+                        return Ok(());
+                    };
+                    // A rejected effort is skipped and the agent's default applies.
+                    let _ = self
+                        .apply_model_write(ModelWrite::ConfigOption { config_id, value })
+                        .await;
+                }
             }
-            self.state.lock().expect("state").model = Some(settings.model_selection.model.clone());
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     fn terminate(self: &Arc<Self>, reason: String) {
@@ -1092,6 +1355,18 @@ impl EngineSession for AcpSession {
         if let Err(reason) = shared.apply_settings(settings).await {
             return TurnStartResult::Declined { reason };
         }
+        let mut inputs = inputs;
+        if let Some(first) = inputs.first_mut() {
+            let context = PromptContext {
+                cwd: shared.cwd.clone(),
+                program: shared.program.clone(),
+                launch_env: shared.launch_env.clone(),
+            };
+            first.text = shared
+                .flavor
+                .rewrite_user_text_for(std::mem::take(&mut first.text), &context)
+                .await;
+        }
         let preamble = shared.state.lock().expect("state").preamble.clone();
         let blocks = match shared.prompt_blocks(&inputs, preamble) {
             Ok(blocks) => blocks,
@@ -1114,6 +1389,11 @@ impl EngineSession for AcpSession {
                 shared.session_id(),
                 turn_id.clone(),
                 state.ordinal,
+            )
+            .with_flavor(
+                Arc::clone(&shared.flavor),
+                shared.provider_instance_id.clone(),
+                shared.launch_env.clone(),
             );
             state.turn = Some(ActiveTurn {
                 turn_id: turn_id.clone(),
@@ -1121,6 +1401,9 @@ impl EngineSession for AcpSession {
                 prompt_seq: state.prompt_counter,
                 interrupted: false,
                 settled_tx,
+                prompt_settled: None,
+                finalize_generation: 0,
+                preserve_runtime: false,
             });
             state.preamble = None;
             (turn_id, state.prompt_counter)
@@ -1177,6 +1460,46 @@ impl EngineSession for AcpSession {
 
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
         let shared = &self.shared;
+        // v1 adapter.ts:7874-8082: the prompt already answered and the turn waits for background
+        // work. There is no prompt to cancel, so the turn ends here; with
+        // `preserveRuntimeOnSettledInterrupt` the agent is neither cancelled nor restarted, so its
+        // background subagents keep running.
+        let settled = {
+            let mut out = Vec::new();
+            let settled = {
+                let mut state = shared.state.lock().expect("state");
+                match state.turn.as_mut() {
+                    Some(turn) if turn.turn_id == turn_id && turn.prompt_settled.is_some() => {
+                        turn.interrupted = true;
+                        turn.preserve_runtime =
+                            shared.flavor.preserve_runtime_on_settled_interrupt();
+                        let settled = (
+                            turn.prompt_seq,
+                            turn.prompt_settled.clone(),
+                            turn.preserve_runtime,
+                        );
+                        shared.cancel_pending(&mut state, &mut out);
+                        Some(settled)
+                    }
+                    _ => None,
+                }
+            };
+            for event in out {
+                emit(shared, event);
+            }
+            settled
+        };
+        if let Some((prompt_seq, Some(result), preserve)) = settled {
+            if !preserve {
+                let mut cancel = CancelNotification::new(shared.session_id());
+                if let Some(meta) = meta_of(shared.flavor.cancel_meta()) {
+                    cancel = cancel.meta(meta);
+                }
+                let _ = shared.notify("session/cancel", json_or_null(&cancel));
+            }
+            shared.finalize(turn_id, prompt_seq, result);
+            return Ok(());
+        }
         let mut settled_rx = {
             let mut out = Vec::new();
             let rx = {
@@ -1415,6 +1738,20 @@ impl AcpEngineFactory {
             timeouts: self.timeouts.clone(),
             resolver: self.resolver.clone(),
             shutdown_tx: Mutex::new(None),
+            deferred_finalize: self.deferred_finalize,
+            provider_instance_id: spec.engine.provider_instance_id.to_string(),
+            cwd: spec.engine.cwd.clone(),
+            program: launch.program.clone(),
+            launch_env: launch
+                .env_set
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
         });
 
         let stderr_hook = {
@@ -1630,7 +1967,7 @@ impl AcpEngineFactory {
         let init = InitializeInfo::from_value(&init_value);
         let _ = shared.init.set(init.clone());
 
-        if let AuthPolicy::Eager { method_id } = flavor.auth_policy() {
+        if let AuthPolicy::Eager { method_id } = flavor.auth_policy_for(spec) {
             let request = AuthenticateRequest::new(method_id.clone());
             if let Err(error) = shared
                 .request(
@@ -1753,7 +2090,7 @@ impl AcpEngineFactory {
             Ok(setup) => setup,
             Err(error) if is_auth_required(&error) => {
                 // v1 authenticateAfterRequired (AcpSessionRuntime.ts:1505-1555).
-                let configured = match flavor.auth_policy() {
+                let configured = match flavor.auth_policy_for(spec) {
                     AuthPolicy::OnRequired { method_id } => method_id,
                     AuthPolicy::Eager { .. } => None,
                 };
