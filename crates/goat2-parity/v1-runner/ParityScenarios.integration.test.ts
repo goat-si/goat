@@ -261,6 +261,9 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   });
   let exit: Exit.Exit<any, any> = Exit.void;
   const refusals: Array<{watermark: number; event: any}> = [];
+  // Set when the trailing steer was accepted: its run starts after the scenario steps, so the
+  // thread's stored events are read from the database once that run has settled.
+  let lateEvents: any[] | undefined;
   // A steer at a run that is no longer active fails at admission (interrupted: Orchestrator.ts:4230-4236;
   // a completed target is instead kept as a new turn, goat/DispatchModeAdjustment.ts:14-39).
   // The code is the innermost tagged error (the one raised where the command was refused).
@@ -270,7 +273,23 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     messageInputs.set(messageId, refused.input);
     const result = yield* Effect.exit(orchestrator.dispatch({type: "message.dispatch", commandId: CommandId.make("command:parity:" + refused.id), threadId, messageId, text: refused.text, attachments: [], modelSelection: CODEX_MODEL_SELECTION, dispatchMode: {type: "steer_active", targetRunId: ids.derive.run({threadId, ordinal: runOrdinal(refused.run)})}, createdBy: "user", creationSource: "web"} as any));
     const watermark = yield* orchestrator.getThreadEventSequence(threadId);
-    if (Exit.isSuccess(result)) return;
+    if (Exit.isSuccess(result)) {
+      const status = new Map<string, any>();
+      yield* orchestrator.streamStoredEventsFrom({threadId, afterSequence: 0}).pipe(
+        Stream.map((stored: any) => {
+          const e = stored.event;
+          if (e.type === "run.created" || e.type === "run.updated") status.set(e.payload.id, e.payload);
+          const runs = [...status.values()];
+          return runs.some((r: any) => r.userMessageId === messageId) && runs.every((r: any) => ["completed", "interrupted", "failed", "cancelled"].includes(r.status));
+        }),
+        Stream.filter((settled) => settled),
+        Stream.runHead,
+        Effect.timeout("120 seconds"),
+      );
+      const last = yield* orchestrator.getThreadEventSequence(threadId);
+      lateEvents = [...(yield* orchestrator.streamStoredEventsFrom({threadId, afterSequence: 0}).pipe(Stream.takeUntil((s: any) => s.sequence >= last), Stream.runCollect))];
+      return;
+    }
     let error: any = Cause.squash(result.cause);
     let tag: string | undefined = error?._tag;
     while (error?.cause !== undefined && typeof error.cause === "object") { error = error.cause; if (error?._tag) tag = error._tag; }
@@ -289,7 +308,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     // A crash's second runtime starts from the snapshot, so its events supersede the first
     // runtime's (which may include writes after the snapshot).
     if (crashAfterSend !== undefined && !first) stored.clear();
-    for (const s of (crashAfterSend !== undefined && !first ? recoveredEvents ?? [] : exit.value.storedEvents)) stored.set(s.sequence, s);
+    for (const s of (crashAfterSend !== undefined && !first ? recoveredEvents ?? [] : lateEvents ?? exit.value.storedEvents)) stored.set(s.sequence, s);
     if (first && phases.length > 1 && crashAfterSend === undefined) restartBoundary = Math.max(...[...stored.keys()]);
   }
   const state = yield* Ref.get(driver.state);

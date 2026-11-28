@@ -5,12 +5,27 @@
   "interrupt_ack_then_terminal": {},
   "steer_refused_at_admission": {},
   "steer_missed_becomes_followup": {},
-  "steer_rpc_error_codex": {},
-  "child_wake_delegated": {},
+  "steer_rpc_error_codex": {
+    "escalated": {
+      "decision": "v1 unsupported: the source-derived end state (backoff retry, then a new run for the same message) needs a second recorded Codex turn the synthetic transcript lacks; the recorded window is consistent with source (no steer.applied). Accept as source-only?",
+      "askedAt": "2026-11-29"
+    }
+  },
+  "child_wake_delegated": {
+    "escalated": {
+      "decision": "v1 unsupported: no Codex recording delivers a delegated completion into a parent; needs a new recording. Accept as source-only (docs/parity/child-wake.md) with thread_tools_send_wait covering claimed delivery?",
+      "askedAt": "2026-11-29"
+    }
+  },
   "restart_idle_resume": {},
   "restart_active_run_settles": {},
   "thread_tools_send_wait": {},
-  "thread_watch_wake": {},
+  "thread_watch_wake": {
+    "escalated": {
+      "decision": "v1 unsupported: no Codex recording of a watch wake and the watch path needs the real LaunchWatchService; GOAT 2 defers thread.watch. Accept as source-only?",
+      "askedAt": "2026-11-29"
+    }
+  },
   "thread_report_result": {},
   "queue_edit_then_start": {},
   "queue_promote_to_steer": {},

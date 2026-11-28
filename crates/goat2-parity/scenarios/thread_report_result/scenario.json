@@ -1,13 +1,18 @@
 {
   "v": 1,
   "name": "thread_report_result",
-  "summary": "thread report result",
+  "summary": "a delegated child reports its result with thread.report_result while its run is active; a report naming another thread's run is rejected",
   "spec": [
-    "docs/parity/README.md"
+    "docs/parity/thread-tools.md",
+    "docs/parity/child-wake.md"
   ],
   "v1Refs": [
-    "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson:1",
-    "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:105"
+    "apps/server/src/orchestration-v2/testkit/fixtures/delegated_task_status/codex_transcript.ndjson:1-40",
+    "apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts:158-560",
+    "apps/server/src/orchestration-v2/ThreadSendMode.ts:4-19",
+    "apps/server/src/orchestration-v2/ThreadManagementService.ts:1455-1480",
+    "apps/server/src/mcp/toolkits/thread/handlers.ts:84-102",
+    "apps/server/src/threadResults/ThreadResultService.ts:265-280"
   ],
   "streams": {
     "codex": {
@@ -22,28 +27,372 @@
     }
   },
   "threads": {
-    "t1": {
+    "p1": {
       "kind": "user",
       "stream": "codex"
+    },
+    "c1": {
+      "kind": "worker",
+      "stream": "codex",
+      "parent": "p1"
     }
   },
-  "steps": [],
-  "expect": {
-    "complete": false,
-    "exhaustive": [],
-    "threads": {
-      "t1": []
+  "steps": [
+    {
+      "do": "send",
+      "id": "s1",
+      "thread": "p1",
+      "input": "i1",
+      "text": "Keep this parent turn active while orchestration tools are tested.",
+      "mode": "start"
     },
-    "happensBefore": []
+    {
+      "do": "await",
+      "id": "a1",
+      "thread": "p1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "mcp",
+      "id": "m1",
+      "caller": "p1",
+      "path": "task.create",
+      "args": {
+        "task": "Inspect the delegated API boundary and return the result.",
+        "target": {
+          "providerInstanceId": "codex",
+          "model": "gpt-5.4"
+        },
+        "mode": "async",
+        "clientRequestId": "delegate-codex-replay-1"
+      },
+      "call": "create",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "m2",
+      "caller": "p1",
+      "path": "thread.wait",
+      "args": {
+        "threadId": "$thread:c1"
+      },
+      "call": "wait1",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "m3",
+      "caller": "p1",
+      "path": "task.read",
+      "args": {
+        "taskId": "$result:create.taskId"
+      },
+      "call": "read1",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "m4",
+      "caller": "p1",
+      "path": "thread.send",
+      "args": {
+        "threadId": "$thread:c1",
+        "message": "Remain active until the parent cancels this delegated task.",
+        "clientRequestId": "delegated-child-replay-running-1"
+      },
+      "call": "send1",
+      "wait": true
+    },
+    {
+      "do": "await",
+      "id": "a2",
+      "thread": "c1",
+      "until": "run_status",
+      "run": "r2",
+      "status": "running"
+    },
+    {
+      "do": "mcp",
+      "id": "r1",
+      "caller": "c1",
+      "path": "thread.report_result",
+      "args": {
+        "outcome": "succeeded",
+        "summary": "Queued delegated follow-up completed."
+      },
+      "call": "report1",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "r2",
+      "caller": "c1",
+      "path": "thread.report_result",
+      "args": {
+        "outcome": "succeeded",
+        "summary": "Report for a run of another thread.",
+        "runId": "$run:p1.r1"
+      },
+      "call": "report2",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "m5",
+      "caller": "p1",
+      "path": "thread.send",
+      "args": {
+        "threadId": "$thread:c1",
+        "message": "Complete the queued follow-up and return the final result.",
+        "mode": "queue",
+        "clientRequestId": "delegated-child-replay-queued-1"
+      },
+      "call": "send2",
+      "wait": true
+    },
+    {
+      "do": "mcp",
+      "id": "m6",
+      "caller": "p1",
+      "path": "thread.wait",
+      "args": {
+        "threadId": "$thread:c1"
+      },
+      "call": "wait2",
+      "wait": true
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
+    ],
+    "threads": {
+      "p1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "p1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Keep this parent turn active while orchestration tools are tested."
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "p1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "child.started",
+          "thread": "p1",
+          "child": "c1"
+        },
+        {
+          "id": "e4",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "create",
+          "path": "task.create",
+          "status": "ok"
+        },
+        {
+          "id": "e5",
+          "kind": "child.reported",
+          "thread": "p1",
+          "child": "c1",
+          "status": "completed"
+        },
+        {
+          "id": "e6",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "wait1",
+          "path": "thread.wait",
+          "status": "ok"
+        },
+        {
+          "id": "e7",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "read1",
+          "path": "task.read",
+          "status": "ok"
+        },
+        {
+          "id": "e8",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "send1",
+          "path": "thread.send",
+          "status": "ok"
+        },
+        {
+          "id": "e9",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "send2",
+          "path": "thread.send",
+          "status": "ok"
+        },
+        {
+          "id": "e10",
+          "kind": "child.reported",
+          "thread": "p1",
+          "child": "c1",
+          "status": "completed"
+        },
+        {
+          "id": "e11",
+          "kind": "tool.result",
+          "thread": "p1",
+          "call": "wait2",
+          "path": "thread.wait",
+          "status": "ok"
+        }
+      ],
+      "c1": [
+        {
+          "id": "f1",
+          "kind": "input.accepted",
+          "thread": "c1",
+          "input": "create",
+          "from": "agent",
+          "mode": "start",
+          "text": "Inspect the delegated API boundary and return the result."
+        },
+        {
+          "id": "f2",
+          "kind": "run.started",
+          "thread": "c1",
+          "run": "r1",
+          "inputs": [
+            "create"
+          ]
+        },
+        {
+          "id": "f3",
+          "kind": "run.finished",
+          "thread": "c1",
+          "run": "r1",
+          "status": "done"
+        },
+        {
+          "id": "f4",
+          "kind": "input.accepted",
+          "thread": "c1",
+          "input": "send1",
+          "from": "agent",
+          "mode": "start",
+          "text": "Remain active until the parent cancels this delegated task."
+        },
+        {
+          "id": "f5",
+          "kind": "run.started",
+          "thread": "c1",
+          "run": "r2",
+          "inputs": [
+            "send1"
+          ]
+        },
+        {
+          "id": "g1",
+          "kind": "tool.result",
+          "thread": "c1",
+          "call": "report1",
+          "path": "thread.report_result",
+          "status": "ok"
+        },
+        {
+          "id": "g2",
+          "kind": "tool.result",
+          "thread": "c1",
+          "call": "report2",
+          "path": "thread.report_result",
+          "status": "error",
+          "code": "invalid_request"
+        },
+        {
+          "id": "f6",
+          "kind": "input.accepted",
+          "thread": "c1",
+          "input": "send2",
+          "from": "agent",
+          "mode": "steer",
+          "text": "Complete the queued follow-up and return the final result."
+        },
+        {
+          "id": "f7",
+          "kind": "steer.applied",
+          "thread": "c1",
+          "run": "r2",
+          "input": "send2"
+        },
+        {
+          "id": "f8",
+          "kind": "run.finished",
+          "thread": "c1",
+          "run": "r2",
+          "status": "done"
+        }
+      ]
+    },
+    "happensBefore": [
+      [
+        "e3",
+        "f1"
+      ],
+      [
+        "f3",
+        "e5"
+      ],
+      [
+        "f4",
+        "e8"
+      ],
+      [
+        "f6",
+        "e9"
+      ],
+      [
+        "f8",
+        "e10"
+      ],
+      [
+        "f5",
+        "g1"
+      ],
+      [
+        "g2",
+        "f6"
+      ]
+    ]
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "supported"
     },
     "goat2": {
       "status": "pending",
-      "reason": "no host yet"
+      "reason": "needs the goat2 target and the Codex driver"
     }
   }
 }

@@ -38,8 +38,8 @@
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "unsupported",
+      "reason": "v1 cannot be driven from recorded sessions: a delegated child's completion wakes the parent by steering its active turn or starting a wake run (Orchestrator.ts:5511-5572, ProviderContinuationService.ts:173), which needs recorded parent Codex frames (turn/steer or turn/start on the parent thread). The only GOAT-owned Codex delegation recording, fixtures/delegated_task_status, has no parent frames after the parent's first turn: the parent claims results through task.read while its turn stays active (OrchestratorMcpToolkit.integration.test.ts:509-560; replayed here as thread_tools_send_wait: child.reported with no wake). v1's wake tests use scripted adapters, not Codex replay (SteeringCompletionWake.integration.test.ts:22 SteeringHarness; goat/DelegatedLaneSettlement.integration.test.ts). Driving it needs a new recording, which this lane may not make."
     },
     "goat2": {
       "status": "pending",

@@ -28,6 +28,7 @@ import * as EffectWorker from "../../../orchestration-v2/EffectWorker.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import { layerThreadStartMocks } from "../../../mcp/threadStartMocks.testkit.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ProviderReplayHarness from "../../../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as SqlitePersistence from "../../../persistence/Sqlite.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -51,11 +52,14 @@ import { traceFromV1Mcp } from "./traceFromV1Mcp.ts";
 // one inside the orchestrator replay layer, one provided to the toolkit). The runner keeps every
 // replay driver those layers create and reports the one that advanced. The thread-record read
 // instrumentation is dropped.
-const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
-  Layer.provide(layerPermissionProfilesOff),
-  Layer.provide(layerNoFleetSync),
+// Orchestrator and thread toolkits together, as v1's test does for thread tools (:806-829).
+const layerOrchestratorToolkit = Layer.merge(
+  McpHttpServer.layerOrchestratorToolkit.pipe(Layer.provide(layerPermissionProfilesOff), Layer.provide(layerNoFleetSync)),
+  McpHttpServer.layerThreadToolkit.pipe(Layer.provide(layerPermissionProfilesOff), Layer.provide(layerNoFleetSync)),
+).pipe(
   Layer.provide(layerThreadStartMocks),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
 );
 const rootThreadId = ThreadId.make("thread:mcp-orchestrator-parent");
 const projectId = ProjectId.make("project:mcp-orchestrator");
@@ -184,6 +188,14 @@ it.live("replays the parity MCP scenario", () => Effect.scoped(Effect.gen(functi
     });
     const resolve = (value: any): Effect.Effect<any, any, any> => Effect.gen(function* () {
       if (typeof value === "string" && value.startsWith("$thread:")) return yield* threadOf(value.slice(8));
+      if (typeof value === "string" && value.startsWith("$run:")) {
+        // "$run:<thread>.r<N>": the N-th started run of that thread.
+        const [threadAlias, runAlias] = value.slice(5).split(".");
+        const projection: any = yield* orchestrator.getThreadProjection(yield* threadOf(threadAlias!));
+        const runRecord = startedRuns(projection)[Number(String(runAlias).replace(/^r/, "")) - 1];
+        if (runRecord === undefined) throw new Error("no started run " + value);
+        return runRecord.id;
+      }
       if (typeof value === "string" && value.startsWith("$result:")) {
         const [call, field] = value.slice(8).split(".");
         const result = callResults.get(call!);
