@@ -894,6 +894,43 @@ async fn command_line_is_the_command() {
     run.handle.session.shutdown().await;
 }
 
+/// v1 extractAntigravitySubagentUpdate (AntigravityAdapterV2.ts:113-141): an `invoke_subagent`
+/// call is child work titled by its role; a failed one carries its output.
+#[tokio::test]
+async fn invoke_subagent_reports_child_progress() {
+    let mut run = start(
+        &[("GOAT_ACP_ANTIGRAVITY_SUBAGENT", "1")],
+        RuntimeMode::FullAccess,
+    )
+    .await;
+    let (events, _) = simple_turn(&mut run, RuntimeMode::FullAccess).await;
+    let updates: Vec<(TurnItemStatus, Option<String>, Option<String>)> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::SubagentUpdate {
+                subagent_id,
+                status,
+                title,
+                progress,
+                ..
+            } if subagent_id == "agent-1" => Some((*status, title.clone(), progress.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        updates,
+        [
+            (TurnItemStatus::Running, Some("reviewer".into()), None),
+            (
+                TurnItemStatus::Failed,
+                Some("reviewer".into()),
+                Some("child crashed".into())
+            ),
+        ]
+    );
+    run.handle.session.shutdown().await;
+}
+
 /// v1 AntigravityAcpSupport.ts:118-145: GOAT's instructions go in `_meta.antigravity.systemPrompt`
 /// when the runtime advertises it, not in front of the first prompt.
 #[tokio::test]

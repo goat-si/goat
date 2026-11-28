@@ -5,6 +5,7 @@ pub mod antigravity_files;
 pub mod antigravity_goat_tools;
 pub mod antigravity_prompt;
 pub mod antigravity_protocol;
+pub mod antigravity_subagent;
 pub mod fx;
 pub mod fx_skills;
 pub mod grok;

@@ -27,6 +27,7 @@
 //!   `fs/read_text_file` request for the path (reply printed as `read: <json>`), then the call
 //!   failed with an unrelated step error.
 //! - `GOAT_ACP_ANTIGRAVITY_COMMAND=1` (GOAT 2): a `run_command` call naming `CommandLine`.
+//! - `GOAT_ACP_ANTIGRAVITY_SUBAGENT=1` (GOAT 2): an `invoke_subagent` call that fails.
 //! - `GOAT_ACP_FX=1` (GOAT 2): the fx profile; `GOAT_ACP_FX_MODES` lists the modes (default
 //!   `ask,code`), the session reports `ask`.
 //! - `GOAT_ACP_FX_SUBAGENT=1` (GOAT 2): a `subagent` call whose clipped reply says it failed.
@@ -329,6 +330,11 @@ pub fn prompt(agent: &Arc<Agent>, session: &str) -> bool {
     if flag("GOAT_ACP_ANTIGRAVITY_COMMAND") {
         agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "cmd-1", "title": "run_command", "status": "pending", "rawInput": {"CommandLine": "cargo test", "Cwd": "/w"}}));
         agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "cmd-1", "status": "completed", "rawOutput": {"exitCode": 0, "combinedOutput": "ok\n"}}));
+    }
+    if flag("GOAT_ACP_ANTIGRAVITY_SUBAGENT") {
+        agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "agent-1", "title": "Run invoke_subagent", "status": "in_progress",
+            "rawInput": {"Role": "reviewer", "Prompt": "Check the diff"}}));
+        agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "agent-1", "status": "failed", "rawOutput": "child crashed"}));
     }
     if flag("GOAT_ACP_FX_SUBAGENT") {
         agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "sub-1", "name": "subagent", "title": "subagent", "status": "in_progress",

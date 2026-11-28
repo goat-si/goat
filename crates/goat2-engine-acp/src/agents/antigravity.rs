@@ -29,14 +29,15 @@ use super::antigravity_auth::{
     self, ANTIGRAVITY_SIGN_IN_REQUIRED_MESSAGE, AntigravityAuthConfig, AntigravityProfile,
     REMOVED_ENVIRONMENT_KEYS,
 };
-use super::{antigravity_files, antigravity_prompt, antigravity_protocol};
+use super::{antigravity_files, antigravity_prompt, antigravity_protocol, antigravity_subagent};
 use crate::{
     capabilities::acp_base_capabilities,
     flavor::{
         AcpFlavor, AuthFailure, AuthPolicy, ClientCaps, ClientRead, ConfigWrite, ExtRequest,
         FlavorEvent, LaunchCommand, ModeContext, ModeWrite, ModelWrite, PromptAttachment,
-        ResumeMethod, StderrLine, StdoutLine, runtime_set_mode,
+        ResumeMethod, StderrLine, StdoutLine, SubagentToolUpdate, runtime_set_mode,
     },
+    items::ToolState,
     policy::{Disposition, RuntimePolicy},
     wire::{InitializeInfo, ModeState, SessionSetup, config_option_id, select_values},
 };
@@ -399,6 +400,10 @@ impl AcpFlavor for Antigravity {
     }
     fn stdout_line(&self, line: &str) -> StdoutLine {
         antigravity_auth::stdout_line(line)
+    }
+    /// v1 `extractSubagentUpdate` (AntigravityAdapterV2.ts:117-141, 314).
+    fn subagent_update(&self, tool: &ToolState) -> Option<SubagentToolUpdate> {
+        antigravity_subagent::subagent_update(tool)
     }
     fn stderr_line(&self, line: &str) -> StderrLine {
         antigravity_auth::stderr_line(line)

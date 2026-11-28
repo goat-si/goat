@@ -22,6 +22,7 @@ Slice `antigravity-fx` of lane P2-B. One row per GOAT 2 file; line ranges are v1
 | src/agents/antigravity_goat_tools.rs | packages/shared/src/goatMcpToolPresentation.ts (28-871), goatMcpLifecycleToolPresentation.ts, goatMcpPullRequestToolPresentation.ts | verbatim (the key list of `GOAT_MCP_TOOL_NAMES`) |
 | src/agents/antigravity_prompt.rs | apps/server/src/provider/acp/AntigravityAcpSupport.ts (92-98, 356-597); packages/contracts/src/chatAttachment.ts (15-17) | ported-to-Rust (no pasted-text attachments in GOAT 2) |
 | src/agents/antigravity_files.rs | apps/server/src/provider/acp/AntigravityClientFiles.ts (15-133) | ported-to-Rust (read only; v1 never advertises writes) |
+| src/agents/antigravity_subagent.rs | apps/server/src/orchestration-v2/Adapters/AntigravityAdapterV2.ts (113-141); apps/server/src/provider/acp/AntigravityProtocol.ts (694-736); AntigravitySwarmProtocol.ts (1-120, 238-255); AntigravityChildWork.ts (44-83); AntigravitySwarmWork.ts (10-64) | ported-to-Rust |
 | src/agents/fx.rs | packages/provider-fx/src/server/acpSupport.ts (25-238); adapter.ts (51-152, 180-221); src/settings.ts; driver.ts (108-112) | ported-to-Rust |
 | src/agents/fx_skills.rs | packages/provider-fx/src/server/skills.ts (1-373) | ported-to-Rust |
 | src/agents/mod.rs | - | module list; tests use `Fx::default()` |
@@ -38,8 +39,9 @@ the prompt (`toolOutlivesPrompt`, `postSettleCommandHold`, `enablePostSettleCont
 `preserveRuntimeOnSettledInterrupt`), `promptInactivityTimeout`, `compactViaAdvertisedCommand`,
 per-turn Gemini usage, the installer's compatibility advisory in the handshake refusal, the
 profile-directory readers (`AntigravityTurnOutcome.ts`, `AntigravityExecutedModel.ts`,
-`AntigravityChildWork.ts`, `AntigravitySubagentTranscript.ts`, `AntigravitySessionFiles.ts`), native
-subagent and swarm extraction (`AntigravitySwarmProtocol.ts`, `AntigravitySwarmWork.ts`), edit patch
+`AntigravityChildWork.ts` transcripts, `AntigravitySubagentTranscript.ts`, `AntigravitySessionFiles.ts`,
+`AntigravitySwarmWork.ts` disk members), swarm tool presentation titles
+(`normalizeAntigravitySwarmToolPresentation`), subagent rows as `TurnItemBody::Subagent`, edit patch
 location (`AntigravityEditLocation.ts`), the picked `_t3/session-mode` under the runtime-mode
 ceiling, the browser-suppression preflight and user skill/rule linking (Node helper), `agy acp --login`
 code login (helpers `parse_authorization_url(Code)` and `login_response` are ported), installation
