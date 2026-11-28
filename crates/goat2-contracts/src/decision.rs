@@ -209,7 +209,7 @@ where
     let reason = String::deserialize(deserializer)?;
     // v1 trims first (JavaScript `trim`: ECMAScript whitespace, the set the schema's `\S` pattern
     // uses), then counts UTF-16 code units (JavaScript `length`).
-    let trimmed = reason.trim_matches(is_ecmascript_whitespace);
+    let trimmed = reason.trim_matches(crate::serde_util::is_ecmascript_whitespace);
     let units = trimmed.encode_utf16().count();
     if units == 0 || units > DECISION_REASON_MAX_UTF16 {
         return Err(serde::de::Error::custom(format!(
@@ -221,20 +221,4 @@ where
     } else {
         trimmed.to_owned()
     })
-}
-
-/// ECMAScript `\s` (WhiteSpace and LineTerminator, ECMA-262), so serde and JSON Schema `\S` agree.
-/// It differs from `char::is_whitespace`: it includes U+FEFF and excludes U+0085.
-fn is_ecmascript_whitespace(c: char) -> bool {
-    matches!(
-        c,
-        '\u{9}' | '\u{a}' | '\u{b}' | '\u{c}' | '\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
-            ..='\u{200a}'
-                | '\u{2028}'
-                | '\u{2029}'
-                | '\u{202f}'
-                | '\u{205f}'
-                | '\u{3000}'
-                | '\u{feff}'
-    )
 }

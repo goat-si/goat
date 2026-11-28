@@ -51,6 +51,22 @@ impl<T: schemars::JsonSchema> schemars::JsonSchema for Nullable<T> {
     }
 }
 
+/// ECMAScript `\s` (WhiteSpace and LineTerminator, ECMA-262), so serde and JSON Schema `\S` agree.
+/// It differs from `char::is_whitespace`: it includes U+FEFF and excludes U+0085.
+pub(crate) fn is_ecmascript_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{9}' | '\u{a}' | '\u{b}' | '\u{c}' | '\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
 /// Enforces [crate::limits::MAX_SAFE_WIRE_INTEGER] on a `u64` wire field in both directions, so
 /// Rust never writes or accepts a counter JavaScript cannot represent exactly. Use with
 /// `#[serde(with = "crate::serde_util::safe_u64")]`.
@@ -227,7 +243,8 @@ pub mod instructions {
 
 /// v1 `SignInUrl` (`providerSetup.ts`): trimmed, non-empty, at most 16384 characters, and
 /// `http(s)://` only, because clients open it. Checked when reading and writing; the JSON Schema
-/// carries the same pattern and length.
+/// carries the same rule as a pattern (http(s) prefix, no trailing ECMAScript whitespace, the set
+/// JavaScript `trim` removes) and length.
 pub mod sign_in_url {
     use serde::{Deserialize, Deserializer, Serializer, de, ser};
 
@@ -236,7 +253,11 @@ pub mod sign_in_url {
     pub fn check(value: &str) -> Result<(), String> {
         let lower = value.get(..8).unwrap_or(value).to_ascii_lowercase();
         let http = lower.starts_with("http://") || lower.starts_with("https://");
-        if value.is_empty() || value.trim() != value || value.chars().count() > MAX_CHARS || !http {
+        if value.is_empty()
+            || value.trim_matches(super::is_ecmascript_whitespace) != value
+            || value.chars().count() > MAX_CHARS
+            || !http
+        {
             return Err(
                 "a sign-in URL must be a trimmed http(s) URL of at most 16384 characters".into(),
             );

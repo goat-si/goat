@@ -115,7 +115,9 @@ pub enum ProviderAuthInteraction {
         #[schemars(
             with = "String",
             length(min = 1, max = 16384),
-            regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+            regex(
+                pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://(?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+            )
         )]
         url: String,
         requires_consent: bool,
@@ -131,7 +133,9 @@ pub enum ProviderAuthInteraction {
         #[schemars(
             with = "String",
             length(min = 1, max = 16384),
-            regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+            regex(
+                pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://(?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+            )
         )]
         url: String,
         user_code: String,
@@ -183,7 +187,9 @@ pub struct ProviderAuthState {
     #[schemars(
         with = "crate::serde_util::Nullable<String>",
         length(min = 1, max = 16384),
-        regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+        regex(
+            pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://(?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+        )
     )]
     pub authorization_url: Option<String>,
     #[serde(deserialize_with = "crate::serde_util::required_nullable")]
