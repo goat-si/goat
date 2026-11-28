@@ -1507,9 +1507,14 @@ async fn an_image_attachment_is_sent_as_a_data_url_with_its_path_in_the_text() {
     }
     let resolved = file.clone();
     let mut h = start(&t, RuntimeMode::ApprovalRequired, None, move |o| {
-        o.attachment_resolver = Some(Arc::new(move |thread, attachment| {
+        o.attachment_resolver = Some(Arc::new(move |thread, attachment, want_bytes| {
             assert_eq!(thread, &ThreadId::new("goat-thread-1"));
-            (attachment.id == "att-1").then(|| resolved.clone())
+            (attachment.id == "att-1").then(|| {
+                goat2_engine_codex::attachments::ResolvedAttachment {
+                    path: resolved.clone(),
+                    bytes: want_bytes.then(|| std::fs::read(&resolved).unwrap()),
+                }
+            })
         }));
     })
     .await;
