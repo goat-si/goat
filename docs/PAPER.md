@@ -110,12 +110,21 @@ Pinned bots (2026-11-28, from Grok Bot's "Pinned Bots", seen in 0.75.5 and 1.3.0
 pinned bots as face tiles under the search field (77x80, three per row) and drops them from the
 flat Bots list; dragging a row onto the tiles pins it, dragging a tile back or Unpin removes it,
 tiles reorder by drag. Empty state appears only while dragging: "Drag here to pin". The collapsed
-rail shows GOAT, then pinned faces. Mobile (Muse-style): the bottom tab bar becomes one floating
-glass dock (same glass recipe) inset 12px: pinned faces on the left, a hairline divider, then the
-tab icons. Long-press a bot row to lift it, then drag to the dock: the list dims, the dock drops
-its tabs and shows a dashed slot with "Drop to pin". Long-press without dragging opens the context
-menu with Pin / Unpin. Badges only: blue dot (unread / waiting on you), small ring (working).
-Boards: "봇 홈 — 봇 고정 (드래그해서 핀)", "모바일 iOS — 봇 고정 (꾹 눌러 독으로)".
+rail shows GOAT, then pinned faces.
+
+Mobile bot home (2026-11-28, Ovis mobile + Muse + Grok Bot): top row is account (left) and + new
+bot (right), round glass buttons. Below, pinned bots as big faces, three per row (GOAT carries a
+star badge), then the flat list (Needs you, Bots). The bottom is Muse's launch-version floating
+card, always fixed and never a drop target: a composer row ("Message GOAT", + on the left, round
+provider button on the right) over an icon-only tab bar: Bots, Threads, Inbox, Library (selected
+tab = grey pill, Inbox unread = blue dot). Threads live in the Threads tab. Pinning on mobile:
+long-press a row to lift it; the pinned area tints grey and shows a dashed "Drop to pin" slot;
+release there to pin. Long-press without dragging opens Pin / Unpin. Faces reorder by drag.
+Mobile lazy load: draw cached pinned bots, list and last previews at once; sync in the background
+with a small "Updating" in the header and grey bars for previews not yet received; a bot chat
+loads one recent page and older pages on scroll up; the thread list loads when the Threads tab
+opens and a thread's body loads when it opens; sent messages show at once, results arrive later.
+Boards: "봇 홈 — 봇 고정 (드래그해서 핀)", "모바일 iOS — 봇 고정 (꾹 눌러 위로)", "모바일 iOS — 콜드 스타트 (lazy load)".
 
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
