@@ -86,17 +86,41 @@ export type CommandRunner = (
  * is observed (a killed shell stuck in the kernel never exits), so a retry starts only when every
  * earlier probe is known to be gone.
  */
+/** True while any process is left in the group (EPERM still means alive). */
+function probeGroupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 export class LiveShellProbes {
-  /** Live probes; pid is the probe's process group (probes are spawned detached). */
-  readonly #running = new Set<{ readonly pid: number | undefined }>();
+  /**
+   * Live probes; pid is the probe's process group (probes are spawned detached). A probe stays here
+   * after its shell exits while anything is left in its group (a child holding stdout, say), so
+   * stop() can still kill it and a retry does not start beside it.
+   */
+  readonly #running = new Set<{ readonly pid: number | undefined; exited: boolean }>();
   #stopped = false;
   track(child: { readonly pid?: number | undefined; once(event: "exit", listener: () => void): unknown }): void {
-    const token = { pid: child.pid };
+    const token = { pid: child.pid, exited: false };
     this.#running.add(token);
-    child.once("exit", () => this.#running.delete(token));
+    child.once("exit", () => {
+      token.exited = true;
+      this.#prune();
+    });
   }
   get allGone(): boolean {
+    this.#prune();
     return this.#running.size === 0;
+  }
+  /** Drops probes whose shell exited and whose group is empty. */
+  #prune(): void {
+    for (const token of this.#running) {
+      if (token.exited && (token.pid === undefined || !probeGroupAlive(token.pid))) this.#running.delete(token);
+    }
   }
   /** True after stop(): no further probe may start. */
   get stopped(): boolean {

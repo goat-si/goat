@@ -264,6 +264,40 @@ describe("login shell probe, for real", () => {
     assert.equal(readFileSync(runs, "utf8").trim().split("\n").length, 1, "a probe started after stop()");
   });
 
+  it("stop() also kills a probe's child that outlived its shell and still holds stdout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "goat2-orphanshell-"));
+    const shell = join(dir, "orphan-shell");
+    const pidFile = join(dir, "child.pid");
+    // The shell exits at once; its background child keeps the stdout pipe open.
+    writeFileSync(shell, `#!/bin/sh\nsleep 30 &\necho $! > ${pidFile}\nexit 0\n`);
+    chmodSync(shell, 0o755);
+    const environment = new DesktopShellEnvironment(
+      { PATH: "/usr/bin:/bin", SHELL: shell },
+      { platform: "darwin", homeDirectory: HOME, cacheFile: join(dir, "cache.json"), userShell: shell, loginShellTimeoutMs: 60_000 },
+    );
+    const discovery = environment.startDiscovery({}, { delays: [0, 0, 0], sleep: async () => {} });
+    for (let i = 0; i < 100 && !existsSync(pidFile); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+    const child = Number(readFileSync(pidFile, "utf8"));
+    // Let the shell itself exit first.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const gone = () => {
+      try {
+        process.kill(child, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    assert.equal(gone(), false, "fixture: the child should still be running");
+    await environment.stop();
+    for (let i = 0; i < 40 && !gone(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    const leaked = !gone();
+    if (leaked) process.kill(child, "SIGKILL");
+    assert.equal(leaked, false, "the probe's child outlived app quit");
+    assert.equal(await discovery.first, false);
+  });
+
+
 });
 
 describe("retries (v1 discoverWithRetries)", () => {
