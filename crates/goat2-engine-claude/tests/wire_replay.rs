@@ -1483,3 +1483,58 @@ async fn mcp_registration_errors_are_logged_by_server_name_only() {
     );
     handle.session.shutdown().await;
 }
+
+/// Final review 5 finding 1: Claude's last stderr line goes into exit and failure reasons the host
+/// stores; the MCP bearer token in it is redacted.
+#[tokio::test]
+async fn stderr_reasons_never_carry_the_mcp_token() {
+    let run = Run::new("wire/crash_stderr_with_token.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let events = until(&mut handle, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    let reasons: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Failed { reason },
+                ..
+            } => Some(reason.clone()),
+            EngineEvent::Exited { reason } => Some(reason.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons.len(), 2, "{events:?}");
+    for reason in &reasons {
+        assert!(!reason.contains(MCP_TOKEN), "token leaked: {reason}");
+        assert!(
+            reason.contains("MCP error -32001"),
+            "diagnostic kept: {reason}"
+        );
+    }
+    handle.session.shutdown().await;
+}
+
+/// Final review 5 finding 3: when the permission-mode step of a `set_config` fails after the
+/// model changed, the model is set back, so a failed change leaves the session as it was.
+#[tokio::test]
+async fn a_failed_set_config_rolls_the_model_back() {
+    let run = Run::new("wire/set_config_rollback.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let result = handle
+        .session
+        .set_config(&settings("claude-opus-5-5", RuntimeMode::AutoAcceptEdits))
+        .await;
+    assert!(result.is_err(), "{result:?}");
+    handle.session.shutdown().await;
+    let models: Vec<String> = run
+        .stdin_frames()
+        .iter()
+        .filter(|f| f["request"]["subtype"] == "set_model")
+        .filter_map(|f| f["request"]["model"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(
+        models,
+        vec!["claude-opus-5-5".to_string(), MODEL.to_string()]
+    );
+    run.assert_replayed(1);
+}
