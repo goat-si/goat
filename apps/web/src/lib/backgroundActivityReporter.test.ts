@@ -6,6 +6,7 @@ import {
 import { EnvironmentId, WS_METHODS } from "@goat/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -246,6 +247,57 @@ describe("layer", () => {
       yield* TestClock.adjust("1 millis");
       expect(completed).toBe(10);
       expect(peakConcurrency).toBe(4);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not let stalled environments starve healthy environment lease renewals", () =>
+    Effect.gen(function* () {
+      const stalledIds = Array.from({ length: 12 }, (_, index) =>
+        EnvironmentId.make(`stalled-${index}`),
+      );
+      const healthyId = EnvironmentId.make("healthy-0");
+      const allIds = [...stalledIds, healthyId];
+      const stalledSet = new Set<EnvironmentId>(stalledIds);
+      const entries = yield* SubscriptionRef.make(
+        new Map(allIds.map((id) => [id, { enabled: true }])),
+      );
+      const healthyReportTimes: number[] = [];
+
+      const registry = EnvironmentRegistry.EnvironmentRegistry.of({
+        entries,
+        state: () =>
+          Effect.succeed<SupervisorConnectionState>({
+            ...AVAILABLE_CONNECTION_STATE,
+            phase: "connected",
+          }),
+        run: (environmentId: EnvironmentId) =>
+          stalledSet.has(environmentId)
+            ? Effect.never
+            : Clock.currentTimeMillis.pipe(
+                Effect.tap((now) =>
+                  Effect.sync(() => {
+                    healthyReportTimes.push(now);
+                  }),
+                ),
+                Effect.asVoid,
+              ),
+      } as unknown as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+
+      yield* Layer.build(
+        layer.pipe(Layer.provide(Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, registry))),
+      );
+
+      // Advance across 3 reporting cycles while all 12 stalled peers hang indefinitely.
+      yield* TestClock.adjust("20 seconds");
+      yield* TestClock.adjust("25 seconds");
+      yield* TestClock.adjust("25 seconds");
+      yield* TestClock.adjust("25 seconds");
+
+      expect(healthyReportTimes.length).toBeGreaterThanOrEqual(3);
+      for (let index = 1; index < healthyReportTimes.length; index++) {
+        const gap = healthyReportTimes[index]! - healthyReportTimes[index - 1]!;
+        expect(gap).toBeLessThan(45_000);
+      }
     }).pipe(Effect.scoped),
   );
 });

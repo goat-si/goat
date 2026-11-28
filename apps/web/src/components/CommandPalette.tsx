@@ -2784,7 +2784,10 @@ function OpenCommandPaletteDialog(props: {
       if (desktopWslState === null) {
         desktopWslState = (await window.desktopBridge?.getWslState().catch(() => null)) ?? null;
       }
-      const primaryRunningDistro = readDesktopPrimaryBootstrap()?.runningDistro ?? null;
+      let primaryRunningDistro: string | null = null;
+      try {
+        primaryRunningDistro = readDesktopPrimaryBootstrap()?.runningDistro ?? null;
+      } catch {}
       const selection = resolveWslProjectSelection(
         pickedPath,
         applyWslEnvironmentConfiguration(

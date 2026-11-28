@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schedule from "effect/Schedule";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 
@@ -25,9 +26,10 @@ import { randomUUID } from "./utils";
 
 const CLIENT_ID_STORAGE_KEY = "goat.backgroundActivity.clientId";
 const REPORT_INTERVAL_MS = 25_000;
-// Shorter than the interval, so a report that never settles cannot hold up the next one.
-const REPORT_TIMEOUT_MS = 15_000;
+// Keep per-attempt timeout short so stalled peers cannot exhaust the 45s lease of healthy peers.
+const REPORT_TIMEOUT_MS = 5_000;
 const MAX_REPORT_CONCURRENCY = 4;
+const MAX_SLOW_REPORT_CONCURRENCY = 2;
 const LEASE_TTL_MS = 45_000;
 const RECENT_INTERACTION_WINDOW_MS = LEASE_TTL_MS;
 const BASELINE_SCOPES: ReadonlyArray<BackgroundScope> = [{ type: "provider-status" }];
@@ -185,6 +187,7 @@ export const layer = Layer.effectDiscard(
 
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     const clock = yield* Clock.Clock;
+    const scope = yield* Scope.Scope;
     const reportRequests = yield* Queue.sliding<void>(1);
     const requestReport = () => Queue.offerUnsafe(reportRequests, undefined);
     let lastInteractionAtMs = clock.currentTimeMillisUnsafe();
@@ -197,21 +200,14 @@ export const layer = Layer.effectDiscard(
       }
     };
     const passiveListenerOptions = { passive: true } as const;
+    const inFlight = new Set<EnvironmentId>();
+    const timedOutEnvironments = new Set<EnvironmentId>();
 
-    const report = Effect.gen(function* () {
-      const observedAtMs = yield* Clock.currentTimeMillis;
-      const entries = yield* SubscriptionRef.get(registry.entries);
-      const connectedEnvironmentIds: EnvironmentId[] = [];
-      for (const [environmentId, entry] of entries) {
-        if (entry.enabled === false) continue;
-        const state = yield* registry.state(environmentId).pipe(Effect.option);
-        if (Option.isSome(state) && state.value.phase === "connected") {
-          connectedEnvironmentIds.push(environmentId);
-        }
-      }
-      yield* Effect.forEach(
-        connectedEnvironmentIds,
-        (environmentId) =>
+    const sendReport = (environmentId: EnvironmentId, observedAtMs: number) =>
+      Effect.suspend(() => {
+        if (inFlight.has(environmentId)) return Effect.void;
+        inFlight.add(environmentId);
+        return (
           registry
             .run(
               environmentId,
@@ -223,9 +219,64 @@ export const layer = Layer.effectDiscard(
             // Not `ignore`: tearing down an environment mid-request interrupts its report,
             // and an interrupt leaking out here would end the reporting loop for good.
             // The timeout covers a live connection that never answers, which would stall it.
-            .pipe(Effect.timeout(`${REPORT_TIMEOUT_MS} millis`), Effect.ignoreCause),
+            .pipe(
+              Effect.ignoreCause,
+              Effect.timeoutOption(`${REPORT_TIMEOUT_MS} millis`),
+              Effect.tap((outcome) =>
+                Effect.sync(() => {
+                  if (Option.isNone(outcome)) {
+                    timedOutEnvironments.add(environmentId);
+                  } else {
+                    timedOutEnvironments.delete(environmentId);
+                  }
+                }),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  inFlight.delete(environmentId);
+                }),
+              ),
+              Effect.asVoid,
+            )
+        );
+      });
+
+    const report = Effect.gen(function* () {
+      const observedAtMs = yield* Clock.currentTimeMillis;
+      const entries = yield* SubscriptionRef.get(registry.entries);
+      for (const environmentId of timedOutEnvironments) {
+        const entry = entries.get(environmentId);
+        if (entry === undefined || entry.enabled === false) {
+          timedOutEnvironments.delete(environmentId);
+        }
+      }
+      const healthyEnvironmentIds: EnvironmentId[] = [];
+      const slowEnvironmentIds: EnvironmentId[] = [];
+      for (const [environmentId, entry] of entries) {
+        if (entry.enabled === false || inFlight.has(environmentId)) continue;
+        const state = yield* registry.state(environmentId).pipe(Effect.option);
+        if (Option.isSome(state) && state.value.phase === "connected") {
+          if (timedOutEnvironments.has(environmentId)) {
+            slowEnvironmentIds.push(environmentId);
+          } else {
+            healthyEnvironmentIds.push(environmentId);
+          }
+        }
+      }
+      yield* Effect.forEach(
+        healthyEnvironmentIds,
+        (environmentId) => sendReport(environmentId, observedAtMs),
         { concurrency: MAX_REPORT_CONCURRENCY, discard: true },
       );
+      if (slowEnvironmentIds.length > 0) {
+        // Retry previously timed-out peers off the main reporting pass so they cannot
+        // delay subsequent lease renewals for healthy environments.
+        yield* Effect.forEach(
+          slowEnvironmentIds,
+          (environmentId) => sendReport(environmentId, observedAtMs),
+          { concurrency: MAX_SLOW_REPORT_CONCURRENCY, discard: true },
+        ).pipe(Effect.forkIn(scope));
+      }
     }).pipe(Effect.withSpan("web.backgroundActivity.report"));
 
     yield* Effect.acquireRelease(

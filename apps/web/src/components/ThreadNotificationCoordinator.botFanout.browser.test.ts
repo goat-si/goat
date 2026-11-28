@@ -95,10 +95,12 @@ const decisionAtom = Atom.family((_id: string) => Atom.make<unknown>(null));
 function decisions(id: string) {
   return decisionAtom(id);
 }
-const supportedIds = Atom.make<ReadonlySet<string>>(new Set<string>());
-const connectionPhase = Atom.family((_id: string) => Atom.make<string>("connected"));
-const allowed = Atom.make(true);
-const revisions = Atom.make(AsyncResult.success({ value: 0 }));
+const supportedIds = Atom.make<ReadonlySet<string>>(new Set<string>()).pipe(Atom.keepAlive);
+const connectionPhase = Atom.family((_id: string) =>
+  Atom.make<string>("connected").pipe(Atom.keepAlive),
+);
+const allowed = Atom.make(true).pipe(Atom.keepAlive);
+const revisions = Atom.make(AsyncResult.success({ value: 0 })).pipe(Atom.keepAlive);
 const presentationAtom = Atom.family((id: string) =>
   Atom.make((get) => ({
     connection: { phase: get(connectionPhase(id)) },
@@ -233,4 +235,50 @@ it("does not start GoatBotAttentionNotifier polling on disconnected environments
   // Connecting the environment starts the watcher and drains the feed.
   app.registry.set(connectionPhase("one"), "connected");
   await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(1));
+});
+
+it("invalidates cached bot ownership when taskChanges advances (negative->positive and positive->negative)", async () => {
+  await using app = setup();
+  app.setEnvironmentIds(["one", "two"]);
+  app.registry.set(supportedIds, new Set(["one"]));
+  app.registry.set(connectionPhase("one"), "connected");
+  app.registry.set(connectionPhase("two"), "connected");
+  app.registry.set(revisions, AsyncResult.success({ value: 0 }));
+
+  const worker = {
+    id: "mcp:worker-mutable",
+    title: "Mutable remote MCP task",
+    creationSource: "mcp" as const,
+  };
+  let ownsWorker = false;
+  state.feed.mockImplementation(async () =>
+    AsyncResult.success({
+      cursor: 0,
+      hasMore: false,
+      mode: "needs_you",
+      events: [],
+      ownsWorker,
+    }),
+  );
+  app.setShell("two", shell(worker));
+  app.startThreads();
+
+  // 1. Negative lookup before binding is saved -> delivers thread alert and caches false.
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-1" }));
+  await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(1));
+  expect(state.feed).toHaveBeenCalledTimes(1);
+
+  // 2. Worker binding is saved on origin "one" -> taskChanges revision advances -> cache invalidates.
+  ownsWorker = true;
+  app.registry.set(revisions, AsyncResult.success({ value: 1 }));
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-2" }));
+  await vi.waitFor(() => expect(state.feed).toHaveBeenCalledTimes(2));
+  expect(TestNotification.sent).toHaveLength(1);
+
+  // 3. Binding is later cleared -> taskChanges revision advances -> positive cache invalidates.
+  ownsWorker = false;
+  app.registry.set(revisions, AsyncResult.success({ value: 2 }));
+  app.setShell("two", shell({ ...worker, hasPendingUserInput: true, pendingRequestId: "req-3" }));
+  await vi.waitFor(() => expect(TestNotification.sent).toHaveLength(2));
+  expect(state.feed).toHaveBeenCalledTimes(3);
 });

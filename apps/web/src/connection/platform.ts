@@ -680,14 +680,18 @@ export function desktopOwnsSshHostConfig(
   primaryHttpBaseUrl: string | null,
 ) {
   if (bridge === undefined || primaryHttpBaseUrl === null) return false;
-  const primary = readDesktopPrimaryBootstrap(bridge);
-  return (
-    primary !== null &&
-    !primary.runningDistro &&
-    typeof primary.bootstrapToken === "string" &&
-    primary.bootstrapToken.length > 0 &&
-    primary.httpBaseUrl === primaryHttpBaseUrl
-  );
+  try {
+    const primary = readDesktopPrimaryBootstrap(bridge);
+    return (
+      primary !== null &&
+      !primary.runningDistro &&
+      typeof primary.bootstrapToken === "string" &&
+      primary.bootstrapToken.length > 0 &&
+      primary.httpBaseUrl === primaryHttpBaseUrl
+    );
+  } catch {
+    return false;
+  }
 }
 
 const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
