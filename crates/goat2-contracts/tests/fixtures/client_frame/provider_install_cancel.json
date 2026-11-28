@@ -1,0 +1,7 @@
+{
+  "type": "provider_install_cancel",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "operationId": "op"
+}

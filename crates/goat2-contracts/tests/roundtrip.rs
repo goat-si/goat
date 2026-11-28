@@ -30,6 +30,7 @@ fn decode(root: &str, value: Value) -> Result<Value, String> {
         "decision_item" => roundtrip::<DecisionItem>(value),
         "decision_request_input" => roundtrip::<DecisionRequestInput>(value),
         "provider_probe_result" => roundtrip::<ProviderProbeResult>(value),
+        "server_provider_entry" => roundtrip::<ServerProviderEntry>(value),
         _ => panic!("unknown root {root}"),
     }
 }
@@ -59,6 +60,7 @@ fn schema(root: &str) -> Value {
         "decision_item" => s!(DecisionItem),
         "decision_request_input" => s!(DecisionRequestInput),
         "provider_probe_result" => s!(ProviderProbeResult),
+        "server_provider_entry" => s!(ServerProviderEntry),
         _ => panic!("unknown root {root}"),
     }
 }
@@ -206,4 +208,17 @@ fn decision_reason_counts_utf16_units_like_v1() {
             .is_err()
         );
     }
+}
+
+#[test]
+fn bot_instructions_enforce_utf8_byte_limit() {
+    let mut value = common::fixtures()
+        .into_iter()
+        .find(|f| f.root == "bot_profile")
+        .unwrap()
+        .value;
+    value["instructions"] = serde_json::json!("é".repeat(8192));
+    assert!(serde_json::from_value::<BotProfile>(value.clone()).is_ok());
+    value["instructions"] = serde_json::json!("é".repeat(8193));
+    assert!(serde_json::from_value::<BotProfile>(value).is_err());
 }

@@ -496,6 +496,9 @@ pub struct UserNotified {
     pub run_id: Option<RunId>,
     pub kind: NotifyKind,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<NotificationSource>,
 }
 
 /// Fold state beyond the card: what a reader (or the store after a crash) needs to continue
@@ -615,4 +618,12 @@ pub fn parse_log_line(text: &str) -> Result<ParsedLine, serde_json::Error> {
         seq: envelope.seq,
         type_tag: envelope.type_tag,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NotificationSource {
+    Session,
+    Fallback,
+    Fixed,
 }

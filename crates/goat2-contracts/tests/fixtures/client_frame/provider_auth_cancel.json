@@ -1,0 +1,7 @@
+{
+  "type": "provider_auth_cancel",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "flowId": "f"
+}
