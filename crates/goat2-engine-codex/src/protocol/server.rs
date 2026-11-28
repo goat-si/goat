@@ -254,6 +254,8 @@ pub enum ThreadItem {
         id: String,
         #[serde(default)]
         summary: Vec<String>,
+        #[serde(default)]
+        content: Vec<String>,
     },
     #[serde(rename_all = "camelCase")]
     CommandExecution {
@@ -315,12 +317,30 @@ pub enum ThreadItem {
     WebSearch {
         id: String,
         query: String,
+        /// `WebSearchAction` ({type: search|openPage|findInPage|other, ...}); kept raw.
+        #[serde(default)]
+        action: Option<Value>,
     },
     ImageView {
         id: String,
+        #[serde(default)]
+        path: Option<String>,
     },
+    #[serde(rename_all = "camelCase")]
     ImageGeneration {
         id: String,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        revised_prompt: Option<String>,
+        #[serde(default)]
+        saved_path: Option<String>,
+        #[serde(default)]
+        failure: Option<Value>,
+        #[serde(default)]
+        transparent_background: Option<bool>,
+        #[serde(default)]
+        input_images: Option<Vec<Value>>,
     },
     #[serde(rename_all = "camelCase")]
     Sleep {
@@ -362,8 +382,8 @@ impl ThreadItem {
             | Self::CollabAgentToolCall { id, .. }
             | Self::SubAgentActivity { id, .. }
             | Self::WebSearch { id, .. }
-            | Self::ImageView { id }
-            | Self::ImageGeneration { id }
+            | Self::ImageView { id, .. }
+            | Self::ImageGeneration { id, .. }
             | Self::Sleep { id, .. }
             | Self::ContextCompaction { id }
             | Self::EnteredReviewMode { id }
@@ -445,7 +465,13 @@ pub fn parse_server_request(method: &str, params: Value) -> ParsedRequest {
         methods::FILE_CHANGE_APPROVAL => decode(params, ServerRequest::FileChangeApproval),
         methods::PERMISSIONS_APPROVAL => decode(params, ServerRequest::PermissionsApproval),
         methods::USER_INPUT => decode(params, ServerRequest::UserInput),
-        methods::ELICITATION => decode(params, ServerRequest::Elicitation),
+        methods::ELICITATION => match serde_json::from_value::<ElicitationParams>(params.clone()) {
+            Ok(mut decoded) => {
+                decoded.raw = params;
+                ParsedRequest::Known(ServerRequest::Elicitation(decoded))
+            }
+            Err(error) => ParsedRequest::Malformed(error.to_string()),
+        },
         _ => ParsedRequest::Unknown,
     }
 }
@@ -463,6 +489,13 @@ pub struct CommandApprovalParams {
     #[serde(default)]
     pub command: Option<String>,
     #[serde(default)]
+    pub cwd: Option<String>,
+    /// Present (even `{}`) means a network approval; v1 never auto-accepts it.
+    #[serde(default)]
+    pub network_approval_context: Option<Value>,
+    #[serde(default)]
+    pub proposed_network_policy_amendments: Option<Vec<Value>>,
+    #[serde(default)]
     pub available_decisions: Option<Vec<CommandDecision>>,
 }
 
@@ -474,6 +507,8 @@ pub struct FileChangeApprovalParams {
     pub item_id: String,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub grant_root: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -530,6 +565,11 @@ pub struct ElicitationParams {
     pub mode: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub elicitation_id: Option<String>,
+    /// The whole params object (requestedSchema, _meta, ...), for the v1 form logic.
+    #[serde(skip)]
+    pub raw: Value,
 }
 
 /// `CommandExecutionApprovalDecision`, including the amendment shapes. A shape this build does not
