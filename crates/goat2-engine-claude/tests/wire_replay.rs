@@ -573,3 +573,56 @@ async fn an_unexpected_exit_is_reaped_before_exited() {
     );
     handle.session.shutdown().await;
 }
+
+/// Review round 2 finding 1: Claude's result settles the turn while the interrupt answer is still
+/// on its way; no new turn may start on the process the interrupt is about to close.
+#[tokio::test]
+async fn no_turn_starts_while_an_interrupt_is_still_closing_claude() {
+    let run = Run::new("wire/interrupt_reply_after_result.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let EngineHandle {
+        session, events, ..
+    } = &mut handle;
+    let stop = session.interrupt(&turn_id);
+    let next_turn = async {
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+                .await
+                .expect("event within 10 s")
+                .expect("events open");
+            if matches!(event, EngineEvent::TurnFinished { .. }) {
+                break;
+            }
+        }
+        session
+            .start_turn(input("Next."), &settings(MODEL, RuntimeMode::FullAccess))
+            .await
+    };
+    let (stopped, started) = tokio::join!(stop, next_turn);
+    stopped.unwrap();
+    assert!(
+        !matches!(started, TurnStartResult::Accepted { .. }),
+        "a turn started on the process the interrupt closed: {started:?}"
+    );
+    handle.session.shutdown().await;
+}
+
+/// Review round 2 finding 2: when Claude refuses the interrupt, the turn goes on and its own
+/// result decides the outcome.
+#[tokio::test]
+async fn a_refused_interrupt_leaves_the_turn_running() {
+    let run = Run::new("wire/interrupt_refused.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let refused = handle.session.interrupt(&turn_id).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["All done."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}

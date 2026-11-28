@@ -21,6 +21,8 @@
 //! `emit_wire` (a raw stdout frame), `expect_wire` (a raw stdin frame matched as a subset) and
 //! `expect_argv` for wire details v1's SDK-level transcripts do not carry, plus `close_stdin`
 //! (close stdin just before answering the named transport request, stdout stays open) and `sleep`.
+//! `expect_wire` may answer a control request with `reply` (success), `replyError` (error) or
+//! `defer` (no answer yet; a later `reply_deferred` entry answers it with success).
 //!
 //! Environment: `GOAT2_FAKE_CLAUDE_SCRIPT` (transcript path, required), `GOAT2_FAKE_CLAUDE_LOG`
 //! (JSON lines: argv, selected env, cwd, every stdin frame, errors, `done`).
@@ -47,6 +49,8 @@ struct Fake {
     /// can_use_tool requests written and not yet answered.
     open_permissions: Vec<String>,
     next_permission: u64,
+    /// A control request whose answer an `expect_wire` entry deferred.
+    deferred: Option<Value>,
 }
 
 const LOGGED_ENV: [&str; 9] = [
@@ -422,11 +426,28 @@ impl Fake {
                     if let Some(reply) = entry.get("reply") {
                         self.reply_success(&actual, reply.clone());
                     }
+                    if let Some(error) = entry.get("replyError").and_then(Value::as_str) {
+                        let id = actual["request_id"].clone();
+                        self.write(&json!({"type": "control_response", "response": {
+                            "subtype": "error", "request_id": id, "error": error}}));
+                    }
+                    if entry.get("defer") == Some(&json!(true)) {
+                        self.deferred = Some(actual.clone());
+                    }
                     if let (Some(recorded), Some(live)) =
                         (entry["recordUuid"].as_str(), actual["uuid"].as_str())
                     {
                         self.uuids.insert(recorded.to_string(), live.to_string());
                     }
+                }
+                "reply_deferred" => {
+                    if let Some(ms) = entry.get("afterMs").and_then(Value::as_u64) {
+                        std::thread::sleep(Duration::from_millis(ms));
+                    }
+                    let Some(frame) = self.deferred.take() else {
+                        self.fail(format!("{label}: nothing deferred"));
+                    };
+                    self.reply_success(&frame, json!({}));
                 }
                 "expect_argv" => {
                     for word in entry["contains"].as_array().cloned().unwrap_or_default() {
@@ -560,6 +581,7 @@ fn main() {
         uuids: HashMap::new(),
         open_permissions: Vec::new(),
         next_permission: 0,
+        deferred: None,
     };
     let env: serde_json::Map<String, Value> = LOGGED_ENV
         .iter()
