@@ -1604,3 +1604,40 @@ async fn an_unconfirmed_settings_change_ends_the_session() {
     }
     handle.session.shutdown().await;
 }
+
+/// Final review 7 finding 2: only the servers GOAT registered are named in the warning; a key
+/// Claude adds (which could hold a header) is counted, never printed.
+#[tokio::test]
+async fn mcp_error_keys_outside_the_request_are_never_logged() {
+    #[derive(Clone, Default)]
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let capture = Capture::default();
+    let writer = capture.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let run = Run::new("wire/mcp_errors_odd_keys.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let logged = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        logged.contains("claude-mcp-servers-unavailable"),
+        "{logged}"
+    );
+    assert!(logged.contains("goat"), "{logged}");
+    assert!(
+        !logged.contains(MCP_TOKEN) && !logged.contains("Bearer"),
+        "{logged}"
+    );
+    handle.session.shutdown().await;
+}
