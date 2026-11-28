@@ -1897,6 +1897,8 @@ async fn part2_fields_carry_what_the_host_knows() {
                 summary: "Which branch?".into(),
                 detail: Some(long),
                 options: Vec::new(),
+                recommended: None,
+                questions: Vec::new(),
                 client_request_id: None,
             },
         )

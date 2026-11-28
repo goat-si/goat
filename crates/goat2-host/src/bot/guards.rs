@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use goat2_contracts::{
-    AssistantMessagePhase, InputId, LogEvent, NotifyKind, RunId, ThreadId, TurnItemBody,
-    UserNotified,
+    AssistantMessagePhase, InputId, LogEvent, NotificationSource, NotifyKind, RunId, ThreadId,
+    TurnItemBody, UserNotified,
 };
 
 use crate::core::Host;
@@ -59,6 +59,17 @@ pub enum Source {
     Session,
     Fallback,
     Fixed,
+}
+
+impl Source {
+    /// `UserNotified.source`.
+    pub fn wire(self) -> NotificationSource {
+        match self {
+            Self::Session => NotificationSource::Session,
+            Self::Fallback => NotificationSource::Fallback,
+            Self::Fixed => NotificationSource::Fixed,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -259,6 +270,7 @@ fn commit(host: &Host, p: &Pending, input: &InputId, source: Source, text: Strin
         run_id: run_id.clone(),
         kind: NotifyKind::Ack,
         text,
+        source: Some(source.wire()),
     });
     if let Err(err) = host.append(&p.thread, vec![event]) {
         tracing::warn!(thread = %p.thread, %err, "bot receipt not written");
@@ -399,6 +411,8 @@ pub(crate) fn run_finished(host: &Host, thread: &ThreadId, run: &RunId, last_ans
             run_id: Some(run.clone()),
             kind: NotifyKind::Result,
             text,
+            // The bot's own final answer (v1 commit source "session").
+            source: Some(NotificationSource::Session),
         })],
     ) {
         tracing::warn!(%thread, %err, "bot result not written");

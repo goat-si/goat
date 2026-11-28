@@ -122,6 +122,9 @@ pub fn items_of(host: &Host, card: &ThreadCard) -> Vec<DecisionItem> {
                 ),
                 _ => (Vec::new(), None, String::new()),
             };
+            // What the person needs to know (v1 DecisionItem.context): the ask's own context,
+            // else the questions or the approval prompt.
+            let context = r.context.clone().filter(|c| !c.trim().is_empty()).unwrap_or(context);
             let durable = r.kind == RequestKind::Decision;
             let id = format!(
                 "{}:{}:{}",
