@@ -6,8 +6,6 @@ export const engineLoaders: EngineLoaders = {
   cursor: async () => {
     throw new Error("the cursor engine is not built yet");
   },
-  opencode: async () => {
-    throw new Error("the opencode engine is not built yet");
-  },
+  opencode: async () => (await import("./engines/opencode/index.ts")).opencodeEngine,
   muse: async () => (await import("./engines/muse/index.ts")).museEngine,
 };
