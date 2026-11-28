@@ -19,7 +19,7 @@ import { CodexOrchestratorReplayHarness } from "../../Adapters/CodexAdapterV2.te
 import * as CodexAdapterV2Testkit from "../../Adapters/CodexAdapterV2.testkit.ts";
 import { withThreadNames, withThreadSetupReads } from "../../Adapters/CodexReplay.testkit.ts";
 import { provideDeterministicTestRuntime } from "../DeterministicRuntime.ts";
-import { CODEX_MODEL_SELECTION, materializeFixtureInput } from "../fixtures/shared.ts";
+import { CODEX_MODEL_SELECTION, WORKSPACE_NEVER_POLICY, materializeFixtureInput } from "../fixtures/shared.ts";
 import { runOrchestratorV2ProviderReplayScenario } from "../ProviderReplayHarness.ts";
 import { traceFromV1 } from "./traceFromV1.ts";
 
@@ -53,6 +53,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     if (s.do === "send" && s.mode === "start") fixtureSteps.push({type: "message", text: s.text});
     else if (s.do === "send" && s.mode === "queue") fixtureSteps.push({type: "queue_message", text: s.text});
     else if (s.do === "queue_edit" || s.do === "queue_cancel") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
+    else if (s.do === "interrupt" && s.run === "r1") fixtureSteps.push({type: "interrupt", targetRunIndex: 1});
     else if (s.do === "await" && s.until === "run_status" && fixtureSteps.length > 0) {
       const list = awaitsAfterSend.get(fixtureSteps.length - 1) ?? [];
       list.push(s);
@@ -104,7 +105,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
     driver = yield* CodexReplay.makeReplayDriver(augmented, options?.replayGate ? {beforeEmitInbound: (entry) => Effect.promise((signal) => options.replayGate.beforeEmit(entry.label, signal))} : {});
     return CodexAdapterV2Testkit.layer({transcript, driver});
   }))};
-  const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace}}, harness));
+  const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace, ...(scenario.name === "interrupt_ack_then_terminal" ? WORKSPACE_NEVER_POLICY : {})}}, harness));
   const state = yield* Ref.get(driver.state);
   const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? exit.value.storedEvents : [], driver.transcript, state, threadId, messageInputs, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
   const tmp = `${out}.${process.pid}.tmp`;

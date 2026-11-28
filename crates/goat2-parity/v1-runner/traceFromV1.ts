@@ -51,6 +51,11 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
         if (!run) throw new Error(`unmapped run ${p.id}`);
         emit({kind: "run.finished", thread: thread, run, status: "done"});
       }
+      if (p.status === "interrupted" && old !== "interrupted") {
+        const run = runAliases.get(p.id);
+        if (!run) throw new Error(`unmapped interrupted run ${p.id}`);
+        emit({kind: "run.finished", thread: thread, run, status: "interrupted"});
+      }
     }
   }
   const reason = state.failure ? String(state.failure) : failure;
