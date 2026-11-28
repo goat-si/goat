@@ -1992,9 +1992,10 @@ impl AcpEngineFactory {
             Ok(setup) => setup,
             Err(error) if is_auth_required(&error) => {
                 // v1 authenticateAfterRequired (AcpSessionRuntime.ts:1505-1555).
+                // v1 uses the configured `authMethodId` whether or not it authenticated eagerly.
                 let configured = match flavor.auth_policy() {
                     AuthPolicy::OnRequired { method_id } => method_id,
-                    AuthPolicy::Eager { .. } => None,
+                    AuthPolicy::Eager { method_id } => Some(method_id),
                 };
                 let method = match &configured {
                     Some(id) => init.auth_methods.iter().find(|m| &m.id == id).cloned(),
@@ -2033,6 +2034,12 @@ impl AcpEngineFactory {
                     )
                     .await
                 {
+                    if let AuthFailure::SignIn(message) =
+                        flavor.auth_failure(i32::from(auth_error.code), &auth_error.message)
+                    {
+                        shared.auth_required(None, Some(message.clone()));
+                        return Err(EngineError::StartFailed(message));
+                    }
                     shared.auth_required(
                         None,
                         Some(format!("Sign in to {}: {auth_error}", flavor.driver())),
@@ -2041,9 +2048,21 @@ impl AcpEngineFactory {
                         "authenticate {method_id}: {auth_error}"
                     )));
                 }
-                setup_once().await.map_err(|e| {
-                    EngineError::StartFailed(format!("session setup after sign-in: {e}"))
-                })?
+                match setup_once().await {
+                    Ok(setup) => setup,
+                    Err(e) => {
+                        // v1 `requiresSignIn` (adapter.ts:8419): still unsigned after sign-in.
+                        if let AuthFailure::SignIn(message) =
+                            flavor.auth_failure(i32::from(e.code), &e.message)
+                        {
+                            shared.auth_required(None, Some(message.clone()));
+                            return Err(EngineError::StartFailed(message));
+                        }
+                        return Err(EngineError::StartFailed(format!(
+                            "session setup after sign-in: {e}"
+                        )));
+                    }
+                }
             }
             Err(error) => {
                 let tail = stderr().await;
