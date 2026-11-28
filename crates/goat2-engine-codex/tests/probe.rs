@@ -994,3 +994,55 @@ async fn an_instance_binary_inside_its_home_is_reported_without_the_path() {
     assert_eq!(p.binary_path.as_deref(), Some("<instance home>/bin/codex"));
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Review r3: the catalog never shows the private home. Names and option labels are redacted;
+/// a model whose id names the home is left out (its id is what a turn sends back), and the
+/// probe says so with a warning.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_instance_catalog_never_shows_its_home() {
+    use goat2_contracts::ProviderInstanceId;
+    use goat2_engine_api::{LaunchSpec, ProviderTarget};
+    let root = fresh_dir("catalog");
+    std::fs::create_dir_all(root.join("shared")).unwrap();
+    let instance = root.join("instance");
+    std::fs::create_dir_all(&instance).unwrap();
+    let home = instance.display().to_string();
+    let page = json!({"data": [
+        model("gpt-6.1-terra", true, json!({
+            "displayName": format!("terra from {home}"),
+            "serviceTiers": [{"id": "priority", "name": "Fast", "description": format!("cached in {home}/tiers")}]
+        })),
+        model(&format!("{home}/models/local"), false, json!({"displayName": "local"})),
+    ]});
+    let target = ProviderTarget {
+        instance_id: ProviderInstanceId::new("codex_2"),
+        launch: Some(LaunchSpec {
+            binary: Some(recording_codex("catalog", &root.join("record"))),
+            args: Vec::new(),
+            env: Default::default(),
+        }),
+        home: Some(instance.clone()),
+        shared_home: Some(root.join("shared")),
+    };
+    let p = factory(api_key_catalog(page))
+        .probe_instance(&target)
+        .await
+        .unwrap();
+    let shown = serde_json::to_string(&p).unwrap();
+    assert!(!shown.contains(&home), "{shown}");
+    assert!(shown.contains("<instance home>/tiers"), "{shown}");
+    assert_eq!(p.models.len(), 1);
+    assert_eq!(p.models[0].slug, "gpt-6.1-terra");
+    assert!(
+        p.models[0].name.contains("<instance home>"),
+        "{}",
+        p.models[0].name
+    );
+    assert_eq!(p.status, ServerProviderState::Warning);
+    assert_eq!(
+        p.message.as_deref(),
+        Some("1 Codex model(s) named this instance's private home and are not listed.")
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

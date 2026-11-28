@@ -347,6 +347,9 @@ fn ensure_symlink(shared: &Path, effective: &Path, name: &str) -> Result<bool, H
     Ok(false)
 }
 
+/// What [Redactor] puts in place of the private home.
+pub const REDACTED: &str = "<instance home>";
+
 /// Replaces an instance's private home in outward text (errors, Codex's stderr, RPC messages,
 /// probe messages): home paths are never logged or shown. Both the path as given and its
 /// canonical form are replaced.
@@ -373,12 +376,13 @@ impl Redactor {
 
     /// `text` with the private home replaced by "<instance home>".
     pub fn apply(&self, text: &str) -> String {
-        self.needles.iter().fold(text.to_string(), |t, n| {
-            t.replace(n.as_str(), "<instance home>")
-        })
+        self.needles
+            .iter()
+            .fold(text.to_string(), |t, n| t.replace(n.as_str(), REDACTED))
     }
 
-    fn mentions(&self, text: &str) -> bool {
+    /// Whether `text` names the private home.
+    pub fn mentions(&self, text: &str) -> bool {
         self.needles.iter().any(|n| text.contains(n.as_str()))
     }
 

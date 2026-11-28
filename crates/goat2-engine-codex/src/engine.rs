@@ -236,10 +236,11 @@ fn launch_for(
     spec: &SessionSpec,
 ) -> Result<(Launch, Redactor), EngineError> {
     let layout = instance_layout(options, spec.instance.as_ref());
-    let redact = Redactor::for_layout(layout.as_ref());
     if let Some(layout) = &layout {
         materialize(layout).map_err(EngineError::StartFailed)?;
     }
+    // After the layout, so the home exists and its canonical spelling is known too.
+    let redact = Redactor::for_layout(layout.as_ref());
     let options = instance_options(options, spec.launch());
     let launch = base_launch(
         &options,

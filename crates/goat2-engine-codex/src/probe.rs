@@ -30,7 +30,7 @@ use tokio::time::{Instant, timeout_at};
 use crate::engine::{
     CodexEngineOptions, base_launch, instance_layout, instance_options, materialize,
 };
-use crate::home_layout::{HomeLayout, Redactor};
+use crate::home_layout::{HomeLayout, REDACTED, Redactor};
 use crate::process::{ChildProcess, Launch};
 use crate::protocol::client::InitializeParams;
 use crate::protocol::methods;
@@ -63,6 +63,7 @@ pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> Provi
         None,
         LoginHint::Home(codex_home_setting(options)),
         budget,
+        &Redactor::default(),
     )
     .await
 }
@@ -96,7 +97,6 @@ pub async fn probe_instance_with(
     // The shared home comes from the factory's own settings: an instance's environment
     // cannot move it.
     let layout = instance_layout(options, Some(target));
-    let redact = Redactor::for_layout(layout.as_ref());
     let options = instance_options(options, target.launch.as_ref());
     let hint = match &layout {
         Some(HomeLayout::AuthOverlay { .. }) => LoginHint::Instance,
@@ -105,23 +105,49 @@ pub async fn probe_instance_with(
         }
         None => LoginHint::Home(codex_home_setting(&options)),
     };
-    if let Some(layout) = &layout
-        && let Err(message) = materialize(layout)
-    {
-        let binary_path = resolve_binary(&options.program, &options);
-        return failed(
-            rfc3339_now(),
-            binary_path.is_some(),
-            None,
-            None,
-            binary_path.map(|p| redact.apply(&p)),
-            message,
+    let laid_out = layout.as_ref().map(materialize).transpose();
+    // After the layout, so the home exists and its canonical spelling is known too.
+    let redact = Redactor::for_layout(layout.as_ref());
+    let result = match laid_out {
+        Err(message) => {
+            let binary_path = resolve_binary(&options.program, &options);
+            failed(
+                rfc3339_now(),
+                binary_path.is_some(),
+                None,
+                None,
+                binary_path,
+                message,
+            )
+        }
+        Ok(_) => probe_layout(&options, layout.as_ref(), hint, budget, &redact).await,
+    };
+    without_private_home(result, &redact)
+}
+
+/// A probe result with no trace of the instance's private home (never shown): every text,
+/// including the catalog's names and option labels, is redacted. A model whose id names the
+/// home cannot be redacted (the id is what a turn sends back to Codex), so it is left out and
+/// the result says so.
+fn without_private_home(mut result: ProviderProbeResult, redact: &Redactor) -> ProviderProbeResult {
+    let before = result.models.len();
+    result
+        .models
+        .retain(|m| !redact.mentions(&m.slug) && !m.slug.contains(REDACTED));
+    let left_out = before - result.models.len();
+    let mut result = redact.value(result);
+    if left_out > 0 {
+        if result.status == ServerProviderState::Ready {
+            result.status = ServerProviderState::Warning;
+        }
+        let note = format!(
+            "{left_out} Codex model(s) named this instance's private home and are not listed."
         );
+        result.message = Some(match result.message.take() {
+            Some(message) => format!("{message} {note}"),
+            None => note,
+        });
     }
-    let mut result = probe_layout(&options, layout.as_ref(), hint, budget).await;
-    // Codex's errors and stderr can name the private home, and so can an executable inside it.
-    result.message = result.message.map(|m| redact.apply(&m));
-    result.binary_path = result.binary_path.map(|p| redact.apply(&p));
     result
 }
 
@@ -130,6 +156,7 @@ async fn probe_layout(
     layout: Option<&HomeLayout>,
     login_hint: LoginHint,
     budget: Duration,
+    redact: &Redactor,
 ) -> ProviderProbeResult {
     let checked_at = rfc3339_now();
     let program = options.program.clone();
@@ -187,6 +214,7 @@ async fn probe_layout(
             &cwd,
             spawned_at_ms,
             deadline - DISCOVERY_MARGIN,
+            redact,
         ),
     )
     .await;
@@ -408,6 +436,7 @@ async fn discover(
     cwd: &Path,
     spawned_at_ms: i64,
     discovery_deadline: Instant,
+    redact: &Redactor,
 ) -> Result<Snapshot, String> {
     let Obj(init): Obj<InitializeResponse> = serde_json::from_value(
         conn.request_value(
@@ -473,10 +502,11 @@ async fn discover(
                 Some(init.codex_home.as_str()),
                 spawned_at_ms,
                 discovery_deadline,
+                redact,
             )
             .await
         } else {
-            deadline_models(conn, discovery_deadline).await
+            deadline_models(conn, discovery_deadline, redact).await
         }
     };
     let (config, models) = tokio::join!(config_read, model_list);
@@ -506,8 +536,9 @@ fn openai_base_url_env(options: &CodexEngineOptions) -> Option<String> {
 async fn deadline_models(
     conn: &Connection,
     deadline: Instant,
+    redact: &Redactor,
 ) -> Result<Option<Vec<ServerProviderModel>>, String> {
-    match timeout_at(deadline, all_models(conn)).await {
+    match timeout_at(deadline, all_models(conn, redact)).await {
         Ok(result) => result.map(Some),
         Err(_) => Ok(None),
     }
@@ -627,7 +658,13 @@ struct UpgradeInfoShape {
     upgrade_copy: Option<String>,
 }
 
-async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, String> {
+/// Each entry is checked as Codex sent it, then has an instance's private home replaced before
+/// it is mapped (names are reformatted, so a later pass would miss it); a model whose id named
+/// the home keeps the marker in its slug and is left out by `without_private_home`.
+async fn all_models(
+    conn: &Connection,
+    redact: &Redactor,
+) -> Result<Vec<ServerProviderModel>, String> {
     let mut models = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -647,8 +684,9 @@ async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, Strin
         for entry in data {
             decodes_as::<ModelShape>(entry)
                 .map_err(|e| format!("model/list answered an unreadable model: {e}"))?;
+            let entry = redact.value(entry.clone());
             models.push(
-                model_from_codex(entry)
+                model_from_codex(&entry)
                     .ok_or_else(|| "model/list answered an unreadable model".to_string())?,
             );
         }
@@ -671,8 +709,9 @@ async fn chatgpt_models(
     codex_home: Option<&str>,
     spawned_at_ms: i64,
     deadline: Instant,
+    redact: &Redactor,
 ) -> Result<Option<Vec<ServerProviderModel>>, String> {
-    let Some(models) = deadline_models(conn, deadline).await? else {
+    let Some(models) = deadline_models(conn, deadline, redact).await? else {
         return Ok(None);
     };
     let Some(home) = codex_home else {
@@ -691,7 +730,9 @@ async fn chatgpt_models(
         tokio::time::sleep(CATALOG_REFRESH_POLL).await;
     }
     Ok(Some(
-        deadline_models(conn, deadline).await?.unwrap_or(models),
+        deadline_models(conn, deadline, redact)
+            .await?
+            .unwrap_or(models),
     ))
 }
 
