@@ -1,14 +1,16 @@
 //! Pi RPC integration tests. The fake binary uses only local stdio and dummy credentials.
 use goat2_contracts::{
-    EngineConfig, EngineDriver, EngineRef, InputId, ModelSelection, ProviderInstanceId,
-    ProviderOptionSelection, ProviderOptionSelectionValue, RequestKind, RequestOutcome,
-    RuntimeMode, ThreadId, TurnItemBody,
+    ChatAttachment, ChatAttachmentType, EngineConfig, EngineDriver, EngineRef, InputId,
+    ModelSelection, ProviderInstanceId, ProviderOptionSelection, ProviderOptionSelectionValue,
+    RequestKind, RequestOutcome, RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
     EngineEvent, EngineFactory, EngineHandle, EngineInput, LaunchSpec, McpEndpoint, RequestAnswer,
     SessionSpec, SteerResult, TurnOutcome, TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::pi::{PiFactory, PiProfile};
+use std::future::Future;
+use std::sync::Arc;
 use std::time::Duration;
 
 fn model() -> ModelSelection {
@@ -104,6 +106,116 @@ fn text(events: &[EngineEvent]) -> String {
         .expect("assistant item")
 }
 
+fn attachment(id: &str, kind: ChatAttachmentType, mime: &str) -> ChatAttachment {
+    ChatAttachment {
+        kind,
+        id: id.into(),
+        name: format!("{id}.dat"),
+        mime_type: mime.into(),
+        size_bytes: 4,
+        blob: None,
+    }
+}
+
+#[tokio::test]
+async fn attachments_round_trip_prompt_and_steer() {
+    let path = std::env::temp_dir().join(format!("goat2-pi-attachment-{}", std::process::id()));
+    tokio::fs::write(&path, [0, 1, 2, 255]).await.unwrap();
+    let resolved = path.clone();
+    let resolver = Arc::new(move |thread: &ThreadId, a: &ChatAttachment| {
+        assert_eq!(thread, &ThreadId::from("pi-attachments"));
+        match a.id.as_str() {
+            "image" => Some(resolved.file_name().unwrap().into()),
+            "file" => Some(resolved.clone()),
+            _ => None,
+        }
+    });
+    let mut h = factory(PiProfile::Pi)
+        .with_attachment_resolver(resolver)
+        .start(spec("pi-attachments"))
+        .await
+        .unwrap();
+    let mut inputs = input("inspect-attachments");
+    inputs[0].attachments = vec![
+        attachment("image", ChatAttachmentType::Image, "image/png"),
+        attachment("file", ChatAttachmentType::File, "text/plain"),
+        attachment("missing", ChatAttachmentType::File, "text/plain"),
+    ];
+    accepted(h.session.start_turn(inputs, &settings()).await);
+    let payload: serde_json::Value = serde_json::from_str(&text(&finished(&mut h).await)).unwrap();
+    assert_eq!(
+        payload["images"],
+        serde_json::json!([{"type":"image","data":"AAEC/w==","mimeType":"image/png"}])
+    );
+    let message = payload["message"].as_str().unwrap();
+    assert!(message.contains(&format!(
+        "[Attached image \"image.dat\" is saved at: {}]",
+        path.display()
+    )));
+    assert!(message.contains(&format!(
+        "[Attached file \"file.dat\" is saved at: {}]",
+        path.display()
+    )));
+    assert!(message.contains("[Attached file \"missing.dat\" is unavailable: could not resolve a saved path for attachment 'missing'.]"));
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    let mut steer = input("inspect-steer");
+    steer[0]
+        .attachments
+        .push(attachment("image", ChatAttachmentType::Image, "image/png"));
+    assert!(matches!(
+        h.session.steer(&turn, steer).await,
+        SteerResult::Accepted
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn empty_resolved_path_is_unavailable() {
+    let mut h = factory(PiProfile::Pi)
+        .with_attachment_resolver(Arc::new(|_, _| Some(std::path::PathBuf::new())))
+        .start(spec("pi-empty-attachment"))
+        .await
+        .unwrap();
+    let mut inputs = input("inspect-attachments");
+    inputs[0]
+        .attachments
+        .push(attachment("empty", ChatAttachmentType::Image, "image/png"));
+    accepted(h.session.start_turn(inputs, &settings()).await);
+    let payload: serde_json::Value = serde_json::from_str(&text(&finished(&mut h).await)).unwrap();
+    assert_eq!(payload["images"], serde_json::json!([]));
+    assert!(
+        payload["message"]
+            .as_str()
+            .unwrap()
+            .contains("[Attached image \"empty.dat\" is unavailable:")
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn unreadable_image_is_declined() {
+    let path = std::env::temp_dir()
+        .join(format!("goat2-pi-nonexistent-{}", std::process::id()))
+        .join("image.png");
+    let h = factory(PiProfile::Pi)
+        .with_attachment_resolver(Arc::new(move |_, _| Some(path.clone())))
+        .start(spec("pi-unreadable"))
+        .await
+        .unwrap();
+    let mut inputs = input("hello");
+    inputs[0]
+        .attachments
+        .push(attachment("image", ChatAttachmentType::Image, "image/png"));
+    assert!(
+        matches!(h.session.start_turn(inputs.clone(), &settings()).await, TurnStartResult::Declined { reason } if reason.contains("Unable to read attachment"))
+    );
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    assert!(
+        matches!(h.session.steer(&turn, inputs).await, SteerResult::Declined { reason } if reason.contains("Unable to read attachment"))
+    );
+    h.session.shutdown().await;
+}
+
 #[tokio::test]
 async fn plain_turn_streams_and_finishes() {
     let mut h = start("pi-plain").await;
@@ -178,6 +290,237 @@ async fn question_and_approval_round_trip() {
 }
 
 #[tokio::test]
+async fn expired_dialog_sends_cancel_and_rejects_late_answer() {
+    let mut h = start("pi-expiry").await;
+    accepted(
+        h.session
+            .start_turn(input("approval-expire"), &settings())
+            .await,
+    );
+    let events = finished(&mut h).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::RequestClosed { key } if key == "dialog-1"))
+    );
+    assert_eq!(text(&events), "answer: cancelled");
+    assert!(
+        h.session
+            .answer_request(
+                "dialog-1",
+                RequestAnswer {
+                    outcome: RequestOutcome::Accept,
+                    text: None,
+                    answers: None
+                }
+            )
+            .await
+            .is_err()
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn structured_numeric_answer_uses_custom_followup() {
+    let mut h = start("pi-structured").await;
+    accepted(h.session.start_turn(input("structured"), &settings()).await);
+    let key = loop {
+        if let EngineEvent::RequestOpened {
+            key,
+            item: Some(item),
+            ..
+        } = next(&mut h).await
+        {
+            let TurnItemBody::UserInputRequest { questions, .. } = &item.body else {
+                panic!("expected question")
+            };
+            assert_eq!(questions[0].header, "H");
+            assert_eq!(questions[0].options[0].label, "A");
+            break key;
+        }
+    };
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Answered,
+                text: Some("42".into()),
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    let events = finished(&mut h).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::RequestOpened { key, .. } if key == "custom-1"))
+    );
+    assert_eq!(text(&events), "custom: 42");
+    h.session.shutdown().await;
+}
+
+async fn opened(h: &mut EngineHandle) -> String {
+    loop {
+        match next(h).await {
+            EngineEvent::RequestOpened { key, .. } => return key,
+            EngineEvent::TurnFinished { .. } | EngineEvent::Exited { .. } => {
+                panic!("turn ended before request")
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn reply(
+    h: &EngineHandle,
+    key: &str,
+    value: &str,
+) -> Result<(), goat2_engine_api::EngineError> {
+    h.session
+        .answer_request(
+            key,
+            RequestAnswer {
+                outcome: RequestOutcome::Answered,
+                text: Some(value.into()),
+                answers: None,
+            },
+        )
+        .await
+}
+
+#[tokio::test]
+async fn identical_parallel_custom_answers_are_fifo_and_capacity_is_retryable() {
+    let mut h = start("pi-custom-batch").await;
+    accepted(
+        h.session
+            .start_turn(input("structured-batch"), &settings())
+            .await,
+    );
+    for n in 0..9 {
+        assert_eq!(opened(&mut h).await, format!("select-{n}"));
+    }
+    assert_eq!(opened(&mut h).await, "release");
+    for n in 0..8 {
+        reply(&h, &format!("select-{n}"), &format!("value-{n}"))
+            .await
+            .unwrap();
+    }
+    assert!(reply(&h, "select-8", "value-8").await.is_err());
+    reply(&h, "release", "go").await.unwrap();
+    for key in ["other-placeholder", "other-method", "missing-placeholder"] {
+        assert_eq!(opened(&mut h).await, key);
+        reply(&h, key, "unrelated").await.unwrap();
+    }
+    assert_eq!(opened(&mut h).await, "checkpoint");
+    reply(&h, "select-8", "value-8")
+        .await
+        .expect("request remains open after capacity error");
+    reply(&h, "checkpoint", "go").await.unwrap();
+    let events = finished(&mut h).await;
+    assert!(!events.iter().any(
+        |e| matches!(e, EngineEvent::RequestOpened { key, .. } if key.starts_with("follow-"))
+    ));
+    assert_eq!(
+        text(&events),
+        "batch: value-0,value-1,value-2,value-3,value-4,value-5,value-6,value-7,value-8"
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn ordinary_approval_and_decline_are_not_cached_and_cache_is_session_local() {
+    let mut h = start("pi-approval-ordinary").await;
+    for outcome in [
+        RequestOutcome::Accept,
+        RequestOutcome::Decline,
+        RequestOutcome::AcceptForSession,
+    ] {
+        accepted(h.session.start_turn(input("approval"), &settings()).await);
+        let key = opened(&mut h).await;
+        h.session
+            .answer_request(
+                &key,
+                RequestAnswer {
+                    outcome,
+                    text: None,
+                    answers: None,
+                },
+            )
+            .await
+            .unwrap();
+        finished(&mut h).await;
+    }
+    let mut other = start("pi-approval-other-session").await;
+    accepted(
+        other
+            .session
+            .start_turn(input("approval"), &settings())
+            .await,
+    );
+    let key = opened(&mut other).await;
+    other
+        .session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Decline,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(&finished(&mut other).await), "answer: false");
+    other.session.shutdown().await;
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn approval_for_session_is_reused() {
+    let mut h = start("pi-approval-cache").await;
+    accepted(h.session.start_turn(input("approval"), &settings()).await);
+    let key = loop {
+        if let EngineEvent::RequestOpened { key, .. } = next(&mut h).await {
+            break key;
+        }
+    };
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::AcceptForSession,
+                text: None,
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(&finished(&mut h).await), "answer: true");
+    accepted(h.session.start_turn(input("approval"), &settings()).await);
+    let events = finished(&mut h).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::RequestOpened { .. }))
+    );
+    assert_eq!(text(&events), "answer: true");
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn factory_for_driver_starts_both_profiles() {
+    for driver in [EngineDriver::Pi, EngineDriver::Omo] {
+        let factory = PiFactory::for_driver(driver).unwrap();
+        let mut h = factory.start(spec("pi-driver-factory")).await.unwrap();
+        accepted(h.session.start_turn(input("hello"), &settings()).await);
+        assert_eq!(text(&finished(&mut h).await), "echo: hello");
+        h.session.shutdown().await;
+    }
+    assert!(PiFactory::for_driver(EngineDriver::Codex).is_none());
+}
+
+#[tokio::test]
 async fn steer_and_abort() {
     let mut h = start("pi-abort").await;
     let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
@@ -202,6 +545,25 @@ async fn steer_and_abort() {
         })
     ));
     h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn steer_returns_unknown_when_process_dies_before_ack() {
+    let mut h = start("pi-steer-crash").await;
+    let turn = accepted(h.session.start_turn(input("hang"), &settings()).await);
+    let steer = h.session.steer(&turn, input("crash-steer"));
+    tokio::pin!(steer);
+    let result = tokio::select! {
+        result = &mut steer => result,
+        event = h.events.recv() => {
+            assert!(matches!(event, Some(EngineEvent::Exited { .. })));
+            std::future::poll_fn(|cx| match steer.as_mut().poll(cx) {
+                std::task::Poll::Ready(result) => std::task::Poll::Ready(result),
+                std::task::Poll::Pending => panic!("steer remained pending after EOF"),
+            }).await
+        }
+    };
+    assert!(matches!(result, SteerResult::Unknown { .. }));
 }
 
 #[tokio::test]

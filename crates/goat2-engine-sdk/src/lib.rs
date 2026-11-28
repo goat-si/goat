@@ -5,6 +5,9 @@
 //!   over one stdio JSONL shape (`apps/engine-helper/PROTOCOL.md`).
 //! - Pi and OmO (`--mode rpc`) are driven from Rust directly: v1 `provider-pi/src/server/rpc.ts` is
 //!   plain LF-delimited JSON request/response plus events, so a Node hop would add nothing.
+//!   Use [PiFactory::for_driver] to select either kind and
+//!   [PiFactory::with_attachment_resolver] to supply saved files for a thread. Binary overrides
+//!   are available through [PiFactory::with_binary] and per-session launch settings.
 //!
 //! One engine process (and its process group) per thread: a crash ends only that thread's run.
 

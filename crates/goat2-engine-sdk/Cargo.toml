@@ -16,6 +16,9 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [[bin]]
 name = "goat2-fake-pi"
 path = "src/bin/fake_pi.rs"

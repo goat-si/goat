@@ -43,6 +43,9 @@ fn main() {
     let mut pending = false;
     let mut pending_prompt = None::<Value>;
     let mut reject_abort = false;
+    let mut structured = false;
+    let mut batch = false;
+    let mut batch_answers: Vec<String> = Vec::new();
     let mut model_provider = "fake".to_owned();
     let mut model_id = "fake-model".to_owned();
     let mut thinking = "off".to_owned();
@@ -74,7 +77,23 @@ fn main() {
             }
             "clear_queue" => response(&request, json!({})),
             "prompt" if active && request["streamingBehavior"] == "steer" => {
-                if request["message"] == "decline-steer" {
+                if request["message"] == "crash-steer" {
+                    std::process::exit(23);
+                }
+                if request["message"]
+                    .as_str()
+                    .is_some_and(|s| s.starts_with("inspect-steer"))
+                    && (request["images"]
+                        != json!([{"type":"image","data":"AAEC/w==","mimeType":"image/png"}])
+                        || !request["message"]
+                            .as_str()
+                            .unwrap_or("")
+                            .contains("[Attached image \"image.dat\" is saved at: /"))
+                {
+                    emit(
+                        json!({"type":"response","id":request["id"],"command":"prompt","success":false,"error":"invalid steer images"}),
+                    );
+                } else if request["message"] == "decline-steer" {
                     emit(
                         json!({"type":"response","id":request["id"],"command":"prompt","success":false,"error":"steer refused"}),
                     );
@@ -120,11 +139,43 @@ fn main() {
                 emit(json!({"type":"agent_start"}));
                 emit(json!({"type":"turn_start"}));
                 match text {
+                    text if text.starts_with("inspect-attachments") => {
+                        finish(
+                            &json!({"message":text,"images":request["images"]}).to_string(),
+                            false,
+                        );
+                        active = false;
+                    }
                     "hang" => {}
+                    "structured-batch" => {
+                        batch = true;
+                        pending = true;
+                        emit(
+                            json!({"type":"tool_execution_start","toolCallId":"batch-ask","toolName":"ask_user_question","args":{"questions":[{"question":"Pick","header":"H","options":[{"label":"A","description":"Alpha"}]}]}}),
+                        );
+                        for n in 0..9 {
+                            emit(
+                                json!({"type":"extension_ui_request","id":format!("select-{n}"),"method":"select","title":"[H] Pick","options":["1. A — Alpha","2. Type something."]}),
+                            );
+                        }
+                        emit(
+                            json!({"type":"extension_ui_request","id":"release","method":"input","title":"Release"}),
+                        );
+                    }
+                    "structured" => {
+                        structured = true;
+                        pending = true;
+                        emit(
+                            json!({"type":"tool_execution_start","toolCallId":"ask-1","toolName":"ask_user_question","args":{"questions":"[{\"question\":\"Pick\",\"header\":\"H\",\"options\":\"[{\\\"label\\\":\\\"A\\\",\\\"description\\\":\\\"Alpha\\\"}]\"}]"}}),
+                        );
+                        emit(
+                            json!({"type":"extension_ui_request","id":"dialog-1","method":"select","title":"[H] Pick","options":["1. A — Alpha","2. Type something."]}),
+                        );
+                    }
                     "hang-reject-abort" => {
                         reject_abort = true;
                     }
-                    "question" | "approval" => {
+                    "question" | "approval" | "approval-expire" => {
                         pending = true;
                         let method = if text == "question" {
                             "input"
@@ -132,7 +183,7 @@ fn main() {
                             "confirm"
                         };
                         emit(
-                            json!({"type":"extension_ui_request", "id":"dialog-1", "method":method, "title":if text == "question" {"Choose a color"} else {"Approve action?"}, "message":"Please respond"}),
+                            json!({"type":"extension_ui_request", "id":"dialog-1", "method":method, "title":if text == "question" {"Choose a color"} else {"Approve action?"}, "message":"Please respond", "timeout":if text == "approval-expire" {-1} else {0}}),
                         );
                     }
                     "tool" => {
@@ -209,6 +260,73 @@ fn main() {
                 }
             }
             "extension_ui_response" => {
+                if batch {
+                    let id = request["id"].as_str().unwrap_or("");
+                    if id.starts_with("select-") {
+                        assert_eq!(request["value"], "2. Type something.");
+                        continue;
+                    }
+                    let title = "[H] Pick\n\n1. A — Alpha\n\nEnter custom";
+                    match id {
+                        "release" => emit(
+                            json!({"type":"extension_ui_request","id":"other-placeholder","method":"input","title":title,"placeholder":"not empty"}),
+                        ),
+                        "other-placeholder" => emit(
+                            json!({"type":"extension_ui_request","id":"other-method","method":"editor","title":title,"placeholder":""}),
+                        ),
+                        "other-method" => emit(
+                            json!({"type":"extension_ui_request","id":"missing-placeholder","method":"input","title":title}),
+                        ),
+                        "missing-placeholder" => emit(
+                            json!({"type":"extension_ui_request","id":"follow-0","method":"input","title":title,"placeholder":""}),
+                        ),
+                        "checkpoint" => {
+                            for n in 1..9 {
+                                emit(
+                                    json!({"type":"extension_ui_request","id":format!("follow-{n}"),"method":"input","title":title,"placeholder":""}),
+                                );
+                            }
+                        }
+                        _ if id.starts_with("follow-") => {
+                            batch_answers
+                                .push(request["value"].as_str().unwrap_or("<missing>").to_owned());
+                            if id == "follow-0" {
+                                emit(
+                                    json!({"type":"extension_ui_request","id":"checkpoint","method":"input","title":"Checkpoint"}),
+                                );
+                            } else if batch_answers.len() == 9 {
+                                finish(&format!("batch: {}", batch_answers.join(",")), false);
+                                active = false;
+                                pending = false;
+                                batch = false;
+                            }
+                        }
+                        _ => panic!("unexpected batch reply {id}"),
+                    }
+                    continue;
+                }
+                if structured
+                    && request["id"] == "dialog-1"
+                    && request["value"] == "2. Type something."
+                {
+                    emit(
+                        json!({"type":"extension_ui_request","id":"custom-1","method":"input","title":"[H] Pick\n\n1. A — Alpha\n\nEnter custom","placeholder":""}),
+                    );
+                    continue;
+                }
+                if structured && request["id"] == "custom-1" {
+                    structured = false;
+                    pending = false;
+                    finish(
+                        &format!(
+                            "custom: {}",
+                            request["value"].as_str().unwrap_or("<missing>")
+                        ),
+                        false,
+                    );
+                    active = false;
+                    continue;
+                }
                 if pending && request["id"] == "dialog-1" {
                     pending = false;
                     if let Some(prompt) = pending_prompt.take() {

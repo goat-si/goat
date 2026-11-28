@@ -18,10 +18,12 @@ struct Stream {
     reasoning: bool,
     done: bool,
 }
+
 struct Tool {
     name: String,
     args: Value,
     parent: Option<String>,
+    active: bool,
 }
 
 pub(super) struct Translator {
@@ -430,6 +432,7 @@ impl Translator {
                             name: s(record, "toolName").unwrap_or("tool").into(),
                             args: record.get("args").cloned().unwrap_or(Value::Null),
                             parent: s(record, "parentToolCallId").map(str::to_owned),
+                            active: true,
                         },
                     );
                 }
@@ -463,6 +466,9 @@ impl Translator {
                 }
                 if phase != "tool_execution_end" {
                     return out;
+                }
+                if let Some(tool) = self.tools.get_mut(id) {
+                    tool.active = false;
                 }
                 let error = record
                     .get("isError")
@@ -533,10 +539,12 @@ impl Translator {
                     .take()
                     .unwrap_or_else(|| format!("{turn_id}:compaction:{}", self.ordinal));
                 let result = &record["result"];
-                let status = if record["aborted"] == true {
-                    TurnItemStatus::Cancelled
-                } else if result.is_null() {
-                    TurnItemStatus::Failed
+                let status = if result.is_null() {
+                    if record["aborted"] == true {
+                        TurnItemStatus::Cancelled
+                    } else {
+                        TurnItemStatus::Failed
+                    }
                 } else {
                     TurnItemStatus::Completed
                 };
@@ -547,7 +555,7 @@ impl Translator {
                             .to_owned()
                     })
                 });
-                if record["willRetry"] == true {
+                if !result.is_null() && record["willRetry"] == true {
                     self.failure = None;
                 }
                 out.push(self.emit(
@@ -839,19 +847,22 @@ impl Translator {
             } else {
                 vec![]
             };
+            let question = self
+                .structured_question(event)
+                .map(|(question, _)| question);
             TurnItemBody::UserInputRequest {
                 request_id,
-                questions: vec![UserInputQuestion {
+                questions: vec![question.unwrap_or(UserInputQuestion {
                     id: id.into(),
                     header: if detail.is_some() { title } else { "Question" }.into(),
                     question: summary.clone(),
                     options,
                     multi_select: None,
                     allow_custom_answer: None,
-                    initial_answer: (method == "editor")
-                        .then(|| s(event, "prefill").unwrap_or("").into()),
+                    initial_answer:
+                        (method == "editor").then(|| s(event, "prefill").unwrap_or("").into()),
                     required: None,
-                }],
+                })],
             }
         };
         let item = self.item(
@@ -874,6 +885,16 @@ impl Translator {
             summary,
             item: Some(Box::new(item)),
         });
+    }
+    pub(super) fn structured_question(
+        &self,
+        event: &Value,
+    ) -> Option<(UserInputQuestion, super::dialog::Route)> {
+        let id = s(event, "id")?;
+        self.tools
+            .values()
+            .filter(|tool| tool.active && tool.name == "ask_user_question")
+            .find_map(|tool| super::dialog::recognize(id, event, &tool.args))
     }
     fn async_snapshot(&mut self, out: &mut Vec<EngineEvent>, _turn: &str) {
         for run in self.async_latest.clone() {
@@ -1052,5 +1073,80 @@ impl Translator {
                 out.push(self.emit(turn, &id, status, Some(agent.into()), body, Some(tool)));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn retry_failure_is_cleared_only_by_compaction_with_a_result_and_retry() {
+        for (result, will_retry, failed) in [
+            (Value::Null, true, true),
+            (json!({"summary":"compacted"}), false, true),
+            (json!({"summary":"compacted"}), true, false),
+        ] {
+            let mut t =
+                Translator::new(ThreadId::from("test"), "session".into(), "pi", "pi".into());
+            t.translate(
+                &json!({"type":"auto_retry_end","success":false,"finalError":"exhausted"}),
+                "turn",
+            );
+            t.translate(
+                &json!({"type":"compaction_end","result":result,"willRetry":will_retry}),
+                "turn",
+            );
+            let events = t.translate(&json!({"type":"agent_settled"}), "turn");
+            let actual = events
+                .iter()
+                .find_map(|event| match event {
+                    EngineEvent::TurnFinished { outcome, .. } => {
+                        Some(matches!(outcome, TurnOutcome::Failed { .. }))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(actual, failed, "events: {events:?}");
+        }
+    }
+
+    #[test]
+    fn retries_surface_recovery_failure_and_interruption() {
+        for (end, expected) in [
+            ("recovered", "done"),
+            ("exhausted", "failed"),
+            ("interrupted", "interrupted"),
+        ] {
+            let mut t =
+                Translator::new(ThreadId::from("test"), "session".into(), "pi", "pi".into());
+            t.translate(&json!({"type":"auto_retry_start","attempt":1,"maxAttempts":2,"delayMs":10,"errorMessage":"temporary"}), "turn");
+            let mut events = Vec::new();
+            match end {
+                "recovered" => events.extend(t.translate(&json!({"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"ok"}}), "turn")),
+                "exhausted" => events.extend(t.translate(&json!({"type":"auto_retry_end","success":false,"finalError":"exhausted","attempt":2}), "turn")),
+                _ => t.interrupt(),
+            }
+            events.extend(t.translate(&json!({"type":"agent_settled"}), "turn"));
+            assert!(events.iter().any(|event| matches!(event, EngineEvent::ItemCompleted {item,..} if matches!(item.body, TurnItemBody::Error { retry: Some(_), .. }))));
+            let outcome = events.iter().find_map(|event| match event {
+                EngineEvent::TurnFinished { outcome, .. } => Some(match outcome {
+                    TurnOutcome::Done => "done",
+                    TurnOutcome::Failed { .. } => "failed",
+                    TurnOutcome::Interrupted => "interrupted",
+                }),
+                _ => None,
+            });
+            assert_eq!(outcome, Some(expected));
+        }
+    }
+
+    #[test]
+    fn tool_end_uses_start_arguments_and_reports_failure() {
+        let mut t = Translator::new(ThreadId::from("test"), "session".into(), "pi", "pi".into());
+        t.translate(&json!({"type":"tool_execution_start","toolCallId":"call","toolName":"bash","args":{"command":"false"}}), "turn");
+        let events = t.translate(&json!({"type":"tool_execution_end","toolCallId":"call","isError":true,"result":{"content":[{"type":"text","text":"failed"}]}}), "turn");
+        assert!(events.iter().any(|event| matches!(event, EngineEvent::ItemCompleted { item, .. } if item.status == TurnItemStatus::Failed && matches!(&item.body, TurnItemBody::CommandExecution { input, output, .. } if input == "false" && output.as_deref() == Some("failed")))));
     }
 }

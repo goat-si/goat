@@ -1,5 +1,6 @@
 //! Pieces of the Pi RPC driver.
 
+mod dialog;
 mod events;
 mod extension;
 mod probe;
