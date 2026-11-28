@@ -3451,3 +3451,61 @@ async fn a_session_signin_left_by_a_restart_is_closed() {
     .await;
     drop(keep);
 }
+
+#[tokio::test]
+async fn a_fenced_thread_drops_its_unfinished_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced-stream", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ContentDelta {
+            turn_id: turn.clone(),
+            item_id: "think-1".into(),
+            stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+            text: "half a thought".into(),
+        },
+    );
+    eventually("streaming", || !t.host.watch_thread(&id).1.is_empty()).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: turn,
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    eventually("no unfinished stream for a later subscriber", || {
+        t.host.watch_thread(&id).1.is_empty()
+    })
+    .await;
+}

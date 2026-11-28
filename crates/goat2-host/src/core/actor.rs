@@ -240,6 +240,8 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
                 actor
                     .stop_session("the thread log could not be written")
                     .await;
+                // Text that was streaming will never complete: later subscribers must not see it.
+                actor.host.stream_clear(&actor.id);
             }
             actor.sync_runtime();
             let took = started.elapsed();
