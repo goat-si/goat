@@ -14,6 +14,7 @@ import type {
   ServerProviderSlashCommand,
 } from "@goat/contracts";
 import type { ComposerTriggerKind } from "@goat/shared/composerTrigger";
+import { formatProviderSkillDisplayName } from "@goat/shared/inlineSkills";
 import { memo } from "react";
 import { Pressable, ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
 
@@ -233,7 +234,7 @@ const CommandRow = memo(function CommandRow(props: {
         {props.isSlashSkill && props.item.type === "skill" ? (
           <>
             <Text className="text-foreground-muted">skill:</Text>
-            {props.item.skill.name}
+            {formatProviderSkillDisplayName(props.item.skill)}
           </>
         ) : (
           props.item.label

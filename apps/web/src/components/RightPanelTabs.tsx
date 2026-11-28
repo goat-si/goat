@@ -489,7 +489,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
   const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
-  const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const {
     attachTabList,
     attachAddButton,
@@ -505,10 +504,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     activeId: props.activeSurfaceId,
     open: props.open !== false,
   });
-
-  if (props.open === false && addSurfaceMenuOpen) setAddSurfaceMenuOpen(false);
-
-  useRightPanelNewShortcut(props, addSurfaceMenuOpen, setAddSurfaceMenuOpen, addSurfaceTriggerRef);
 
   const allAddSurfaceActions = [
     {
@@ -577,6 +572,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   ] as const;
   const addSurfaceActions = allAddSurfaceActions.filter((action) =>
     surfaceOffered(props.offeredSurfaces, action.kind),
+  );
+  const { addSurfaceMenuOpen, setAddSurfaceMenuOpen, canAddSurface } = useRightPanelNewShortcut(
+    props,
+    addSurfaceActions,
+    addSurfaceTriggerRef,
   );
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -850,7 +850,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 })}
               </SortableTabList>
             </div>
-            {props.open !== false ? (
+            {props.open !== false && canAddSurface ? (
               <Menu
                 open={addSurfaceMenuOpen}
                 onOpenChange={(open) => {

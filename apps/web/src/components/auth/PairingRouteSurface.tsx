@@ -11,6 +11,7 @@ import {
   submitServerAuthCredential,
 } from "../../environments/primary";
 import { readHostedPairingRequest } from "../../hostedPairing";
+import { resolveRemotePairingTarget } from "@goat/shared/remote";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -143,16 +144,30 @@ export function HostedPairingRouteSurface() {
     reportFailure: false,
   });
   const [request] = useState(readHostedPairingRequest);
-  const [status, setStatus] = useState<"pairing" | "paired" | "error">(
-    request ? "pairing" : "error",
+  // The origin shows the scheme along with the host.
+  const [origin] = useState(() => {
+    if (!request) return null;
+    try {
+      return new URL(
+        resolveRemotePairingTarget({ host: request.host, pairingCode: request.token }).httpBaseUrl,
+      ).origin;
+    } catch {
+      return null;
+    }
+  });
+  const [status, setStatus] = useState<"confirm" | "pairing" | "paired" | "error">(
+    origin ? "confirm" : "error",
   );
-  const [message, setMessage] = useState(
-    request
-      ? "Connecting to this backend."
-      : "This pairing link is missing its backend host or token.",
+  const [message, setMessage] = useState(() =>
+    origin
+      ? "This link adds a backend to this browser. Continue only if you trust it."
+      : request
+        ? "This pairing link has an invalid backend host."
+        : "This pairing link is missing its backend host or token.",
   );
   const [canRetry, setCanRetry] = useState(false);
-  const submitAttemptedRef = useRef(false);
+  // Nothing is sent to the link's host until the user confirms.
+  // The token stays in the URL until then: the root route picks this page from it.
   const tokenSubmittedRef = useRef(false);
 
   const submitHostedPairingRequest = async () => {
@@ -174,6 +189,7 @@ export function HostedPairingRouteSurface() {
     setMessage("Connecting to this backend.");
     setCanRetry(false);
     tokenSubmittedRef.current = true;
+    stripPairingTokenFromUrl();
 
     const result = await connectPairingEnvironment({
       host: request.host,
@@ -193,20 +209,6 @@ export function HostedPairingRouteSurface() {
     );
   };
 
-  const submitOnMount = useEffectEvent(() => {
-    void submitHostedPairingRequest();
-  });
-
-  useEffect(() => {
-    if (submitAttemptedRef.current) {
-      return;
-    }
-    submitAttemptedRef.current = true;
-
-    stripPairingTokenFromUrl();
-    submitOnMount();
-  }, []);
-
   return (
     <StandalonePage tone="pairing">
       <StandalonePageHeader
@@ -216,14 +218,16 @@ export function HostedPairingRouteSurface() {
             ? "Backend paired"
             : status === "error"
               ? "Pairing failed"
-              : "Pairing backend"
+              : status === "confirm"
+                ? "Add this backend?"
+                : "Pairing backend"
         }
         description={message}
       />
 
       {request ? (
         <div className="mt-5 rounded-lg border border-border/70 bg-background/55 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          Host: <span className="font-mono text-foreground/80">{request.host}</span>
+          Host: <span className="font-mono text-foreground/80">{origin ?? request.host}</span>
         </div>
       ) : null}
 
@@ -237,7 +241,23 @@ export function HostedPairingRouteSurface() {
       ) : null}
 
       <div className="mt-6 flex flex-wrap gap-2">
-        {status === "pairing" ? (
+        {status === "confirm" ? (
+          <>
+            <Button size="sm" onClick={() => void submitHostedPairingRequest()}>
+              Add backend
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                stripPairingTokenFromUrl();
+                window.location.href = "/";
+              }}
+            >
+              Cancel
+            </Button>
+          </>
+        ) : status === "pairing" ? (
           <Button disabled size="sm">
             Pairing...
           </Button>

@@ -183,6 +183,11 @@ const NO_PRIORITY_HOLDS: ThreadPriorityHolds = new Map();
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
+export function threadListV2ShowMoreAccessibilityLabel(hiddenCount: number): string {
+  const count = Math.min(hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT);
+  return `Show ${count} more settled ${count === 1 ? "thread" : "threads"}`;
+}
+
 /** The server marks unread only after a completed run, and only a recorded visit makes a thread read. */
 export function canMarkThreadUnread(
   thread: Pick<

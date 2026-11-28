@@ -27,8 +27,14 @@ it("rejects typed and pasted text while voice input owns the composer", async ()
   await fixture.mount();
   const before = store().getComposerDraft(id)?.prompt;
   await act(async () => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", " pasted");
     expect(state.composer!.composerRef.current!.insertTextAtEnd(" typed")).toBe(false);
-    expect(state.composer!.composerRef.current!.pasteTextAtEnd(" pasted")).toBe(false);
+    expect(
+      state.composer!.composerRef.current!.pasteTextAtEnd(clipboard, {
+        bypassAutoAttachment: false,
+      }),
+    ).toBe(false);
   });
   expect(store().getComposerDraft(id)?.prompt).toBe(before);
 });

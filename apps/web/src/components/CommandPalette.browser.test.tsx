@@ -2,7 +2,7 @@ import { DraftId } from "../composerDraftStore";
 import { useGlobalAgentStore } from "../globalAgentStore";
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { openCommandPalette } from "../commandPaletteBus";
@@ -12,6 +12,7 @@ import { makeThreadFixture } from "../test-fixtures";
 import type { Thread } from "../types";
 import type { Project } from "../types";
 import { CommandPalette } from "./CommandPalette";
+import { useThemeEditorStore } from "./settings/themeEditorStore";
 
 const state = vi.hoisted(() => ({
   projects: [] as ReadonlyArray<Project>,
@@ -23,10 +24,25 @@ vi.mock(import("../state/entities"), async (original) => ({
   useThreadShells: () => state.threads,
 }));
 
-function setup(input: { threads?: ReadonlyArray<Thread> } = {}) {
+function makeProject(title: string, id = title.toLowerCase().replace(/\s+/g, "-")): Project {
+  return {
+    environmentId: EnvironmentId.make("environment-1"),
+    id: ProjectId.make(id),
+    title,
+    workspaceRoot: `/${id}`,
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function setup(input: { projects?: ReadonlyArray<Project>; threads?: ReadonlyArray<Thread> } = {}) {
   removeLocalStorageItem(LAST_USED_PROJECT_STORAGE_KEY);
+  useThemeEditorStore.setState(useThemeEditorStore.getInitialState(), true);
   state.threads = input.threads ?? [];
-  state.projects = [
+  state.projects = input.projects ?? [
     {
       environmentId: EnvironmentId.make("environment-1"),
       id: ProjectId.make("project-1"),
@@ -116,6 +132,120 @@ describe("CommandPalette open intents", () => {
     const input = page.getByPlaceholder("Search commands, projects, and threads...");
     await expect.element(input).toHaveFocus();
     await expect.element(input).toHaveValue("example");
+  });
+
+  it("leaves a submenu only on a fresh, unmodified Backspace", async () => {
+    setup({ projects: [makeProject("Acme"), makeProject("Beta")] });
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+
+    openCommandPalette({});
+    const rootInput = page.getByPlaceholder("Search commands, projects, and threads...");
+    await expect.element(rootInput).toHaveFocus();
+    await userEvent.click(page.getByRole("option", { name: /^New thread in\.\.\./ }));
+
+    const submenuInput = page.getByPlaceholder("Search...");
+    await expect.element(submenuInput).toHaveFocus();
+
+    for (const init of [
+      { repeat: true },
+      { ctrlKey: true },
+      { isComposing: true },
+    ] satisfies ReadonlyArray<KeyboardEventInit>) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Backspace",
+        bubbles: true,
+        cancelable: true,
+        ...init,
+      });
+      await act(() => submenuInput.element().dispatchEvent(event));
+      expect(event.defaultPrevented).toBe(false);
+      await expect.element(submenuInput).toBeVisible();
+    }
+
+    await userEvent.keyboard("{Backspace}");
+    await expect.element(rootInput).toHaveFocus();
+  });
+
+  it("ignores repeated Escape keydowns in file search and after stepping back", async () => {
+    setup();
+    await using _screen = await render(<CommandPalette>{null}</CommandPalette>);
+
+    openCommandPalette({});
+    const palette = page.getByTestId("command-palette");
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+
+    await page.getByRole("option", { name: /^Go to file/ }).click();
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "files");
+
+    const repeatInChild = new KeyboardEvent("keydown", {
+      key: "Escape",
+      keyCode: 27,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => document.activeElement?.dispatchEvent(repeatInChild));
+    expect(repeatInChild.defaultPrevented).toBe(true);
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "files");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+    await expect
+      .element(page.getByPlaceholder("Search commands, projects, and threads..."))
+      .toHaveFocus();
+
+    await act(() => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          repeat: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect.element(palette).toHaveAttribute("data-palette-mode", "command");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(palette).not.toBeInTheDocument();
+  });
+
+  it("ignores held repeat shortcuts for overlay toggle, theme editor, and Usage", async () => {
+    setup();
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
+    await using screen = await render(<CommandPalette>{null}</CommandPalette>);
+    using navigate = vi.spyOn(screen.router!, "navigate").mockResolvedValue(undefined);
+
+    await userEvent.keyboard("{Control>}k{/Control}");
+    const palette = page.getByTestId("command-palette");
+    await expect.element(palette).toBeVisible();
+
+    const repeatToggle = new KeyboardEvent("keydown", {
+      key: "k",
+      ctrlKey: true,
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => window.dispatchEvent(repeatToggle));
+    expect(repeatToggle.defaultPrevented).toBe(true);
+    await expect.element(palette).toBeVisible();
+
+    for (const keys of [
+      { key: "T", ctrlKey: true, altKey: true, shiftKey: true },
+      { key: "u", ctrlKey: true },
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        ...keys,
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(() => window.dispatchEvent(event));
+      expect(event.defaultPrevented, keys.key).toBe(true);
+    }
+    expect(useThemeEditorStore.getState().session).toBeNull();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

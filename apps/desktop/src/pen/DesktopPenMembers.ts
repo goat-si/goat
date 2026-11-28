@@ -119,10 +119,8 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
     Effect.fnUntraced(function* (view, turn) {
       if (view.kind !== "ready") return yield* set(view);
       const { snapshot } = view;
-      const inspectAll = Effect.forEach(
-        snapshot.members.filter((member) => member.nodeId !== snapshot.self),
-        inspectMember,
-      );
+      const candidates = snapshot.members.filter((member) => member.nodeId !== snapshot.self);
+      const inspectAll = Effect.forEach(candidates, inspectMember);
       const ready = (members: ReadonlyArray<DesktopPenMember>): PublishedState => ({
         kind: "ready",
         meshId: snapshot.mesh,
@@ -137,13 +135,24 @@ export const make = Effect.fn("DesktopPenMembers.make")(function* (deps: Desktop
           !members.some((member) => member.route.kind === "refused" && settles(member.route.reason))
         )
           return;
-        const delay = REINSPECT_AFTER[Math.min(round, REINSPECT_AFTER.length - 1)] ?? "10 minutes";
+        const delay = REINSPECT_AFTER[round];
+        if (delay === undefined) return;
         const superseded = yield* Effect.race(
           Effect.as(Effect.sleep(delay), false),
           Effect.as(turn.superseded, true),
         );
         if (superseded) return;
-        members = yield* inspectAll;
+        const pending = new Set(
+          members
+            .filter((member) => member.route.kind === "refused" && settles(member.route.reason))
+            .map((member) => member.nodeId),
+        );
+        const refreshed = yield* Effect.forEach(
+          candidates.filter((member) => pending.has(member.nodeId)),
+          inspectMember,
+        );
+        const byId = new Map(refreshed.map((member) => [member.nodeId, member]));
+        members = members.map((member) => byId.get(member.nodeId) ?? member);
       }
     }),
   ).pipe(Effect.forkScoped);

@@ -14,7 +14,7 @@ export function visibleBody(body: string): string | null {
  * bookkeeping would otherwise use up the bound before the remark got any of it. Comments in code
  * are source the remark is showing, so they stay. Null for a body with no words.
  */
-function readableBody(raw: string): string | null {
+export function readableBody(raw: string): string | null {
   if (visibleBody(raw) === null) return null;
   const body = raw.replace(/\r\n?/gu, "\n");
   const cuts: Array<[number, number]> = [];
@@ -57,7 +57,19 @@ export function bounded(value: string): string {
   if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
     end -= 1;
   }
-  return `${trimmed.slice(0, end)}...`;
+  return `${trimmed.slice(0, end).trimEnd()}...`;
+}
+
+export function reviewThreadText(thread: PullRequestReviewThread): string {
+  // Strip bot bookkeeping comments before bounding finding text.
+  return bounded(
+    thread.comments
+      .flatMap((comment) => {
+        const body = readableBody(comment.body);
+        return body === null ? [] : [`${comment.author?.login ?? "ghost"}: ${body}`];
+      })
+      .join("\n"),
+  );
 }
 
 export function reviewThreadContext(
@@ -74,15 +86,7 @@ export function reviewThreadContext(
     endIndex: lineIndex,
     rangeLabel:
       thread.line === null ? "file" : `L${thread.line}${thread.side === "left" ? " (before)" : ""}`,
-    // Strip bot bookkeeping comments before bounding finding text.
-    text: bounded(
-      thread.comments
-        .flatMap((comment) => {
-          const body = readableBody(comment.body);
-          return body === null ? [] : [`${comment.author?.login ?? "ghost"}: ${body}`];
-        })
-        .join("\n"),
-    ),
+    text: reviewThreadText(thread),
     diff: "",
     fenceLanguage: inferReviewCommentFenceLanguage(thread.path),
   };

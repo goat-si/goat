@@ -69,6 +69,39 @@ describe("shared user input drafts", () => {
     expect(buildPendingUserInputAnswers([question, optional], {})).toBeNull();
   });
 
+  it("omits an unselected optional single choice and keeps explicit false and empty choices", () => {
+    const extras = {
+      id: "extras",
+      options: [
+        { label: "true", value: "true" },
+        { label: "false", value: "false" },
+      ],
+      allowCustomAnswer: false,
+      required: false,
+    };
+    const mode = {
+      id: "mode",
+      options: [
+        { label: '""', value: "" },
+        { label: "fast", value: "fast" },
+      ],
+      allowCustomAnswer: false,
+      required: false,
+    };
+
+    expect(buildPendingUserInputAnswers([extras, mode], {})).toEqual({});
+    expect(
+      buildPendingUserInputAnswers([extras, mode], {
+        extras: { selectedOptionValues: ["false"] },
+        mode: { selectedOptionValues: [""] },
+      }),
+    ).toEqual({ extras: "false", mode: "" });
+    expect(
+      buildPendingUserInputAnswers([extras, mode], { extras: { attachmentsBlocked: true } }),
+    ).toBeNull();
+    expect(buildPendingUserInputAnswers([{ ...extras, required: undefined }, mode], {})).toBeNull();
+  });
+
   it("seeds once and preserves clearing, edits, and selections on later snapshots", () => {
     const initial = { ...question, initialAnswer: "  message\n\n" };
     const seeded = seedUserInputDraftAnswers([initial], {});

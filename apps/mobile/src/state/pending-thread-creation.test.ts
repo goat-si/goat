@@ -217,4 +217,12 @@ describe("withLaunchingThreads", () => {
     };
     expect(launch([started])[0]).toBe(started);
   });
+
+  it("keeps an attachment-only task's unsent title while it launches", () => {
+    const [launching] = withLaunchingThreads({
+      threads: [],
+      launches: [{ ...creation, text: "" }],
+    });
+    expect(launching!.title).toBe("1 attachment");
+  });
 });

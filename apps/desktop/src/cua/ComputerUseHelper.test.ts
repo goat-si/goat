@@ -247,6 +247,55 @@ describe("ComputerUseHelper protocol", () => {
     await session.ended;
     assert.equal((await helperError(session.permissions(false))).code, "helper_exited");
   });
+
+  it("decodes optional inputMonitoring from helper permissions and delivers personStop events", async () => {
+    let calls = 0;
+    const helper = fakeHelper({
+      greeting: { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID, features: ["watch"] },
+      reply: ({ method, params }) => {
+        if (method === "permissions") {
+          calls += 1;
+          return calls === 1
+            ? { result: { accessibility: true, screenRecording: true, inputMonitoring: false } }
+            : { result: { accessibility: true, screenRecording: true, inputMonitoring: true } };
+        }
+        return { result: { watchId: (params as { watchId?: string }).watchId } };
+      },
+      after: ({ method, params }, write) => {
+        if (method !== "watch") return;
+        const watchId = (params as { watchId?: string }).watchId ?? "";
+        write({
+          type: "event",
+          watchId: "stale",
+          event: { type: "personStop", reason: "person_esc" },
+        });
+        write({ type: "event", watchId, event: { type: "personStop", reason: "person_esc" } });
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    assert.deepEqual(await session.permissions(false), {
+      accessibility: true,
+      screenRecording: true,
+      inputMonitoring: false,
+    });
+    assert.deepEqual(await session.permissions(false), {
+      accessibility: true,
+      screenRecording: true,
+      inputMonitoring: true,
+    });
+    const received: Array<{ type: string; reason?: string }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onEvent((event) => {
+        if (event.type !== "personStop") return;
+        received.push(event);
+        resolve();
+      }),
+    );
+    await session.watch("w1");
+    await done;
+    assert.deepEqual(received, [{ type: "personStop", reason: "person_esc" }]);
+    await session.close();
+  });
 });
 
 describe("ComputerUseHelper daemon admission", () => {

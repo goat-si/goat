@@ -5,9 +5,13 @@
 !else
   ${StrRep}
   !define GoatStrRep '${StrRep}'
+  Var goatAppWasRunning
 !endif
 
 !macro customAppRunningMessages
+  !ifndef BUILD_UNINSTALLER
+    StrCpy $goatAppWasRunning 1
+  !endif
   Push $0
   Push $1
   ${If} $IsPowerShellAvailable == 0
@@ -38,4 +42,12 @@
       WinShell::SetLnkAUMI "$newStartMenuLink" "${APP_ID}"
     ${EndIf}
   !endif
+
+  # The template relaunches after a silent install only with --force-run, which WinGet does not pass.
+  ${If} ${Silent}
+  ${AndIfNot} ${isForceRun}
+  ${AndIf} $goatAppWasRunning == 1
+    HideWindow
+    ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" ""
+  ${EndIf}
 !macroend

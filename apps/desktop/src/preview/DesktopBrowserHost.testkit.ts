@@ -55,9 +55,11 @@ export const makeDebuggee = (
       }),
   });
   const webContents = Object.assign(new NodeEvents.EventEmitter(), {
+    capturePage: () => Promise.resolve({}),
     getURL: () => "http://localhost/",
     getTitle: () => "Page",
     getUserAgent: () => "Electron",
+    isDestroyed: () => false,
     isLoadingMainFrame: () => false,
     reload: vi.fn(),
     reloadIgnoringCache: vi.fn(),

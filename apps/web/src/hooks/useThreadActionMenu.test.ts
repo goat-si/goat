@@ -21,6 +21,7 @@ const state = vi.hoisted(() => ({
   granted: new Set<string>(),
   threadFollows: undefined as boolean | undefined,
   effects: [] as string[],
+  latestRun: null as { readonly status: string; readonly completedAt: string | null } | null,
   completed: deferred<void>(),
   show: vi.fn<
     (
@@ -62,7 +63,7 @@ vi.mock("../state/entities", () => ({
     branch: "main",
     worktreePath: null,
     runtime: null,
-    latestRun: null,
+    latestRun: state.latestRun,
   }),
   useProjects: () => [{ id: "project", environmentId: "secondary" }],
 }));
@@ -187,6 +188,7 @@ beforeEach(() => {
   state.granted = new Set(["primary"]);
   state.effects = [];
   state.threadFollows = undefined;
+  state.latestRun = null;
   state.completed = deferred<void>();
   state.show.mockReset().mockResolvedValue(null);
 });
@@ -234,5 +236,19 @@ describe("thread menu permissions", () => {
     expect(items[0]?.disabled).not.toBe(true);
     expect(state.effects).toEqual(["find"]);
     expect(onFind).toHaveBeenCalledExactlyOnceWith(target);
+  });
+});
+
+describe("thread menu mark unread", () => {
+  it.each([
+    ["completed", true],
+    ["interrupted", false],
+    ["cancelled", false],
+  ] as const)("a %s latest run offers Mark unread: %s", (status, offered) => {
+    // A stopped run never shows Done, so marking it unread would change nothing.
+    state.latestRun = { status, completedAt: "2026-01-01T00:00:00.000Z" };
+    createMenu().openMenu(position);
+    const items = state.show.mock.calls[0]![0];
+    expect(items.some((item) => item.id === "mark-unread")).toBe(offered);
   });
 });

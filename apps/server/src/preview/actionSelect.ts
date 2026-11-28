@@ -9,6 +9,7 @@ import {
   type Readiness,
 } from "./actionReadiness.ts";
 import { requireEvaluationChannel } from "./actionEvaluation.ts";
+import { verifySelectOptionStickiness } from "./BrowserDropdownAndDownloadPolicy.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import {
   DEFAULT_TIMEOUT_MS,
@@ -90,16 +91,15 @@ export const select = async (
     remaining(deadline);
     await gate();
     gate.signal?.throwIfAborted();
-    // What Playwright's selectOption does once the options exist, without its wait for them.
-    const selected = await requireEvaluationChannel(gate).call(() =>
+    const committed = await requireEvaluationChannel(gate).call(() =>
       handle.evaluate((element, chosen) => {
         const select = element as unknown as {
           selectedIndex: number;
+          readonly value: string;
           readonly options: ArrayLike<{ value: string; selected: boolean }>;
           readonly selectedOptions: ArrayLike<{ value: string }>;
           dispatchEvent(event: unknown): boolean;
         };
-        // No values clears the selection, single select included (selectOption's contract).
         select.selectedIndex = -1;
         for (const value of chosen) {
           const option = Array.from(select.options).find((entry) => entry.value === value);
@@ -110,10 +110,34 @@ export const select = async (
         ).Event;
         select.dispatchEvent(new EventType("input", { bubbles: true, composed: true }));
         select.dispatchEvent(new EventType("change", { bubbles: true }));
-        return Array.from(select.selectedOptions, (option) => option.value);
+        return {
+          selected: Array.from(select.selectedOptions, (option) => option.value),
+          observedValue: select.value,
+          observedSelectedIndex: select.selectedIndex,
+        };
       }, values as ReadonlyArray<string>),
     );
-    return { selected };
+    const requestedValue = values[0];
+    if (!found.multiple && values.length === 1 && requestedValue !== undefined) {
+      const stickiness = verifySelectOptionStickiness({
+        requestedValue,
+        observedValue: committed.observedValue,
+        observedSelectedIndex: committed.observedSelectedIndex,
+      });
+      if (!stickiness.ok) {
+        throw new ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          `${stickiness.message} (${stickiness.reason})`,
+          {
+            beforeInput: false,
+            reason: stickiness.reason,
+            requestedValue: stickiness.requestedValue,
+            observedValue: stickiness.observedValue,
+          },
+        );
+      }
+    }
+    return { selected: committed.selected };
   } finally {
     if (!gate.signal?.aborted) void requireEvaluationChannel(gate).dispose(handle).catch(constVoid);
   }

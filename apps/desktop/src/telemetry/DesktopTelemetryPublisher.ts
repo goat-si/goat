@@ -10,7 +10,9 @@ import {
   type DesktopCuaFrames,
   type DesktopCuaReadinessReport,
   type DesktopCuaHumanInputReport,
+  type DesktopCuaPersonStopReport,
   type DesktopCuaPrivateModeReport,
+  type DesktopCuaSessionLockReport,
   type DesktopHostTelemetrySnapshot,
   type DesktopTelemetryControlMessage,
   type DesktopTelemetryCancelDesktopUpdate,
@@ -115,7 +117,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
      * paused.
      */
     readonly publishCuaSafety: (
-      report: DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport,
+      report:
+        | DesktopCuaPrivateModeReport
+        | DesktopCuaHumanInputReport
+        | DesktopCuaPersonStopReport
+        | DesktopCuaSessionLockReport,
     ) => Effect.Effect<void>;
     readonly handleControlForSource: (
       sourceId: string,
@@ -240,8 +246,12 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   // Readiness is state: a connection that falls behind needs only the newest report.
   const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
   const activePrivateMode = yield* Ref.make(Option.none<DesktopCuaPrivateModeReport>());
+  const activeSessionLock = yield* Ref.make(Option.none<DesktopCuaSessionLockReport>());
   const cuaSafetyReports = yield* PubSub.unbounded<
-    DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport
+    | DesktopCuaPrivateModeReport
+    | DesktopCuaHumanInputReport
+    | DesktopCuaPersonStopReport
+    | DesktopCuaSessionLockReport
   >();
   interface CuaSource {
     readonly reports: PubSub.PubSub<
@@ -637,19 +647,31 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           ),
         );
         const readinessSubscription = yield* PubSub.subscribe(cuaReadinessChanges);
+        const currentReadiness = yield* Ref.get(latestCuaReadiness);
         const readiness = Stream.concat(
-          Option.match(yield* Ref.get(latestCuaReadiness), {
+          Option.match(currentReadiness, {
             onNone: () => Stream.empty,
             onSome: Stream.make,
           }),
           Stream.fromSubscription(readinessSubscription),
         ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
         const safetySubscription = yield* PubSub.subscribe(cuaSafetyReports);
+        const currentPrivateMode = yield* Ref.get(activePrivateMode);
+        const currentSessionLock = yield* Ref.get(activeSessionLock);
+        const replayedSessionLock = Option.map(currentSessionLock, (report) =>
+          Option.isSome(currentReadiness)
+            ? {
+                ...report,
+                generation: Math.max(report.generation ?? 0, currentReadiness.value.generation),
+              }
+            : report,
+        );
+        const initialSafety = [
+          ...(Option.isSome(currentPrivateMode) ? [currentPrivateMode.value] : []),
+          ...(Option.isSome(replayedSessionLock) ? [replayedSessionLock.value] : []),
+        ];
         const safety = Stream.concat(
-          Option.match(yield* Ref.get(activePrivateMode), {
-            onNone: () => Stream.empty,
-            onSome: Stream.make,
-          }),
+          Stream.fromIterable(initialSafety),
           Stream.fromSubscription(safetySubscription),
         ).pipe(Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)));
         const framesSubscription = yield* PubSub.subscribe(cuaFramesOut);
@@ -732,7 +754,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     publishCuaSafety: (report) =>
       (report.type === "cuaPrivateMode"
         ? Ref.set(activePrivateMode, report.active ? Option.some(report) : Option.none())
-        : Effect.void
+        : report.type === "cuaSessionLock"
+          ? Ref.set(activeSessionLock, report.locked ? Option.some(report) : Option.none())
+          : Effect.void
       ).pipe(Effect.andThen(PubSub.publish(cuaSafetyReports, report)), Effect.asVoid),
     handleControlForSource,
     removeControlSource,

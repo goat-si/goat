@@ -1,5 +1,5 @@
 import { useParams } from "@tanstack/react-router";
-import { scopeProjectRef } from "@goat/client-runtime/environment";
+import { scopedProjectKey, scopeProjectRef } from "@goat/client-runtime/environment";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -21,6 +21,7 @@ import {
   isProjectCloneToastSilenced,
   silenceProjectCloneToasts,
   useEnvironmentProjectClones,
+  useProjectCloneToastHolds,
   useProjectCloneToastSilenceVersion,
 } from "../state/projectClones";
 import { sourceControlEnvironment } from "../state/sourceControl";
@@ -72,6 +73,7 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
   const clones = useEnvironmentProjectClones(environmentId);
   // A clone handed back from a draft must toast now, not at its next snapshot.
   useProjectCloneToastSilenceVersion();
+  const toastHolds = useProjectCloneToastHolds();
   const handleNewThread = useNewThreadHandler();
   const { draftId: routeDraftId } = useParams({ strict: false });
   const cancelClone = useAtomCommand(sourceControlEnvironment.cancelProjectClone, {
@@ -113,14 +115,14 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
         closeToast();
         continue;
       }
-      if (sameAttempt && tracked.renderedKey === key) continue;
       if (
-        isProjectCloneToastSilenced(ref) &&
+        (isProjectCloneToastSilenced(ref) || toastHolds.has(scopedProjectKey(ref))) &&
         (clone.phase === "running" || clone.phase === "done")
       ) {
         closeToast();
         continue;
       }
+      if (sameAttempt && tracked.renderedKey === key) continue;
       if (
         sameAttempt &&
         tracked.closed &&
@@ -229,6 +231,7 @@ function EnvironmentCloneToasts({ environmentId }: { environmentId: EnvironmentI
     openProject,
     removeClonedProject,
     retryClone,
+    toastHolds,
   ]);
 
   useEffect(

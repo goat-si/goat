@@ -3,6 +3,12 @@ import { toKindScopedComposerContextId } from "@goat/shared/composerContextRefer
 import { threadTranscriptHeader } from "@goat/shared/threadTranscript";
 import * as DateTime from "effect/DateTime";
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 export function threadContextAttachment(
   environmentId: EnvironmentId,
   transcript: OrchestrationV2ThreadTranscript,
@@ -12,7 +18,8 @@ export function threadContextAttachment(
     "thread",
     `${environmentId}:${transcript.threadId}:${updatedAt}`,
   );
-  const title = transcript.title.replace(/[^\p{L}\p{N}._ -]/gu, "_").slice(0, 64) || "Thread";
+  const sanitized = transcript.title.replace(/[^\p{L}\p{N}._ -]/gu, "_");
+  const title = sanitized.slice(0, splitsSurrogatePair(sanitized, 64) ? 63 : 64) || "Thread";
   return new File(
     [
       threadTranscriptHeader(environmentId, transcript),

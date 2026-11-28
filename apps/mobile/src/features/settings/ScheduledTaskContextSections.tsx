@@ -138,9 +138,11 @@ export function ScheduledTaskContextSections({
             };
             // Only a server with thread modes moves a task off its thread with its project.
             setDraft(
-              config?.environment?.capabilities?.scheduledTaskThreadModes === true
-                ? withProject(next, project.id)
-                : { ...next, projectId: project.id },
+              withProject(
+                next,
+                project.id,
+                config?.environment?.capabilities?.scheduledTaskThreadModes === true,
+              ),
             );
           }}
         />

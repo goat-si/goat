@@ -79,6 +79,7 @@ interface NewThreadWorkspaceOptions {
   envMode?: DraftThreadEnvMode;
   sshDestination?: DraftSshDestination | null;
   startFromOrigin?: boolean;
+  workspaceExplicit?: boolean;
 }
 
 // The workspace options the caller passed explicitly, shaped for the draft
@@ -91,6 +92,9 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.sshDestination !== undefined ? { sshDestination: options.sshDestination } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
+    ...(options?.envMode !== undefined || options?.startFromOrigin !== undefined
+      ? { workspaceExplicit: true }
+      : {}),
   };
 }
 
@@ -377,6 +381,7 @@ export function createNewThreadHandler(router: AnyRouter) {
         const workspaceContext = requestedWorkspaceContext;
         setDraftThreadContext(emptyStoredDraftThread.draftId, {
           ...workspaceContext,
+          ...(!callerChoseWorkspace ? { workspaceExplicit: false } : {}),
           ...(!isDraftAlreadyOpen ? { runtimeMode: defaultRuntimeMode } : {}),
           ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
         });
@@ -493,6 +498,9 @@ export function createNewThreadHandler(router: AnyRouter) {
         envMode: initialEnvMode,
         sshDestination: options?.sshDestination ?? null,
         startFromOrigin,
+        ...(options?.envMode !== undefined || options?.startFromOrigin !== undefined
+          ? { workspaceExplicit: true }
+          : {}),
         runtimeMode: defaultRuntimeMode,
         ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
       });

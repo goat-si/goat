@@ -309,10 +309,30 @@ export type ClickAim =
   | { readonly frame?: Frame; readonly point: Point };
 
 /** The offset of a frame's content inside the parent frame's viewport: past border and padding. */
+const deepestElementScript = (x: number, y: number) => `(() => {
+  let el = document.elementFromPoint(${x}, ${y});
+  while (el && el.shadowRoot) {
+    const inner = el.shadowRoot.elementFromPoint(${x}, ${y});
+    if (!inner || inner === el) break;
+    el = inner;
+  }
+  return el;
+})()`;
+
 const contentOrigin = (x: number, y: number) => `(() => {
-  const el = document.elementFromPoint(${x}, ${y});
+  const el = ${deepestElementScript(x, y)};
   if (!el) return null;
   const box = el.getBoundingClientRect();
+  if (Math.abs(box.width - el.offsetWidth) > 0.5 || Math.abs(box.height - el.offsetHeight) > 0.5)
+    return null;
+  for (let current = el; current;) {
+    const currentStyle = getComputedStyle(current);
+    for (const property of ["transform", "rotate", "scale", "translate", "zoom"]) {
+      const value = currentStyle.getPropertyValue(property);
+      if (value !== "" && value !== (property === "zoom" ? "1" : "none")) return null;
+    }
+    current = current.parentElement ?? current.getRootNode().host;
+  }
   const style = getComputedStyle(el);
   return [box.left + el.clientLeft + parseFloat(style.paddingLeft),
     box.top + el.clientTop + parseFloat(style.paddingTop)];
@@ -332,12 +352,13 @@ export const aimClick = async (
   locator: Locator | null,
   point: Point,
   gate?: ReadinessGate,
+  timeoutMs = 2 * SETTLE_MS,
 ): Promise<ClickAim> => {
   const finding = findAim(page, locator, point, gate).catch((cause: unknown) => {
     if (gate?.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
     return undefined;
   });
-  const aim = await bounded(finding, 2 * SETTLE_MS);
+  const aim = await bounded(finding, timeoutMs);
   if (aim === undefined) void finding.then((late) => disposeAim(late, gate)).catch(constVoid);
   return aim ?? { point };
 };
@@ -359,9 +380,9 @@ const findAim = async (
   }
   let frame = page.mainFrame();
   let at = point;
-  for (let depth = 0; depth < 3; depth++) {
+  for (let depth = 0; depth < 8; depth++) {
     const hit = await actionCall(gate, () =>
-      frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`),
+      frame.evaluateHandle(deepestElementScript(at.x, at.y)),
     );
     const element = hit.asElement();
     const child = element

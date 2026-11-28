@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vite-plus/test";
-import { subscribeOncePerTask } from "./fileTreeExpansion";
+import {
+  readExpandedDirectories,
+  subscribeOncePerTask,
+  writeExpandedDirectories,
+} from "./fileTreeExpansion";
 
 it("coalesces updates and does not notify after unsubscribe", async () => {
   let emit = () => {};
@@ -23,4 +27,11 @@ it("coalesces updates and does not notify after unsubscribe", async () => {
   await Promise.resolve();
   expect(listener).toHaveBeenCalledTimes(1);
   expect(unsubscribeModel).toHaveBeenCalledOnce();
+});
+
+it("keeps the 100 expanded folders nearest the root, so a remount does not list hundreds", () => {
+  const deep = Array.from({ length: 150 }, (_, index) => `pkg/mod/d${index}/`);
+  writeExpandedDirectories("env:/repo", [...deep, "pkg/mod/", "pkg/"]);
+  const restored = readExpandedDirectories("env:/repo");
+  expect(restored).toEqual(["pkg/", "pkg/mod/", ...deep.slice(0, 98)]);
 });

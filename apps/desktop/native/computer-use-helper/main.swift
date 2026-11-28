@@ -27,8 +27,11 @@ func emit(_ object: [String: Any]) {
   }
   data.append(0x0A)
   outputLock.lock()
-  FileHandle.standardOutput.write(data)
+  let result = writeAllToFileDescriptor(STDOUT_FILENO, data: data)
   outputLock.unlock()
+  if !result.ok && result.errorCode == EPIPE {
+    _exit(0)
+  }
 }
 
 // MARK: - Code identity
@@ -454,7 +457,11 @@ final class DriverService {
       accessibility: { AXIsProcessTrustedWithOptions([key: $0] as CFDictionary) },
       screenRecording: { $0 ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess() },
       wait: { Thread.sleep(forTimeInterval: $0) })
-    return ["accessibility": granted.accessibility, "screenRecording": granted.screenRecording]
+    return [
+      "accessibility": granted.accessibility,
+      "screenRecording": granted.screenRecording,
+      "inputMonitoring": CGPreflightListenEventAccess(),
+    ]
   }
 
   func driverEnvironment(_ settable: [[String: Any]]) -> [String: String] {
@@ -813,6 +820,11 @@ final class PrivateModeWatch {
 /// (a missing or stale Accessibility grant, an app that does not answer) is `.unknown`, which
 /// keeps windows out of frames (HelperSafety.isPrivate) but pauses no agent.
 func focusedSecureField() -> FocusedSecureField {
+  if let session = CGSessionCopyCurrentDictionary() as? [String: Any],
+    let securePid = HelperSafety.sessionSecureInputPid(session)
+  {
+    return .secure(pid: securePid, windowId: frontWindow(of: pid_t(clamping: securePid)) ?? 0)
+  }
   let system = AXUIElementCreateSystemWide()
   var focused: CFTypeRef?
   let read = AXUIElementCopyAttributeValue(
@@ -822,10 +834,16 @@ func focusedSecureField() -> FocusedSecureField {
     return .none
   }
   let element = focused as! AXUIElement
+  var role: CFTypeRef?
+  let roleRead = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
   var subrole: CFTypeRef?
-  guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &subrole) == .success,
-    (subrole as? String) == (kAXSecureTextFieldSubrole as String)
-  else { return .none }
+  let subroleRead = AXUIElementCopyAttributeValue(
+    element, kAXSubroleAttribute as CFString, &subrole)
+  let roleName = roleRead == .success ? (role as? String) : nil
+  let subroleName = subroleRead == .success ? (subrole as? String) : nil
+  guard HelperSafety.isSecureTextField(role: roleName, subrole: subroleName) else {
+    return .none
+  }
   var pid: pid_t = 0
   guard AXUIElementGetPid(element, &pid) == .success else { return .unknown }
   return .secure(pid: Int(pid), windowId: frontWindow(of: pid) ?? 0)

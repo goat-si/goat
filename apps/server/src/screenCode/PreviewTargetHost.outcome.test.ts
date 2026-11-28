@@ -227,3 +227,28 @@ it.live("tab observations do not attach app observation evidence", () =>
     ).toBeUndefined();
   }),
 );
+
+it.effect("a click returning openedTabId confirms the receipt and carries popup evidence", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.clickResult = {
+      effect: "confirmed",
+      evidence: ["popup"],
+      url: "https://example.test/",
+      openedTabId: "popup-tab-9",
+    };
+    yield* fixture.dispatch("claim_tab");
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    const reply = yield* fixture.dispatch("click", { ref });
+    expect(reply?.outcome).toBe("ok");
+    expect(reply?.value).toMatchObject({ openedTabId: "popup-tab-9" });
+    const receipt = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.find((entry) => entry.receipt.method === "click")?.receipt;
+    expect(receipt).toMatchObject({
+      category: "confirmed",
+      evidence: ["click:popup", "popup:popup-tab-9"],
+      outcome: { dispatch: "confirmed", effect: "confirmed" },
+    });
+  }),
+);

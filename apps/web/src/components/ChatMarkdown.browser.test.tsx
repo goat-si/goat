@@ -322,19 +322,40 @@ it("selects the picture source for the current theme", async () => {
   });
   expect(screen.container.querySelector("img")?.getAttribute("src")).toBe(dark);
 });
-it("reuses the parse of a streaming reply's finished blocks when it remounts", async () => {
+it("fades a streaming reply's blocks in once, not again when it remounts", async () => {
   setup();
+  const noMotion = document.querySelector<HTMLStyleElement>("style[data-test-no-motion]");
+  using _motion = { [Symbol.dispose]: () => noMotion && (noMotion.disabled = false) };
+  if (noMotion) noMotion.disabled = true;
+  const isFading = (element: Element) =>
+    element.getAnimations().some((animation) => animation instanceof CSSTransition);
   const message = (
-    <ChatMarkdown cwd="/tmp/project" text={"Finished block\n\nStill growing"} isStreaming />
+    <ChatMarkdown
+      cwd="/tmp/project"
+      text={"Finished block\n\nStill growing"}
+      isStreaming
+      streamingId="remounted-reply"
+    />
   );
   {
     await using first = await render(
-      <ChatMarkdown cwd="/tmp/project" text={"Finished block\n\n"} isStreaming />,
+      <ChatMarkdown
+        cwd="/tmp/project"
+        text={"Finished block\n\n"}
+        isStreaming
+        streamingId="remounted-reply"
+      />,
+    );
+    await vi.waitFor(() =>
+      expect(isFading(first.getByText("Finished block").element())).toBe(true),
     );
     await first.rerender(message);
+    await vi.waitFor(() => expect(isFading(first.getByText("Still growing").element())).toBe(true));
   }
   await using screen = await render(message);
-  await expect.element(screen.getByText("Still growing")).toBeVisible();
+  await expect
+    .element(screen.getByText("Still growing"))
+    .toHaveStyle({ opacity: "1", transitionDuration: "0s" });
   expect(parsedSources.filter((source) => source.includes("Finished block"))).toHaveLength(1);
 });
 it("reuses the parse of a remounted message that has stable extra plugins", async () => {

@@ -16,7 +16,8 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused, useNavigation } from "@react-navigation/native";
+import { useAppActive } from "../../lib/appState";
 import {
   effectiveSnoozed,
   threadWokeAt,
@@ -30,7 +31,13 @@ import type { LegendListRef } from "@legendapp/list/react-native";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { NativeLayoutObserver } from "../../native/NativeLayoutObserver";
 import * as Regions from "../../lib/reserved-regions";
-import type { MessageId, RuntimeRequestId, UsageLimitsReport, RunId } from "@goat/contracts";
+import type {
+  MessageId,
+  RuntimeRequestId,
+  ScopedThreadRef,
+  UsageLimitsReport,
+  RunId,
+} from "@goat/contracts";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -46,7 +53,7 @@ import {
 import { resolveSubagentPillSegment } from "@goat/client-runtime/state/thread-subagents";
 import { formatModelSelectionEffort } from "@goat/client-runtime/state/thread-execution";
 import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
-import { isProviderNativeSubagentThread } from "@goat/contracts";
+import { AuthOrchestrationOperateScope, isProviderNativeSubagentThread } from "@goat/contracts";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import * as Haptics from "expo-haptics";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -95,11 +102,9 @@ import { getComposerDraftSnapshot } from "../../state/use-composer-drafts";
 import { RenderErrorBoundary, RenderFailureView } from "../../components/RenderErrorBoundary";
 import { ANDROID_READING_MAX_WIDTH, CHAT_CONTENT_MAX_WIDTH } from "../../lib/layout";
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
-import { deviceEnvironment } from "../../state/device";
-import { useEnvironmentQuery } from "../../state/query";
-import { threadDevicePreviews } from "../devices/threadDevicePreviews";
+import { useThreadDevicePreviewCount } from "../../state/device";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
-import { useThreadServerBrowserTabs } from "../../state/preview";
+import { useThreadServerBrowserTabCount } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { finishThreadMessageJump } from "./threadMessageJump";
@@ -113,6 +118,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { orchestrationEnvironment } from "../../state/orchestration";
+import { useEnvironmentScopeDenied } from "../../state/session";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
 import { LiveThreadWorkspaceBanner } from "./LiveThreadWorkspaceBanner";
@@ -165,6 +171,16 @@ import type { ThreadDetailScreenProps } from "./ThreadDetailScreenProps";
 import { useToolCallVisibility } from "../../state/toolCallVisibility";
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
+
+// A child, so focus and app state changes do not re-render the thread body.
+// The native stack keeps covered screens mounted, so gate on focus too.
+function ThreadStreamHaptics(props: { readonly threadRef: ScopedThreadRef | null }) {
+  const screenIsFocused = useIsFocused();
+  const appIsActive = useAppActive();
+  useAtomMount(threadStreamHaptics(screenIsFocused && appIsActive ? props.threadRef : null));
+  return null;
+}
+
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -207,10 +223,10 @@ function ThreadDetailBody(
   const openInspector = useOpenThreadInspector();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
-  const deviceState = useEnvironmentQuery(
-    deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
+  const devicePreviewCount = useThreadDevicePreviewCount(
+    props.environmentId,
+    props.selectedThread.id,
   );
-  const devicePreviews = threadDevicePreviews(deviceState.data, props.selectedThread.id);
   const openDevicePreview = () => {
     Keyboard.dismiss();
     if (
@@ -225,11 +241,12 @@ function ThreadDetailBody(
       threadId: props.selectedThread.id,
     });
   };
-  const browserTabs = useThreadServerBrowserTabs({
+  const serverBrowserEnabled =
+    !props.draftMode && props.serverConfig?.environment.capabilities.serverBrowser === true;
+  const browserTabCount = useThreadServerBrowserTabCount({
     environmentId: props.environmentId,
     threadId: props.selectedThread.id,
-    enabled:
-      !props.draftMode && props.serverConfig?.environment.capabilities.serverBrowser === true,
+    enabled: serverBrowserEnabled,
   });
   const openBrowserPreview = (tabId?: string) => {
     Keyboard.dismiss();
@@ -345,6 +362,10 @@ function ThreadDetailBody(
   });
   const unsnoozeThread = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const unsettleThread = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const canTriageThread = !useEnvironmentScopeDenied(
+    props.environmentId,
+    AuthOrchestrationOperateScope,
+  );
   const updateMetadata = useAtomCommand(threadEnvironment.updateMetadata, { reportFailure: false });
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   const { runStop: anyRunStop, startHold } = useRunStopAndStartHold(
@@ -386,7 +407,7 @@ function ThreadDetailBody(
     if (result.value.outcome === "shared") {
       Dialog.alert(
         "Turn stopped; the agent process kept running",
-        `${others === 0 ? "Newer work is using it." : `It is shared with ${others} working ${others === 1 ? "thread" : "threads"}. Stop those to free it.`}`,
+        `${others === 0 ? "Newer work is using it." : `It is shared with ${others} working ${others === 1 ? "thread. Stop that thread" : "threads. Stop those"} to free it.`}`,
       );
     }
   };
@@ -434,7 +455,9 @@ function ThreadDetailBody(
     latestRunCompletedAt: props.selectedThread.latestRun?.completedAt ?? null,
   });
   const runStatusAction = async (action: "stop" | "wake" | "unsettle" | "dismiss") => {
-    if (statusPending || !props.canOperateThread) return;
+    const permitted =
+      action === "wake" || action === "unsettle" ? canTriageThread : props.canOperateThread;
+    if (statusPending || !permitted) return;
     const request: BackgroundWorkStopRequest = {
       threadKey: selectedThreadKey,
       taskIds:
@@ -548,7 +571,8 @@ function ThreadDetailBody(
                   ? "Un-settle"
                   : "Dismiss",
             accessibilityLabel: snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss",
-            disabled: !props.canOperateThread || statusPending,
+            disabled:
+              !(snoozeShown || settled ? canTriageThread : props.canOperateThread) || statusPending,
             onPress: () =>
               void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
           },
@@ -627,8 +651,8 @@ function ThreadDetailBody(
     showWorkingControl ||
     queuedCount > 0 ||
     agentsSegment !== null ||
-    devicePreviews.length > 0 ||
-    browserTabs.tabs.length > 0;
+    devicePreviewCount > 0 ||
+    browserTabCount > 0;
   const selectedThreadFeed = props.selectedThreadFeed;
   const { jumpMessageId, jumpMessageLoaded } = useThreadMessageJumpLoading({
     threadKey: selectedThreadKey,
@@ -969,7 +993,6 @@ function ThreadDetailBody(
         }
       : { width: "auto", right: controlInsets.right },
   );
-  useAtomMount(threadStreamHaptics(props.selectedThreadDetailRef));
   const selectedProviderSkills = useThreadTranscriptSkills(props, isProviderSubagent);
   const currentPendingApprovals = () =>
     props.selectedThreadDetailRef === null
@@ -1119,6 +1142,7 @@ function ThreadDetailBody(
   };
   return (
     <View className="flex-1" onLayout={handleScreenLayout}>
+      <ThreadStreamHaptics threadRef={props.selectedThreadDetailRef} />
       {!usesNativeWorkspaceColumns ? <NativeLayoutObserver onChange={setScreenMetrics} /> : null}
       {props.draftMode ? (
         props.draftMode.content(
@@ -1224,8 +1248,7 @@ function ThreadDetailBody(
           key={selectedThreadKey}
           environmentId={props.environmentId}
           threadId={props.selectedThread.id}
-          tabs={browserTabs.tabs}
-          loaded={browserTabs.loaded}
+          enabled={serverBrowserEnabled}
           top={navigationHeaderHeight + 8}
           onOpen={openBrowserPreview}
         />
@@ -1291,13 +1314,13 @@ function ThreadDetailBody(
                   extensionStatus={piExtensionForControl(floatingStatus, extensionStatus)}
                   lift={floatingControlLift}
                   devicePreview={
-                    devicePreviews.length > 0
-                      ? { count: devicePreviews.length, onPress: openDevicePreview }
+                    devicePreviewCount > 0
+                      ? { count: devicePreviewCount, onPress: openDevicePreview }
                       : null
                   }
                   browserPreview={
-                    browserTabs.tabs.length > 0
-                      ? { count: browserTabs.tabs.length, onPress: () => openBrowserPreview() }
+                    browserTabCount > 0
+                      ? { count: browserTabCount, onPress: () => openBrowserPreview() }
                       : null
                   }
                   showScrollToEnd={showScrollToEndButton}

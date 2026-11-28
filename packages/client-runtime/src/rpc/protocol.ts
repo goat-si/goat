@@ -37,6 +37,7 @@ export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
   onTimeout: Effect.Effect<void>,
   slowTimeout: Duration.Duration = Duration.fromInputUnsafe(PING_TIMEOUT),
   drainIo: Effect.Effect<void> = drainNodeIo,
+  pingInterval?: Duration.Input,
 ) {
   const socket = yield* Socket.Socket;
   const serialization = yield* RpcSerialization.RpcSerialization;
@@ -100,6 +101,7 @@ export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
     },
   };
   return yield* RpcClient.makeProtocolSocket({
+    ...(pingInterval !== undefined ? { pingInterval } : {}),
     pingTimeout: Infinity,
     retryTransientErrors: false,
     retryPolicy: Schedule.recurs(0),

@@ -21,6 +21,363 @@ import * as LinuxFrameSource from "./linuxFrames/LinuxFrameSource.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const thread = ThreadId.make("thread-person");
+const otherThread = ThreadId.make("thread-other");
+
+const readinessFor = (
+  generation: number,
+  signals: DesktopCuaReadinessReport["signals"] = {
+    humanInput: "supported",
+    privateMode: "unsupported",
+  },
+): DesktopCuaReadinessReport => ({
+  version: 1,
+  type: "cuaReadiness",
+  generation,
+  readiness: {
+    grants: { accessibility: "granted", screenCapture: "granted" },
+    helper: "authenticated",
+    capture: "ready",
+    tree: "ready",
+    input: "background",
+    blockers: [],
+    reasons: [],
+  },
+  signals,
+});
+
+it.effect("stops all active controls on cuaPersonStop and ignores stale generations", () =>
+  Effect.gen(function* () {
+    const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+    const accepted = yield* Ref.make(Option.some(readinessFor(2)));
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const signals = yield* leases.subscribe;
+      const authorityChanges: Array<{
+        readonly kind: string;
+        readonly threadId: ThreadId;
+        readonly controlId: string;
+        readonly terminal?: string;
+      }> = [];
+      const unsubscribe = leases.onAuthorityChange?.(
+        (change) => void authorityChanges.push(change),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribe?.()));
+
+      const first = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+      yield* PubSub.take(signals);
+      const second = Option.getOrThrow(yield* leases.control(otherThread, Option.none()));
+      yield* PubSub.take(signals);
+
+      yield* Queue.offer(reports, {
+        version: 1,
+        type: "cuaPersonStop",
+        generation: 1,
+        reason: "person_esc",
+      });
+      yield* Queue.offer(reports, readinessFor(2));
+      yield* PubSub.take(signals);
+      assert.equal(yield* PubSub.remaining(signals), 0);
+      assert.equal((yield* leases.controlState(thread, first.controlId))._tag, "active");
+      assert.equal((yield* leases.controlState(otherThread, second.controlId))._tag, "active");
+      assert.deepEqual(authorityChanges, []);
+
+      yield* Queue.offer(reports, {
+        version: 1,
+        type: "cuaPersonStop",
+        generation: 2,
+        reason: "person_esc",
+      });
+      yield* PubSub.take(signals);
+      assert.deepEqual(yield* leases.controlState(thread, first.controlId), {
+        _tag: "ended",
+        reason: "stopped_all",
+      });
+      assert.deepEqual(yield* leases.controlState(otherThread, second.controlId), {
+        _tag: "ended",
+        reason: "stopped_all",
+      });
+      assert.deepEqual(
+        yield* leases.callReservation(thread, {
+          action: "reserve",
+          controlId: first.controlId,
+          connectionId: "driver:person-stop",
+          callId: "click",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        }),
+        { status: "refused", detail: "stopped_all" },
+      );
+      assert.deepEqual(authorityChanges, [
+        {
+          kind: "stop",
+          threadId: thread,
+          controlId: first.controlId,
+          terminal: "stopped_by_person",
+        },
+        {
+          kind: "stop",
+          threadId: otherThread,
+          controlId: second.controlId,
+          terminal: "stopped_by_person",
+        },
+      ]);
+
+      const third = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+      yield* PubSub.take(signals);
+      yield* Queue.offer(reports, {
+        version: 1,
+        type: "cuaPersonStop",
+        reason: "person_esc",
+      });
+      yield* PubSub.take(signals);
+      assert.deepEqual(yield* leases.controlState(thread, third.controlId), {
+        _tag: "ended",
+        reason: "stopped_all",
+      });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({
+                cuaSafety: Stream.fromQueue(reports),
+                cuaReadiness: Ref.get(accepted),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect(
+  "pauses active controls on cuaSessionLock without auto-resuming on unlock and ignores stale generations",
+  () =>
+    Effect.gen(function* () {
+      const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+      const accepted = yield* Ref.make(Option.some(readinessFor(3)));
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const signals = yield* leases.subscribe;
+        const authorityChanges: Array<{
+          readonly kind: string;
+          readonly threadId: ThreadId;
+          readonly controlId: string;
+          readonly terminal?: string;
+        }> = [];
+        const unsubscribe = leases.onAuthorityChange?.(
+          (change) => void authorityChanges.push(change),
+        );
+        yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribe?.()));
+
+        const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+        yield* PubSub.take(signals);
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 2,
+          locked: true,
+          reasons: ["screen_locked"],
+        });
+        yield* Queue.offer(reports, readinessFor(3));
+        yield* PubSub.take(signals);
+        assert.equal(yield* PubSub.remaining(signals), 0);
+        assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+        assert.deepEqual(authorityChanges, []);
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 3,
+          locked: true,
+          reasons: ["screen_locked"],
+        });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+        assert.deepEqual(authorityChanges, [
+          {
+            kind: "pause",
+            threadId: thread,
+            controlId: control.controlId,
+            terminal: "screen_locked",
+          },
+        ]);
+        const refusedWhileLocked = yield* leases.callReservation(thread, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "driver:session-lock",
+          callId: "read",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        });
+        assert.equal(refusedWhileLocked.status, "refused");
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 3,
+          locked: true,
+          reasons: ["screen_locked", "system_suspended"],
+        });
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 2,
+          locked: false,
+          reasons: [],
+        });
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 3,
+          locked: false,
+          reasons: [],
+        });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+        const refusedAfterUnlock = yield* leases.callReservation(thread, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "driver:session-lock",
+          callId: "read-after-unlock",
+          interruptions: 1,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        });
+        assert.equal(refusedAfterUnlock.status, "refused");
+
+        yield* leases.resume;
+        yield* PubSub.take(signals);
+        const resumed = yield* leases.controlState(thread, control.controlId);
+        assert.equal(resumed._tag, "active");
+        if (resumed._tag === "active") {
+          assert.deepEqual(resumed.interruptions, { count: 1, last: "screen_locked" });
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  cuaSafety: Stream.fromQueue(reports),
+                  cuaReadiness: Ref.get(accepted),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
+
+it.effect(
+  "clears host lock state on unlock before mint and pauses controls minted while locked",
+  () =>
+    Effect.gen(function* () {
+      const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+      const accepted = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
+      yield* Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const signals = yield* leases.subscribe;
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 1,
+          locked: true,
+          reasons: ["screensaver_active"],
+        });
+        yield* Queue.offer(reports, readinessFor(1));
+        yield* PubSub.take(signals);
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 1,
+          locked: false,
+          reasons: [],
+        });
+        yield* PubSub.take(signals);
+
+        const first = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+        yield* PubSub.take(signals);
+        assert.equal((yield* leases.controlState(thread, first.controlId))._tag, "active");
+        yield* leases.stop(thread);
+        yield* PubSub.take(signals);
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 1,
+          locked: true,
+          reasons: ["session_deactivated"],
+        });
+        yield* Queue.offer(reports, readinessFor(1));
+        yield* PubSub.take(signals);
+
+        const second = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, second.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+
+        yield* Queue.offer(reports, {
+          version: 1,
+          type: "cuaSessionLock",
+          generation: 1,
+          locked: false,
+          reasons: [],
+        });
+        yield* PubSub.take(signals);
+        assert.deepEqual(yield* leases.controlState(thread, second.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+
+        yield* leases.resume;
+        yield* PubSub.take(signals);
+        assert.equal((yield* leases.controlState(thread, second.controlId))._tag, "active");
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          ComputerUseLeases.layer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                database,
+                NodeServices.layer,
+                DesktopTelemetryReceiver.layerTest({
+                  cuaSafety: Stream.fromQueue(reports),
+                  cuaReadiness: Ref.get(accepted),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+    }),
+);
 
 it.effect(
   "a Linux server that captures its own windows has live frames without a desktop helper",

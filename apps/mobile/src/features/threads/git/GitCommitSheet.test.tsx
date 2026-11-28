@@ -8,12 +8,28 @@ type InputProps = {
   onChangeText: (value: string) => void;
 };
 type ButtonProps = { label: string; disabled?: boolean; onPress: () => void };
+type PressProps = {
+  accessibilityLabel?: string;
+  accessibilityState?: { checked?: boolean };
+  onPress: () => void;
+};
 const state = vi.hoisted(() => ({
+  files: [{ path: "src/a.ts", insertions: 1, deletions: 0 }] as Array<{
+    path: string;
+    insertions: number;
+    deletions: number;
+  }>,
   inputs: new Map<string, InputProps>(),
   buttons: new Map<string, ButtonProps>(),
+  pressables: new Map<string, PressProps>(),
   goBack: vi.fn(),
   focused: true,
-  commits: [] as Array<{ commitMessage?: string }>,
+  commits: [] as Array<{
+    action?: string;
+    featureBranch?: boolean;
+    commitMessage?: string;
+    filePaths?: ReadonlyArray<string>;
+  }>,
   finishCommit: null as ((result: object | null) => void) | null,
   failureRenders: 0,
 }));
@@ -26,7 +42,10 @@ vi.mock("react-native", () => ({
   useWindowDimensions: () => ({ height: 800 }),
   View: ({ children }: { children: ReactNode }) => children,
   ScrollView: ({ children }: { children: ReactNode }) => children,
-  Pressable: () => null,
+  Pressable: (props: PressProps) => {
+    if (props.accessibilityLabel) state.pressables.set(props.accessibilityLabel, props);
+    return null;
+  },
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0 }),
@@ -55,7 +74,7 @@ vi.mock("../../../state/query", () => ({
     data: {
       refName: "feature",
       isDefaultRef: false,
-      workingTree: { files: [{ path: "src/a.ts", insertions: 1, deletions: 0 }] },
+      workingTree: { files: [...state.files] },
     },
   }),
 }));
@@ -132,4 +151,51 @@ it("leaves navigation alone when the person left the sheet before the commit fin
   await act(async () => state.finishCommit!({ commit: { status: "created" } }));
   expect(state.goBack).not.toHaveBeenCalled();
   act(() => root.unmount());
+});
+
+it("treats remaining files as all selected when an excluded file disappears", async () => {
+  const initialFiles = state.files;
+  const twoFiles = [
+    { path: "include.ts", insertions: 1, deletions: 0 },
+    { path: "later.ts", insertions: 1, deletions: 0 },
+  ];
+  state.files = twoFiles;
+  state.commits = [];
+  state.goBack.mockClear();
+  state.focused = true;
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement("div"));
+  const props = {} as Parameters<typeof GitCommitSheet>[0];
+  const render = () => {
+    state.buttons.clear();
+    state.pressables.clear();
+    act(() => root.render(<GitCommitSheet {...props} />));
+  };
+  const toggleAllButton = () =>
+    state.buttons.get("Select all") ?? state.buttons.get("Deselect all");
+  try {
+    render();
+    act(() => state.pressables.get("later.ts")!.onPress());
+    state.files = twoFiles.slice(0, 1);
+    render();
+
+    expect(toggleAllButton()?.label).toBe("Deselect all");
+    act(() => toggleAllButton()!.onPress());
+    state.files = twoFiles;
+    render();
+    expect(state.pressables.get("later.ts")!.accessibilityState?.checked).toBe(false);
+    expect(state.pressables.get("include.ts")!.accessibilityState?.checked).toBe(false);
+
+    act(() => state.pressables.get("include.ts")!.onPress());
+    state.files = twoFiles.slice(0, 1);
+    render();
+    act(() => state.buttons.get("Commit changes")!.onPress());
+    await act(async () => state.finishCommit!({ commit: { status: "created" } }));
+    expect(state.commits).toEqual([
+      { action: "commit", featureBranch: false, filePaths: ["include.ts"] },
+    ]);
+  } finally {
+    act(() => root.unmount());
+    state.files = initialFiles;
+  }
 });

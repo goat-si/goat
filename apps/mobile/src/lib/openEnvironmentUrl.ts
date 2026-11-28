@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 import * as Dialog from "../components/ui/Dialog";
 import { appAtomRegistry } from "../state/atom-registry";
 import { environmentSession } from "../state/session";
-import { type ExternalUrlTarget, tryOpenExternalUrl } from "./openExternalUrl";
+import { type ExternalUrlTarget, tryOpenWebLink } from "./openExternalUrl";
 
 /** Opens a URL from an environment; its loopback servers live on that machine, never on this phone. */
 export async function tryOpenEnvironmentUrl(
@@ -21,5 +21,5 @@ export async function tryOpenEnvironmentUrl(
     Dialog.alert("Unable to open link", resolved.reason);
     return false;
   }
-  return tryOpenExternalUrl(resolved.url, target);
+  return tryOpenWebLink(resolved.url, target);
 }

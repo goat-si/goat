@@ -425,11 +425,11 @@ function Sidebar({
         >
           <div
             className={cn(
-              "flex h-full w-full flex-col",
+              "isolate flex h-full w-full flex-col",
               variant === "framed"
                 ? // The panel surface starts under the titlebar strip; the strip shows the frame.
                   // Its corner matches the content frame that outlines it.
-                  "relative isolate bg-transparent before:absolute before:inset-x-0 before:top-[calc(var(--workspace-topbar-height)-1px)] before:bottom-0 before:-z-10 before:rounded-tl-xl before:bg-sidebar"
+                  "relative bg-transparent before:absolute before:inset-x-0 before:top-[calc(var(--workspace-topbar-height)-1px)] before:bottom-0 before:-z-10 before:rounded-tl-xl before:bg-sidebar"
                 : "bg-sidebar surface-grain group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm/5",
             )}
             data-sidebar="sidebar"

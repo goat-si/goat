@@ -171,8 +171,10 @@ import type { SidebarThreadSummary } from "../types";
 
 import { cn } from "~/lib/utils";
 import {
+  buildBulkMarkUnreadContextMenu,
   buildDraftActionMenuItems,
   buildThreadActionMenuItems,
+  canMarkLatestRunUnread,
   threadActionRequiresOperate,
 } from "./threadActionMenu.logic";
 import {
@@ -811,7 +813,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const forkThread = useForkThread();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
-  const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const acknowledgeWoke = useAcknowledgeThreadWoke();
@@ -875,7 +876,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   } | null>(null);
   const snoozingThreadKeysRef = useRef(new Set<string>());
   const removeFromSelection = useThreadSelectionStore((s) => s.removeFromSelection);
-  const openAddProjectCommandPalette = () => openCommandPalette({ open: "add-project" });
+  const openAddProjectCommandPalette = () => {
+    if (isMobile) setOpenMobile(false);
+    openCommandPalette({ open: "add-project" });
+  };
   const routeThreadRef = resolveActiveThreadRouteRef(routeTarget, routeDraftThread);
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
   const readOpensPullRequestsInRightPanel = useStableCallback(() => routeThreadRef !== null);
@@ -1000,9 +1004,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const openProjectSettings = useStableCallback(
     (projectGroup: SidebarProjectSnapshot, projectRef?: ScopedProjectRef) => {
-      if (isMobile) {
-        setOpenMobile(false);
-      }
+      if (isMobile) setOpenMobile(false);
       void router.navigate({
         to: "/projects/$projectKey",
         params: {
@@ -1179,10 +1181,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    if (isMobile) setOpenMobile(false);
     return router.navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
@@ -1213,9 +1212,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
 
   const navigateToDraft = (draftId: DraftId) => {
     clearSelection();
-    if (isMobile) {
-      setOpenMobile(false);
-    }
+    if (isMobile) setOpenMobile(false);
     void router.navigate({ to: "/draft/$draftId", params: { draftId } });
   };
 
@@ -1300,14 +1297,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const isMac = isMacPlatform(navigator.platform);
     const isModClick = isMac ? event.metaKey : event.ctrlKey;
     const threadKey = scopedThreadKey(threadRef);
+    const openThreadKey =
+      routeRowThreadKey !== null && orderedThreadKeysRef.current.includes(routeRowThreadKey)
+        ? routeRowThreadKey
+        : null;
     if (isModClick) {
       event.preventDefault();
-      toggleThreadSelection(threadKey);
+      toggleThreadSelection(threadKey, openThreadKey);
       return;
     }
     if (event.shiftKey) {
       event.preventDefault();
-      rangeSelectTo(threadKey, orderedThreadKeysRef.current);
+      rangeSelectTo(threadKey, orderedThreadKeysRef.current, openThreadKey);
       return;
     }
     if (isTrailingDoubleClick(event.detail) && routeThreadKey === threadKey) {
@@ -2035,6 +2036,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const unpinMenuItem = buildBulkUnpinContextMenuItem({
         pinnedCount: pinnedSelectedThreads.length,
       });
+      const markUnread = buildBulkMarkUnreadContextMenu(selectedThreads);
       // Presets sync across environments, so the first selected thread's stand for all.
       const snoozeEnvironmentId = selectedThreads[0]?.environmentId ?? null;
       const snoozePresets =
@@ -2047,7 +2049,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               : []),
             {
               id: "settle",
-              label: `Settle (${count})`,
+              label: `Settle (${settlingThreads.length})`,
               disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
             },
             ...(canSnoozeSelection
@@ -2083,7 +2085,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   },
                 ]
               : []),
-            { id: "mark-unread", label: `Mark unread (${count})` },
+            ...markUnread.items,
             {
               id: "delete",
               label: `Delete (${count})`,
@@ -2187,10 +2189,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         return;
       }
       if (clicked.value === "mark-unread") {
-        for (const threadKey of threadKeys) {
-          const thread = threadByKeyRef.current.get(threadKey);
-          if (thread) markThreadUnread(scopeThreadRef(thread.environmentId, thread.id));
-        }
+        markUnread.threads.forEach((t) => markThreadUnread(scopeThreadRef(t.environmentId, t.id)));
         clearSelection();
         return;
       }
@@ -2498,6 +2497,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
+              hasCompletedRun: canMarkLatestRunUnread(thread.latestRun),
               canShareWithGuest: appAtomRegistry.get(
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
@@ -2551,6 +2551,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               });
             return;
           case "new-thread-on-branch":
+            if (isMobile) setOpenMobile(false);
             await startThreadOnBranch(handleNewThread, thread);
             return;
           case "fork:current":

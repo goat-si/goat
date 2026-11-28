@@ -15,7 +15,7 @@ import * as Option from "effect/Option";
 
 import { environmentCatalog } from "../connection/catalog";
 import { serverEnvironment } from "./server";
-import { environmentShell } from "./shell";
+import { environmentShell, requiresPrimaryEnvironment } from "./shell";
 import { sshRuntime } from "./sshRuntime";
 
 const environmentShellSyncAtom = createEnvironmentShellSyncAtom(environmentShell.stateValueAtom);
@@ -71,6 +71,26 @@ export const environmentSummaries = createEnvironmentSummaryAtoms({
 
 const EMPTY_ENVIRONMENT_PRESENTATION_ATOM = Atom.make<EnvironmentPresentation | null>(null).pipe(
   Atom.withLabel("web-environment-presentation:empty"),
+);
+
+/** The catalog has loaded without a usable connection to the environment (as `enabledEnvironmentIds` counts them). */
+export const environmentUnreachableAtom = Atom.family((environmentId: EnvironmentId | null) =>
+  Atom.make((get) => {
+    if (environmentId === null) return false;
+    const catalog = get(environmentCatalog.catalogValueAtom);
+    if (!catalog.isReady) return false;
+    // The catalog is ready before primary discovery lands; until then it cannot prove absence.
+    if (
+      requiresPrimaryEnvironment() &&
+      !Array.from(catalog.entries.values()).some(
+        (entry) => entry.target._tag === "PrimaryConnectionTarget",
+      )
+    ) {
+      return false;
+    }
+    const entry = catalog.entries.get(environmentId);
+    return !entry?.enabled || entry.unsupportedReason !== undefined;
+  }),
 );
 
 // Only the phase, so a list row repaints when the phase changes, not on every

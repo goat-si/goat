@@ -7,6 +7,7 @@ import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
+import { validateClaimBrowserUrl } from "../preview/BrowserClaimBlockedHosts.ts";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -70,7 +71,9 @@ export const browserReplyOutsideClaim = (result: unknown, claim: ProxyBrowserCla
         if (url === undefined) continue;
         if (typeof url !== "string") return true;
         try {
-          if (!claim.origins.includes(new URL(url).origin)) return true;
+          const parsed = new URL(url);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return true;
+          if (!claim.origins.includes(parsed.origin)) return true;
         } catch {
           return true;
         }
@@ -152,6 +155,21 @@ export const scopeBrowserCall = (
     (args.window_id !== undefined && args.window_id !== claim.windowId)
   )
     return { refused: true as const };
+  if (args.url !== undefined) {
+    if (typeof args.url !== "string")
+      return { refused: true as const, reason: "invalid_url" as const };
+    const checked = validateClaimBrowserUrl(args.url, claim.origins[0]);
+    if (!checked.ok)
+      return {
+        refused: true as const,
+        reason: checked.reason,
+        ...(checked.protocol === undefined ? {} : { protocol: checked.protocol }),
+      };
+    if (claim.blockedHosts !== undefined && isBlockedBrowserUrl(checked.url, claim.blockedHosts))
+      return { refused: true as const, reason: "blocked_url" as const };
+    if (!claim.origins.includes(checked.origin))
+      return { refused: true as const, reason: "origin_outside_scope" as const };
+  }
   return {
     args: {
       ...args,
@@ -298,16 +316,28 @@ export const makeProxyBrowserClaims = (
       message.params?.arguments,
       claims.filter((claim) => !invalid.has(key(claim))),
     );
-    if ("refused" in browser)
+    if ("refused" in browser) {
+      const detail =
+        "reason" in browser && browser.reason === "blocked_url"
+          ? "blocked_url"
+          : "outside_manifest";
+      const text =
+        "reason" in browser && browser.reason === "disallowed_scheme"
+          ? `Refused browser URL with disallowed scheme ${"protocol" in browser && browser.protocol !== undefined ? browser.protocol : "unknown"}. Only http: and https: URLs are allowed. Nothing was sent.`
+          : "reason" in browser && browser.reason === "invalid_url"
+            ? "Invalid browser URL: expected a valid http: or https: URL. Nothing was sent."
+            : "reason" in browser && browser.reason === "blocked_url"
+              ? "This site is blocked in GOAT's browser settings. Nothing was sent."
+              : "reason" in browser && browser.reason === "origin_outside_scope"
+                ? "This browser URL is outside the claimed tab's approved origins. Nothing was sent."
+                : "This browser call has no approved claim.";
       return {
-        refused: refusal(
-          "none",
-          id,
-          message.method,
-          "outside_manifest",
-          "This browser call has no approved claim.",
-        ),
+        refused: refusal("none", id, message.method, detail, text, undefined, undefined, {
+          tool: typeof message.params?.name === "string" ? message.params.name : undefined,
+          args: message.params?.arguments,
+        }),
       };
+    }
     let selected: SelectedClaim | undefined;
     if (browser.args !== undefined) {
       selected = {

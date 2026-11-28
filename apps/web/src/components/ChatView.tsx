@@ -18,11 +18,6 @@ import {
   announcedRun,
   isDetailBehindShell,
 } from "@goat/client-runtime/state/thread-activity-announcement";
-import {
-  EMPTY_PENDING_FILE_SURFACE_IDS,
-  deriveAvailableRevertTurnCounts,
-  presentThreadShellFromProjection,
-} from "./ChatView.logic";
 import { usePullRequestDraftThread } from "./chat/usePullRequestDraftThread";
 import { useComposerSelection } from "./chat/useComposerSelection";
 import { useComposerFocus } from "./chat/useComposerFocus";
@@ -47,16 +42,7 @@ import { ThreadFind, ThreadFindCanvas } from "./chat/ThreadFindProvider";
 import { closeThreadFind, openThreadFind, useThreadFindOpen } from "./chat/threadFindStore";
 import { THREAD_FIND_BAR_RESERVED_HEIGHT } from "./chat/ThreadFindBar";
 import { useUsageLimitRecoveryBannerItem } from "./chat/UsageLimitRecoveryBanner";
-import { resolveDraftHeroState, usageLimitPausedRunId } from "./ChatView.logic";
 import { useQueuedRunEdit } from "./chat/useQueuedRunEdit";
-import {
-  isPaintOnlyThreadTimeline,
-  peekHeldThreadTimeline,
-  peekRememberedThreadTimeline,
-  resolveThreadSwitchTimeline,
-  recallCheckoutIsRepo,
-  rememberCheckoutIsRepo,
-} from "./ChatView.logic";
 import { useLogicalProjectEnvironments } from "../hooks/useLogicalProjectEnvironments";
 import { useStableCallback } from "../hooks/useStableCallback";
 import { useProjectScriptEditing } from "./chat/useProjectScriptEditing";
@@ -230,6 +216,7 @@ import {
 import {
   type ComposerFileAttachment,
   type ComposerImageAttachment,
+  type DraftSshDestination,
   type DraftThreadEnvMode,
   useComposerDraftStore,
   DraftId,
@@ -262,6 +249,8 @@ import {
   useThreadStatus,
   useThreadHistory,
   useQuietThreadShell,
+  useProjects,
+  useThreadShell,
   useThreadCheckpointSummaries,
 } from "../state/entities";
 import { useEnvironmentShellHasSnapshot } from "../state/shell";
@@ -305,6 +294,7 @@ import { SideChatSurface } from "./sideChat/SideChatSurface";
 import { canOpenSideChat } from "./sideChat/sideChat.logic";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
+  offersWorkspaceModes,
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
   shouldShowComposerContextStrip,
@@ -314,7 +304,6 @@ import { environmentCatalog } from "../connection/catalog";
 import { isPdfFindShortcut } from "./files/pdf/pdfShortcuts";
 import { useMachinesWithoutProject } from "../hooks/useMachinesWithoutProject";
 import { resolveMachineArrivals } from "../lib/runOnArrival";
-import { useThreadShell } from "../state/entities";
 import {
   getProviderStatusDismissalKey,
   shouldShowProviderStatusBanner,
@@ -362,6 +351,20 @@ import {
   noopHeldRevert,
   noopHeldAttachment,
   ignoreComposerFocus,
+  EMPTY_PENDING_FILE_SURFACE_IDS,
+  deriveAvailableRevertTurnCounts,
+  isPaintOnlyThreadTimeline,
+  peekHeldThreadTimeline,
+  peekRememberedThreadTimeline,
+  presentThreadShellFromProjection,
+  recallCheckoutIsRepo,
+  rememberCheckoutIsRepo,
+  resolveDraftHeroState,
+  resolveThreadSwitchTimeline,
+  usageLimitPausedRunId,
+  isCompactCommandMessage,
+  type LocalThreadErrorEntry,
+  makeThreadErrorSetter,
   hasCompactableConversation,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -386,27 +389,22 @@ import {
 import { useDraftHeroLayoutTransition } from "./chat/useDraftHeroLayoutTransition";
 import { useLocalDispatchState } from "./chat/useLocalDispatchState";
 import { draftFanoutSelectionsAtom, draftSendState } from "./chat/chatViewSend";
-import {
-  isCompactCommandMessage,
-  type LocalThreadErrorEntry,
-  makeThreadErrorSetter,
-} from "./ChatView.logic";
-import { useProjects } from "../state/entities";
-import { GLOBAL_AGENT_TITLE } from "../globalAgentRoute";
+import { GLOBAL_AGENT_TITLE, isGlobalAgentThread } from "../globalAgentRoute";
 import { SshThreadHandoffDialog } from "./chat/SshThreadHandoffDialog";
 import { buildThreadRouteParams } from "../threadRoutes";
-import { findSavedSshWorktreeOption } from "../lib/sshWorktree";
-import { isGlobalAgentThread } from "../globalAgentRoute";
-import { savedSshWorktreeOptions, sshThreadHandoffBlockReason } from "../lib/sshWorktree";
-import { sshWorktreeSelectionBlockReason, sshWorktreeSendBlockReason } from "../lib/sshWorktree";
+import {
+  findSavedSshWorktreeOption,
+  savedSshWorktreeOptions,
+  sshThreadHandoffBlockReason,
+  sshWorktreeSelectionBlockReason,
+  sshWorktreeSendBlockReason,
+} from "../lib/sshWorktree";
 import { subscribeSshThreadHandoff } from "./chat/sshThreadHandoffActionBus";
 import { useBrowserHistoryProject } from "../hooks/useBrowserHistoryProject";
 import { useGlobalAgentStore } from "../globalAgentStore";
-import type { DraftSshDestination } from "../composerDraftStore";
-
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 const sshWorkspaceLaunchCommand = vcsEnvironment.sshWorkspaceLaunch;
 const EMPTY_CHAT_DATA: never[] = [];
-import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 
 export default function ChatView(props: ChatViewProps) {
   const {
@@ -506,6 +504,7 @@ export default function ChatView(props: ChatViewProps) {
   const queuedRunEdit = useQueuedRunEdit({
     environmentId,
     routeThreadRef,
+    currentRouteThreadKeyRef,
     threadDetailRef: routeThreadDetailRef,
     threadDraftTarget: baseComposerDraftTarget,
     activeThreadId: serverThread !== null || draftThread !== null ? threadId : null,
@@ -2281,6 +2280,11 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
+  const workspaceModesOffered = offersWorkspaceModes({
+    isScratchProject: activeProjectIsScratch,
+    isGitRepo,
+    tracksGitRepositories: false,
+  });
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
     isGitRepo,
@@ -2567,7 +2571,6 @@ export default function ChatView(props: ChatViewProps) {
     !activeProject ||
     !isServerThread ||
     !manualCompactionProviderAvailable ||
-    isWorking ||
     isRevertingCheckpoint ||
     threadDetailLoading ||
     isPreparingWorktree ||
@@ -2576,7 +2579,8 @@ export default function ChatView(props: ChatViewProps) {
     pendingApprovals.length > 0 ||
     pendingUserInputs.length > 0 ||
     showPlanFollowUpPrompt;
-  const compactDisabled = compactThreadUnavailable;
+  // A typed /compact queues behind a running turn, so only the immediate compaction waits for idle.
+  const compactDisabled = compactThreadUnavailable || isWorking;
   const compactDisabledReason = compactDisabled
     ? !canOperateThread
       ? "This connection cannot change threads."
@@ -3627,7 +3631,7 @@ export default function ChatView(props: ChatViewProps) {
               data-chat-composer-overlay="true"
               className={
                 isDraftHeroState
-                  ? "pointer-events-none absolute inset-0 z-20 flex items-center"
+                  ? "pointer-events-none absolute inset-0 z-20 flex flex-col before:basis-[max(0px,calc(50%-5rem))] *:shrink-0 [@media(max-height:34rem)]:before:basis-[max(0px,calc(100%-12rem))]"
                   : "pointer-events-none absolute inset-x-0 bottom-0 z-20 pt-1.5 sm:pt-2"
               }
             >
@@ -3932,7 +3936,7 @@ export default function ChatView(props: ChatViewProps) {
                                 projectId={activeThread.projectId}
                                 worktreePath={activeThread.worktreePath}
                                 isServerThread={isServerThread}
-                                showGitControls={isGitRepo}
+                                showGitControls={workspaceModesOffered}
                                 {...(routeKind === "draft" && draftId ? { draftId } : {})}
                                 sshDestination={sshDestination}
                                 sshOptions={sshOptions}
@@ -4039,6 +4043,9 @@ export default function ChatView(props: ChatViewProps) {
                 gitCwd={isGlobalAgentActive ? null : gitCwd}
                 workspaceMutationId={workspaceMutationId}
                 isGitRepo={isGitRepo && !isGlobalAgentActive && !isCloudThread}
+                offersWorkspaceModes={
+                  workspaceModesOffered && !isGlobalAgentActive && !isCloudThread
+                }
                 envLocked={envLocked}
                 availableEnvironments={logicalProjectEnvironments}
                 environmentsWithoutProject={machinesWithoutProject}

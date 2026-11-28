@@ -95,6 +95,7 @@ final class FrameCapture {
       stopOnQueue()
       self.framesId = framesId
       for target in targets {
+        timers[target.key]?.cancel()
         let source = DispatchSource.makeTimerSource(queue: queue)
         source.schedule(deadline: .now(), repeating: .milliseconds(target.intervalMs))
         source.setEventHandler { [weak self] in self?.tick(target, framesId: framesId) }
@@ -183,6 +184,9 @@ final class FrameCapture {
         self.busy.remove(target.key)
         // And once more as it is sent: a secret field focused during the capture drops it.
         if self.isPrivate(target) { return self.unavailable(target, "private", framesId: framesId) }
+        if let refusal = self.postCaptureWindowRefusal(target) {
+          return self.unavailable(target, refusal, framesId: framesId)
+        }
         guard let image, let data else {
           return self.unavailable(target, "captureFailed", framesId: framesId)
         }
@@ -194,6 +198,18 @@ final class FrameCapture {
         ])
       }
     }
+  }
+
+  private func postCaptureWindowRefusal(_ target: FrameTarget) -> String? {
+    guard let windowId = CGWindowID(exactly: target.windowId) else { return "windowGone" }
+    let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowId) as? [[String: Any]]
+    return HelperSafety.postCaptureWindowRefusal(
+      windowInfo: list?.first,
+      expectedPid: target.pid,
+      expectedWindowId: target.windowId,
+      isOwnedByHost: { ownerPid in
+        self.goatOwns(pid: ownerPid, bundleId: nil)
+      })
   }
 
   /// One window on its own, the way every live picture and the readiness check take it.
@@ -238,8 +254,20 @@ final class FrameCapture {
       done.signal()
     }
     SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) {
-      [weak self] content, _ in
+      [weak self] content, error in
       guard let self else { return fail("internal", "The capture check ended.") }
+      if (error as NSError?)?.code == HelperSafety.screenCaptureUserDeclined {
+        return fail("screenRecordingNotGranted", "Screen Recording permission was declined.")
+      }
+      if let refusal = HelperSafety.shareableContentRefusal(
+        contentPresent: content != nil, errorCode: (error as NSError?)?.code)
+      {
+        let message =
+          refusal == "screenRecordingNotGranted"
+          ? "Screen Recording permission was declined."
+          : "Could not list shareable windows."
+        return fail(refusal, message)
+      }
       guard let window = content?.windows.first(where: { Int($0.windowID) == windowId }),
         let owner = window.owningApplication, Int(owner.processID) == pid
       else { return fail("windowGone", "The window is gone.") }

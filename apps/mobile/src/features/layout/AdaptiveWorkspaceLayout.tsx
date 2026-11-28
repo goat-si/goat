@@ -9,8 +9,7 @@ import { uuidv4 } from "../../lib/uuid";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { useFocusEffect } from "@react-navigation/native";
-import { useNavigation } from "@react-navigation/native";
+import { CommonActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { use, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Keyboard, Platform, useWindowDimensions, View } from "react-native";
 import { KeyboardController, useKeyboardState } from "react-native-keyboard-controller";
@@ -24,6 +23,7 @@ import Animated, {
 import { AsyncResult } from "effect/reactivity";
 
 import {
+  constrainAuxiliaryPaneWidth,
   deriveFileInspectorPaneLayout,
   alignListPaneToHinge,
   deriveLayout,
@@ -263,12 +263,8 @@ function AdaptiveWorkspaceLayoutContent(
         layout,
         viewportWidth: width,
         preferredWidth: fileInspectorPreferredWidth ?? undefined,
-        reservedLeadingWidth:
-          shouldRenderPrimarySidebar && showPrimarySidebar && !layout.primarySidebarOverlaysContent
-            ? (layout.listPaneWidth ?? 0) + (layout.listPaneGap ?? 0)
-            : 0,
       }),
-    [fileInspectorPreferredWidth, layout, showPrimarySidebar, shouldRenderPrimarySidebar, width],
+    [fileInspectorPreferredWidth, layout, width],
   );
   const auxiliaryPaneRole: WorkspaceAuxiliaryPaneRole =
     focusedAuxiliaryPaneRole ?? (/\/files(?:\/|$)/.test(pathname) ? "inspector" : "supplementary");
@@ -421,10 +417,17 @@ function AdaptiveWorkspaceLayoutContent(
   };
   const setAuxiliaryPaneWidth = (nextWidth: number) => {
     if (auxiliaryPaneRole === "inspector") {
-      setFileInspectorPreferredWidth(nextWidth);
+      setFileInspectorPreferredWidth(
+        constrainAuxiliaryPaneWidth({ preferredWidth: nextWidth, viewportWidth: width }),
+      );
       return;
     }
-    setSupplementaryPanePreferredWidth(nextWidth);
+    setSupplementaryPanePreferredWidth(
+      constrainAuxiliaryPaneWidth({
+        preferredWidth: nextWidth,
+        viewportWidth: panes.contentPaneWidth,
+      }),
+    );
   };
   /**
    * The one way to open a workspace tab: replaces the workspace with the tab's list and, when the
@@ -517,29 +520,33 @@ function AdaptiveWorkspaceLayoutContent(
         .filter((environment) => environment.connectionState === "connected")
         .map((environment) => environment.environmentId),
     );
-    handleSelectThreadRoute(
-      newTaskDestination({
+    const destination = newTaskDestination({
+      projects,
+      projectScopes: buildHomeProjectScopes({
         projects,
-        projectScopes: buildHomeProjectScopes({
-          projects,
-          environmentId: null,
-          projectGroupingMode,
-        }),
-        connectedEnvironmentIds,
-        requestId: uuidv4(),
-        useLastProject: saved?.useLastProjectForNewThreads,
-        currentProject: environmentId && projectId ? { environmentId, projectId } : undefined,
-        filteredProject: filteredScope
-          ? newTaskFilteredProject(
-              filteredScope,
-              listEnvironmentId,
-              connectedEnvironmentIds,
-              saved?.lastThreadProject,
-            )
-          : undefined,
-        lastProject: saved?.lastThreadProject,
+        environmentId: null,
+        projectGroupingMode,
       }),
-    );
+      connectedEnvironmentIds,
+      requestId: uuidv4(),
+      useLastProject: saved?.useLastProjectForNewThreads,
+      currentProject: environmentId && projectId ? { environmentId, projectId } : undefined,
+      filteredProject: filteredScope
+        ? newTaskFilteredProject(
+            filteredScope,
+            listEnvironmentId,
+            connectedEnvironmentIds,
+            saved?.lastThreadProject,
+          )
+        : undefined,
+      lastProject: saved?.lastThreadProject,
+    });
+    // Without a project the draft would only push the picker over itself a frame later; open it directly.
+    if (destination.draft.projectId === undefined) {
+      navigation.dispatch(CommonActions.navigate("NewTaskProject"));
+      return;
+    }
+    handleSelectThreadRoute(destination);
   };
 
   useHardwareKeyboardCommand("newTask", () => {

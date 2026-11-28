@@ -6,9 +6,11 @@ import {
   WORKTREE_CLEANUP_OFF,
 } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
+import { getTranslationsSnapshot, GTProvider } from "gt-react";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
+import { initializeI18n } from "~/i18n/initializeI18n";
 import "~/index.css";
 
 const state = vi.hoisted(() => ({
@@ -104,6 +106,8 @@ vi.mock(import("../ui/toast"), async (original) => {
 import { StorageSettingsPanel } from "./StorageSettings";
 
 function setup() {
+  // GTProvider leaves its locale in a cookie; this sets it back to English.
+  initializeI18n(() => {});
   state.settings = {
     ...DEFAULT_SERVER_SETTINGS,
     storageCleanup: {
@@ -137,6 +141,36 @@ const deleteButton = (container: HTMLElement) =>
   Array.from(container.querySelectorAll("button")).find(
     (button) => button.textContent === "Delete now",
   )!;
+
+it.each([
+  { locale: "en", one: "day", other: "days" },
+  { locale: "de", one: "Tag", other: "Tage" },
+])(
+  "labels retention ages of 1 and 8 as $one and $other in $locale",
+  async ({ locale, one, other }) => {
+    setup();
+    state.settings = {
+      ...state.settings,
+      storageCleanup: {
+        ...state.settings.storageCleanup,
+        browserArtifactsAfterDays: 1,
+        logsAfterDays: 8,
+      },
+    };
+    const translations = await getTranslationsSnapshot(locale);
+    await using screen = await render(
+      <GTProvider locale={locale} translations={translations}>
+        {panel()}
+      </GTProvider>,
+    );
+
+    const unitBesideAge = (age: string) =>
+      Array.from(screen.container.querySelectorAll("input")).find((input) => input.value === age)
+        ?.nextElementSibling?.textContent;
+    await expect.poll(() => unitBesideAge("1")).toBe(one);
+    expect(unitBesideAge("8")).toBe(other);
+  },
+);
 
 it("keeps cleanup disabled when settled retention and all other rules are off", async () => {
   setup();

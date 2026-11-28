@@ -22,7 +22,7 @@ import type {
 } from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
-import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
+import type { DesktopBridgeParts, DesktopCuaPermissionPane } from "./desktopBridgeParts.ts";
 import {
   DesktopSshEnvironmentTargetSchema,
   type DesktopSshEnvironmentTarget,
@@ -1208,7 +1208,7 @@ export interface DesktopBridge extends DesktopBridgeParts, PenMembers.DesktopPen
   /** The grants of the app computer use runs as (the helper when shipped), without prompting. */
   checkCuaGrants?: () => Promise<DesktopCuaGrants>;
   /** Opens the pane plus a panel to drag that app into its list; false if it did not open. */
-  openCuaPermissionGuide?: (pane: "accessibility" | "screen-recording") => Promise<boolean>;
+  openCuaPermissionGuide?: (pane: DesktopCuaPermissionPane) => Promise<boolean>;
   revealCuaGrantTarget?: () => Promise<void>;
   relaunchForCuaGrants?: () => Promise<void>;
   /** Older builds lack this; fall back to VS Code only. */

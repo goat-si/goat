@@ -1,11 +1,12 @@
 import ko from "../../i18n/translations/ko.json";
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../../i18n/initializeI18n";
 import chinese from "../../i18n/translations/zh.json";
 import { RegistryProvider } from "@effect/atom-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { page, userEvent, type Locator } from "vite-plus/test/browser";
 
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 vi.mock(import("../../state/session"), async (original) => ({
   ...(await original()),
@@ -106,6 +107,34 @@ describe("Esc in a shortcut recorder", () => {
     await userEvent.keyboard("{Escape}");
     expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
   });
+
+  it.each([
+    { name: "existing binding", field: existingField, open: () => activate(existingPill, "click") },
+    {
+      name: "new binding",
+      field: newField,
+      open: async () => {
+        await activate(page.getByRole("button", { name: "Add keybinding" }), "click");
+        await activate(newField, "focus");
+      },
+    },
+  ])("records Shift+Esc in the $name field", async ({ field, open }) => {
+    const onOpenChange = vi.fn();
+    await using _screen = await render(
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogPopup>
+          <DialogTitle>Settings</DialogTitle>
+          <KeybindingsSettingsPanel />
+        </DialogPopup>
+      </Dialog>,
+    );
+
+    await open();
+    await userEvent.keyboard("{Shift>}{Escape}{/Shift}");
+
+    await expect.element(field).toHaveValue("shift+esc");
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
 });
 
 it("Esc in the keybindings search clears the query without closing Settings", async () => {
@@ -122,9 +151,28 @@ it("Esc in the keybindings search clears the query without closing Settings", as
   await search.fill("sidebar");
 
   await userEvent.keyboard("{Escape}");
-
   await expect.element(search).toHaveValue("");
+  await expect.element(search).toHaveFocus();
+
+  await act(() =>
+    search.element().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        repeat: true,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
+  await expect.element(search).toHaveValue("");
+  await expect.element(search).toHaveFocus();
   expect(onOpenChange).not.toHaveBeenCalled();
+
+  await search.fill("sidebar");
+  await userEvent.keyboard("{Shift>}{Escape}{/Shift}");
+  await expect.element(search).toHaveValue("sidebar");
+  await expect.element(search).toHaveFocus();
+  expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything());
 });
 
 it("re-enables Save when a When editor closes on an expression it could not parse", async () => {
@@ -180,6 +228,11 @@ it("filters actions and allows additional shortcuts for assigned commands", asyn
 });
 
 it("finds a localized shortcut by its display name, English label, or command ID", async () => {
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using screen = await render(
     <GTProvider locale="zh" translations={{ zh: chinese }}>
       <KeybindingsSettingsPanel />
@@ -205,6 +258,11 @@ it("finds a localized shortcut by its display name, English label, or command ID
 });
 
 it("announces shortcut and condition controls in Korean", async () => {
+  using _locale = {
+    [Symbol.dispose]() {
+      initializeI18n(() => {});
+    },
+  };
   await using screen = await render(
     <GTProvider locale="ko" translations={{ ko }}>
       <KeybindingsSettingsPanel />
@@ -220,3 +278,89 @@ it("announces shortcut and condition controls in Korean", async () => {
   await shortcut.click();
   await expect.element(screen.getByRole("textbox", { name: `단축키: ${command}` })).toBeVisible();
 });
+
+it("keeps the keybindings search query when an IME Escape cancels a conversion", async () => {
+  const onOpenChange = vi.fn();
+  await using _screen = await render(
+    <RegistryProvider>
+      <Dialog open onOpenChange={onOpenChange}>
+        <DialogPopup>
+          <DialogTitle>Settings</DialogTitle>
+          <KeybindingsSettingsPanel />
+        </DialogPopup>
+      </Dialog>
+    </RegistryProvider>,
+  );
+  const search = page.getByRole("searchbox", { name: "Search keybindings" });
+  await search.fill("sidebar");
+  for (const composition of [
+    { key: "Escape", isComposing: true, keyCode: 27 },
+    { key: "Escape", isComposing: false, keyCode: 229 },
+  ]) {
+    const keydown = new KeyboardEvent("keydown", {
+      ...composition,
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(() => {
+      // Safari ends the composition just before the Escape keydown.
+      if (!composition.isComposing)
+        search.element().dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+      search.element().dispatchEvent(keydown);
+    });
+    expect(keydown.defaultPrevented).toBe(false);
+    await expect.element(search).toHaveValue("sidebar");
+    await expect.element(search).toHaveFocus();
+  }
+  expect(search.element().getAttribute("type")).toBe("text");
+
+  await userEvent.keyboard("{Escape}");
+
+  await expect.element(search).toHaveValue("");
+  expect(onOpenChange).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    name: "macOS",
+    platform: "MacIntel",
+    newChat: {
+      ariaLabel: "Edit shortcut for Chat: New: ⇧⌘O",
+      keys: ["⇧", "⌘", "O"],
+    },
+    editQueued: {
+      ariaLabel: "Edit shortcut for Queue: Edit Last Queued Message: ⌥Up",
+      keys: ["⌥", "Up"],
+    },
+    focusNext: { ariaLabel: "Edit shortcut for Focus Next Workspace Area: F6", keys: ["F6"] },
+  },
+  {
+    name: "Linux",
+    platform: "Linux x86_64",
+    newChat: {
+      ariaLabel: "Edit shortcut for Chat: New: Ctrl+Shift+O",
+      keys: ["Ctrl", "Shift", "O"],
+    },
+    editQueued: {
+      ariaLabel: "Edit shortcut for Queue: Edit Last Queued Message: Alt+Up",
+      keys: ["Alt", "Up"],
+    },
+    focusNext: { ariaLabel: "Edit shortcut for Focus Next Workspace Area: F6", keys: ["F6"] },
+  },
+])(
+  "renders platform modifier symbols and formatted key labels in shortcut pills on $name",
+  async ({ platform, newChat, editQueued, focusNext }) => {
+    using _platform = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+    await using screen = await render(<KeybindingsSettingsPanel />);
+
+    for (const expected of [newChat, editQueued, focusNext]) {
+      const button = screen.getByRole("button", { name: expected.ariaLabel, exact: true });
+      await expect.element(button).toBeVisible();
+      const kbdTexts = Array.from(
+        button.element().querySelectorAll('[data-slot="kbd"]'),
+        (el) => el.textContent,
+      );
+      expect(kbdTexts).toEqual(expected.keys);
+    }
+  },
+);

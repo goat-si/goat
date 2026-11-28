@@ -139,6 +139,32 @@ it("retires an earlier citation when another activation replaces it", async () =
   expect(read().positioning).toBe(true);
 });
 
+it("keeps the citation highlight through an IME Escape", async () => {
+  const { Harness, read } = setup();
+  await using _screen = await render(<Harness phase={ready} />);
+  await act(() => read().onListLoad());
+  expect(read().target).not.toBeNull();
+  const pressEscape = (init: KeyboardEventInit, prevented = false) =>
+    act(() => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        ...init,
+        bubbles: true,
+        cancelable: true,
+      });
+      // The composer's editor prevents every plain Escape before it reaches the document.
+      if (prevented) event.preventDefault();
+      document.body.dispatchEvent(event);
+    });
+
+  for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+    await pressEscape(init);
+    expect(read().target).not.toBeNull();
+  }
+  await pressEscape({ keyCode: 27 }, true);
+  expect(read().target).toBeNull();
+});
+
 it("ends positioning when settled history never advances to the cited response", async () => {
   const { Harness, read } = setup();
   await using screen = await render(<Harness phase={{ _tag: "loading" }} />);

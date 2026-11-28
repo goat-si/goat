@@ -269,6 +269,24 @@ export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "invalid_arguments",
   "invalid_action_target",
   "select_menu_would_raise_window",
+  "titlebar_would_raise_window",
+  "secure_input_active",
+  "secure_field",
+  "sheet_or_modal_on_target_window",
+  "foreign_overlay_above_granted",
+  "hit_test_foreign_pid",
+  "focused_window_mismatch",
+  "focused_element_foreign_pid",
+  "focused_element_not_at_point",
+  "mouse_containment_unverifiable",
+  "keyboard_containment_unverifiable",
+  "off_space_containment_unverifiable",
+  "user_actively_typing",
+  "recent_hid_keydown_would_misdirect",
+  "identity_not_unique",
+  "identity_unproven",
+  "ambiguous_target",
+  "lock_timeout",
   "window_id_required",
   "session_required",
   "session_not_started",
@@ -288,17 +306,34 @@ const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {
   stale_geometry: "staleElement",
   px_frame_mismatch: "staleElement",
   screenshot_context_missing: "staleElement",
+  identity_not_unique: "staleElement",
+  identity_unproven: "staleElement",
+  ambiguous_target: "staleElement",
   window_id_not_found: "windowNotFound",
   window_target_not_found: "windowNotFound",
   window_target_resolution_failed: "windowNotFound",
   px_window_not_found: "windowNotFound",
   window_owner_pid_mismatch: "ownerMismatch",
   permission_denied: "permissionsNotGranted",
+  secure_input_active: "privateMode",
+  secure_field: "privateMode",
   background_unavailable: "backgroundUnavailable",
   select_menu_would_raise_window: "backgroundUnavailable",
+  titlebar_would_raise_window: "backgroundUnavailable",
+  sheet_or_modal_on_target_window: "backgroundUnavailable",
+  foreign_overlay_above_granted: "backgroundUnavailable",
+  hit_test_foreign_pid: "backgroundUnavailable",
+  focused_window_mismatch: "backgroundUnavailable",
+  focused_element_foreign_pid: "backgroundUnavailable",
+  focused_element_not_at_point: "backgroundUnavailable",
+  mouse_containment_unverifiable: "backgroundUnavailable",
+  keyboard_containment_unverifiable: "backgroundUnavailable",
+  off_space_containment_unverifiable: "backgroundUnavailable",
   target_occluded: "backgroundUnavailable",
   window_minimized: "backgroundUnavailable",
   foreground_unavailable: "backgroundUnavailable",
+  user_actively_typing: "userIntervened",
+  recent_hid_keydown_would_misdirect: "userIntervened",
   invalid_arguments: "invalidRequest",
   invalid_action_target: "invalidRequest",
   window_id_required: "invalidRequest",
@@ -307,6 +342,7 @@ const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {
   session_ended: "helperUnavailable",
   session_unavailable: "helperUnavailable",
   transport_lease_required: "helperUnavailable",
+  lock_timeout: "helperUnavailable",
 };
 
 export interface DriverToolResult {
@@ -351,6 +387,15 @@ export function actionResultFromDriver(
   }
   switch (effect) {
     case "confirmed":
+      if (field(result.structured, "focus_confirmed") === false)
+        return {
+          ...sent,
+          detail: sent.detail
+            ? `${sent.detail} (target focus was not confirmed)`
+            : "Target focus was not confirmed.",
+          outcome: "unverifiable",
+          dispatch: "dispatched_unknown",
+        };
       return { ...sent, outcome: "confirmed", dispatch: "verified" };
     case "partial":
       return { ...sent, outcome: "partial", dispatch: "dispatched_unknown" };

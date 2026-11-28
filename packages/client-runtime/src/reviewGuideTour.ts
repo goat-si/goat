@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import type { PullRequestReviewGuideExcerpt, PullRequestReviewGuideStop } from "@goat/contracts";
+import { quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 
 export function stepTourPosition(current: number, delta: 1 | -1, stopCount: number): number {
   return Math.max(Math.min(current + delta, stopCount - 1), 0);
@@ -123,11 +124,9 @@ export function rowsToPatch(
   rows: ReadonlyArray<DiffRow>,
 ): string {
   if (rows.length === 0) return "";
-  const lines = [
-    `diff --git a/${previousPath} b/${path}`,
-    `--- a/${previousPath}`,
-    `+++ b/${path}`,
-  ];
+  const oldName = quoteGitPatchPath(`a/${previousPath}`);
+  const newName = quoteGitPatchPath(`b/${path}`);
+  const lines = [`diff --git ${oldName} ${newName}`, `--- ${oldName}`, `+++ ${newName}`];
   let start = 0;
   while (start < rows.length) {
     let end = start;

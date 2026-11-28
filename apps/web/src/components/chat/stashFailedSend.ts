@@ -6,11 +6,7 @@ import type {
   PersistedComposerImageAttachment,
 } from "../../composerDraftStore";
 import { writeTextToClipboard } from "../../hooks/useCopyToClipboard";
-import {
-  readAttachmentUpload,
-  releaseAttachmentUpload,
-  releasePersistedAttachmentUpload,
-} from "../../lib/attachmentUploadQueue";
+import { readAttachmentUpload, releaseAttachmentUpload } from "../../lib/attachmentUploadQueue";
 import { compressImageForStash } from "../../lib/imageCompression";
 import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { partitionStashAttachments, usePromptStashStore } from "../../promptStashStore";
@@ -129,13 +125,6 @@ function stashSendSnapshot(snapshot: ComposerSendSnapshot, environmentId: Enviro
     ...(records.length > 0 ? { records } : {}),
   });
   if (!result.written) return { ...result, imagesSettled: Promise.resolve() };
-  for (const file of result.evicted?.files ?? []) {
-    releasePersistedAttachmentUpload({
-      id: file.id,
-      environmentId: file.environmentId,
-      attachmentId: file.attachmentId,
-    });
-  }
   for (const attachment of [...snapshot.images, ...snapshot.previewAnnotations]) {
     releaseAttachmentUpload(attachment.id, environmentId);
   }
@@ -172,7 +161,7 @@ export function keepFailedSendInStash(input: {
   readonly interrupted: boolean;
 }): Promise<void> {
   const title = input.interrupted ? "Message may not have been sent" : "Message not sent";
-  const { written, durable, evicted, imagesSettled } = stashSendSnapshot(
+  const { full, written, durable, imagesSettled } = stashSendSnapshot(
     input.snapshot,
     input.environmentId,
   );
@@ -180,7 +169,6 @@ export function keepFailedSendInStash(input: {
     const notes = [
       "Your new draft was kept, and the failed message is in the prompt stash.",
       durable ? null : "Browser storage is unavailable, so it stays only for this session.",
-      evicted ? "The oldest stashed prompt was removed to make room." : null,
     ];
     toastManager.add(
       stackedThreadToast({
@@ -194,7 +182,8 @@ export function keepFailedSendInStash(input: {
   }
   const failedText = input.snapshot.messageText;
   const lost = [...input.snapshot.images, ...input.snapshot.files].map((entry) => entry.name);
-  const lostSentence = `Your new draft was kept, but browser storage rejected the stash, so ${lost.join(", ")} could not be kept.`;
+  const rejectReason = full ? "the prompt stash is full" : "browser storage rejected the stash";
+  const lostSentence = `Your new draft was kept, but ${rejectReason}, so ${lost.join(", ")} could not be kept.`;
   const them = lost.length === 1 ? "it" : "them";
   if (failedText.length === 0) {
     toastManager.add(
@@ -215,7 +204,7 @@ export function keepFailedSendInStash(input: {
       description:
         lost.length > 0
           ? `${lostSentence} Copy the failed message and attach ${them} again to send it.`
-          : "Your new draft was kept, and browser storage rejected the stash. Copy the failed message to send it again.",
+          : `Your new draft was kept, and ${rejectReason}. Copy the failed message to send it again.`,
       // The toast holds the only copy of the failed text, so it stays until dismissed.
       timeout: 0,
       data: { hideCopyButton: true },

@@ -45,13 +45,14 @@ describe("GOAT provider instructions", () => {
     for (const text of [
       "## GOAT browser",
       "unasked",
-      "to check UI you build",
-      "an API or CLI that can do it goes first",
+      "for web pages/UI",
+      "prefer API/CLI first",
       "goat_preview_read",
-      "valid until the next snapshot",
-      "one goat_screen_run cell; observe once at the end",
+      "until next snapshot",
+      "one goat_screen_run cell; observe at the end",
       "unverifiable: observe, never resend",
       "refused: nothing sent",
+      "occluded",
       "unclaimed",
       "goat_preview_fill_secret",
     ])

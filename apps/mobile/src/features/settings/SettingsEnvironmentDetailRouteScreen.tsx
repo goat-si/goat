@@ -343,7 +343,10 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       void run("refresh", async () => {
                         if (!readEnvironmentScope(environmentId, AuthOrchestrationReadScope))
                           return;
-                        const result = await refreshProviders({ environmentId, input: {} });
+                        const result = await refreshProviders({
+                          environmentId,
+                          input: { refreshModels: true },
+                        });
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
                         setNotice("Provider status refreshed.");
                       });

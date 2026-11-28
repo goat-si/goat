@@ -5,6 +5,7 @@ import { DEFAULT_TERMINAL_ID } from "@goat/contracts";
 import { getTerminalLabel } from "@goat/shared/terminalLabels";
 
 import {
+  basename,
   nextOpenTerminalId,
   previousLiveTerminalId,
   resolveProjectScriptTerminalId,
@@ -87,5 +88,16 @@ describe("resolveProjectScriptTerminalId", () => {
     });
     expect(terminalId).not.toBe(DEFAULT_TERMINAL_ID);
     expect(getTerminalLabel(terminalId)).toBe("Terminal 1");
+  });
+});
+
+describe("basename", () => {
+  it.each([
+    ["C:\\wt\\repo\\", "repo"],
+    ["/home/u/repo/", "repo"],
+    ["/home/u/team\\repo", "team\\repo"],
+    ["/", "/"],
+  ])("names %s as %s", (input, expected) => {
+    expect(basename(input)).toBe(expected);
   });
 });

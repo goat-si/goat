@@ -48,6 +48,20 @@ describe("pullRequestLinkSubject", () => {
       kind: "comment",
       excerpt: "Looks good, see run()",
     });
+    for (const [body, excerpt] of [
+      ["Keep `[!NOTE]` in the file.", "Keep [!NOTE] in the file."],
+      ["> [!NOTE]\n> Real alert.", "Real alert."],
+      ["Keep [!WARNING] in prose.", "Keep [!WARNING] in prose."],
+    ] as const) {
+      expect(
+        pullRequestLinkSubject(`${pr}#issuecomment-5`, {
+          comments: [{ ...activity.comments[0]!, body }],
+          reviewThreads: [],
+          commits: [],
+        }),
+        body,
+      ).toMatchObject({ kind: "comment", excerpt });
+    }
     // A review with no text of its own is shown through the comment it posted.
     expect(pullRequestLinkSubject(`${pr}#pullrequestreview-9`, activity)).toMatchObject({
       kind: "comment",
@@ -69,5 +83,12 @@ describe("pullRequestLinkSubject", () => {
     const cut = pullRequestLinkSubject(`${pr}#issuecomment-5`, long);
     const excerpt = cut && "excerpt" in cut ? cut.excerpt : null;
     expect(excerpt).toMatch(/^(?:i ?)+…$/u);
+    const between = comment
+      ? { ...activity, comments: [{ ...comment, body: `${"a".repeat(278)} word` }] }
+      : activity;
+    const cutBetween = pullRequestLinkSubject(`${pr}#issuecomment-5`, between);
+    expect(cutBetween && "excerpt" in cutBetween ? cutBetween.excerpt : null).toBe(
+      `${"a".repeat(278)}…`,
+    );
   });
 });

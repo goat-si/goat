@@ -90,7 +90,7 @@ import {
   workEntryIconName,
   THINKING_PREVIEW_PLUGINS,
   THOUGHT_PREVIEW_PLUGINS,
-  THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
+  sliceThoughtPreviewSource,
 } from "./TimelineWorkEntryRow.logic";
 
 export function useThreadReadTarget(entry: TimelineWorkEntry, environmentId: EnvironmentId) {
@@ -157,6 +157,7 @@ export function ReasoningTraceContent({ entries }: { entries: ReadonlyArray<Time
           threadRef={ctx.threadRef ?? undefined}
           skills={ctx.skills}
           isStreaming={isStreaming(entry)}
+          streamingId={entry.id}
           headingLevelOffset={MESSAGE_HEADING_LEVEL}
           onUseArtifactTemplate={ctx.onUseArtifactTemplate}
           onImageExpand={ctx.onImageExpand}
@@ -572,10 +573,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                 {isReasoning && !expanded ? (
                   <ChatMarkdown
                     inline
-                    text={(workEntry.detail ?? previewText).slice(
-                      0,
-                      THOUGHT_PREVIEW_SOURCE_MAX_LENGTH,
-                    )}
+                    text={sliceThoughtPreviewSource(workEntry.detail ?? previewText)}
                     cwd={ctx.markdownCwd}
                     parseRawHtml={false}
                     extraRemarkPlugins={

@@ -3,6 +3,7 @@ import type { ResolvedKeybindingsConfig } from "@goat/contracts";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
   parseKeybindingShortcut,
 } from "@goat/shared/keybindings";
 
@@ -12,6 +13,8 @@ import {
   buildKeybindingRows,
   buildKeybindingCommandOptions,
   buildWhenVariableOptions,
+  filterKeybindingRows,
+  groupKeybindingRows,
   keybindingConflictLabels,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
@@ -22,6 +25,24 @@ import {
 } from "./KeybindingsSettings.logic";
 
 describe("KeybindingsSettings.logic", () => {
+  it("finds a shortcut by the label its row shows", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { command: "commandPalette.toggle", key: "mod+k" },
+        { command: "chat.new", key: "mod+shift+o" },
+      ]),
+      "Linux x86_64",
+    );
+    expect(
+      filterKeybindingRows(rows, "Ctrl+K", undefined, "Linux x86_64").map((row) => row.command),
+    ).toEqual(["commandPalette.toggle"]);
+    expect(
+      filterKeybindingRows(rows, "ctrl+shift+o", undefined, "Linux x86_64").map(
+        (row) => row.command,
+      ),
+    ).toEqual(["chat.new"]);
+  });
+
   it("lists composer, provider, and pull request commands with editable defaults", () => {
     const rows = buildKeybindingRows(DEFAULT_RESOLVED_KEYBINDINGS);
     for (const command of [
@@ -46,6 +67,19 @@ describe("KeybindingsSettings.logic", () => {
     }
   });
 
+  it("lists back and forward under Navigation", () => {
+    const groups = groupKeybindingRows(
+      buildKeybindingRows(
+        compileResolvedKeybindingsConfig([
+          { command: "navigation.back", key: "mod+[" },
+          { command: "navigation.forward", key: "mod+]" },
+        ]),
+        "MacIntel",
+      ),
+    );
+    expect(groups.map((group) => group.id)).toEqual(["navigation"]);
+  });
+
   it("keeps sibling row identities when a saved binding moves to the end", () => {
     const bindings = compileResolvedKeybindingsConfig([
       { command: "chat.new", key: "mod+n" },
@@ -64,6 +98,35 @@ describe("KeybindingsSettings.logic", () => {
     expect(after.find((row) => row.command === "chat.new")?.id).not.toBe(
       before.find((row) => row.command === "chat.new")?.id,
     );
+  });
+
+  it("resets an edited shortcut to the built-in one its command no longer has", () => {
+    const rows = buildKeybindingRows(
+      mergeWithDefaultKeybindings(
+        compileResolvedKeybindingsConfig([
+          { command: "chat.new", key: "mod+n", when: "!terminalFocus" },
+          { command: "chat.new", key: "f8", when: "!terminalFocus" },
+        ]),
+      ),
+    );
+    expect(
+      rows
+        .filter((row) => row.command === "chat.new")
+        .map(({ key, defaultKey }) => ({ key, defaultKey })),
+    ).toEqual([
+      { key: "f8", defaultKey: "mod+shift+o" },
+      { key: "mod+n", defaultKey: "mod+n" },
+    ]);
+    const unassigned = buildKeybindingRows(
+      mergeWithDefaultKeybindings(
+        compileResolvedKeybindingsConfig([
+          { command: "chat.new", key: "mod+n", when: "!terminalFocus" },
+          { command: "chat.new", key: "mod+shift+o", when: "false" },
+          { command: "chat.new", key: "f8", when: "!terminalFocus" },
+        ]),
+      ),
+    );
+    expect(unassigned.find((row) => row.key === "f8")?.defaultKey).toBe("mod+n");
   });
 
   it("shares a stable editor for resolved duplicates but separates commands, shortcuts, and conditions", () => {
@@ -277,6 +340,33 @@ describe("KeybindingsSettings.logic", () => {
     ).toBe("mod+m");
   });
 
+  it("records the physical letter for Cyrillic and Greek layouts, so it works after switching back", () => {
+    const record = (key: string, code: string) =>
+      keybindingFromKeyboardEvent(
+        { key, code, metaKey: false, ctrlKey: true, altKey: false, shiftKey: false },
+        "Linux x86_64",
+        { layoutCharacter: true },
+      );
+    expect(record("л", "KeyK")).toBe("mod+k");
+    expect(record("Л", "KeyK")).toBe("mod+k");
+    expect(record("ν", "KeyN")).toBe("mod+n");
+    expect(record("ö", "Semicolon")).toBe("mod+ö");
+    const shortcut = parseKeybindingShortcut(record("л", "KeyK")!)!;
+    const russianCtrlK = {
+      key: "л",
+      code: "KeyK",
+      metaKey: false,
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+    };
+    expect(
+      resolveShortcutCommand(russianCtrlK, [{ command: "chat.new", shortcut }], {
+        platform: "Linux x86_64",
+      }),
+    ).toBe("chat.new");
+  });
+
   it("keeps a literal plus key as its own part", () => {
     expect(shortcutToKeybindingParts(parseKeybindingShortcut("mod++")!)).toEqual(["mod", "+"]);
     expect(shortcutToKeybindingParts(parseKeybindingShortcut("mod+shift++")!)).toEqual([
@@ -417,6 +507,18 @@ describe("KeybindingsSettings.logic", () => {
     expect(
       keybindingConflictLabels(rows, { rowId: "new", key: "ctrl+k", when: "" }, expected.platform),
     ).toEqual(["Chat: New Local", ...expected.ctrl].toSorted());
+  });
+
+  it("treats a true condition like no condition when reporting conflicts", () => {
+    const rows = buildKeybindingRows(
+      compileResolvedKeybindingsConfig([
+        { command: "chat.new", key: "mod+k", when: "true" },
+        { command: "chat.newLocal", key: "mod+k", when: "terminalFocus" },
+      ]),
+      "Linux x86_64",
+    );
+
+    expect(rows.map((row) => row.conflicts)).toEqual([["Chat: New Local"], ["Chat: New"]]);
   });
 
   it("keeps mod and ctrl shortcuts apart when their when contexts differ", () => {

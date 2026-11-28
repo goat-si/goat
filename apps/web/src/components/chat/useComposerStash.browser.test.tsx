@@ -161,3 +161,74 @@ it.each([8000, 8001] as const)(
     }
   },
 );
+
+it("stashes a side chat's prompt when Mod+S is pressed inside its surface", async () => {
+  const target = DraftId.make("stash-side-chat");
+  using _draft = {
+    [Symbol.dispose]: () => useComposerDraftStore.getState().clearComposerContent(target),
+  };
+  using _stash = {
+    [Symbol.dispose]: () => {
+      writePromptStashStorageForTest("");
+      removeLocalStorageItem(PROMPT_STASH_STORAGE_KEY);
+    },
+  };
+  const environmentId = EnvironmentId.make("stash-env");
+  const promptRef = { current: "Side chat question" };
+  const composerFormRef: { current: HTMLElement | null } = { current: null };
+  const input = {
+    environmentId,
+    composerDraftTarget: target,
+    promptRef,
+    readAttachmentDraft: () => ({ images: [], files: [] }),
+    readTerminalContexts: () => [],
+    routeThreadRef: { environmentId, threadId: ThreadId.make("stash-side-thread") },
+    projectSelectionRequired: false,
+    pendingUserInputs: [],
+    activePendingProgress: null,
+    prompt: promptRef.current,
+    composerMenuOpen: false,
+    isComposerCollapsedMobile: false,
+    composerPreviewAnnotations: [],
+    composerReviewComments: [],
+    composerThreadContexts: [],
+    attachmentTargetKey: target,
+    isComposerDraftTargetOpen: () => true,
+    composerEditorRef: { current: null },
+    composerFormRef,
+    isRevertingCheckpoint: () => false,
+    pendingThreadImportsRef: { current: new Map() },
+    setComposerCursor: vi.fn(),
+    setComposerTrigger: vi.fn(),
+    importContextRecords: () => new Map(),
+    expandMobileComposer: vi.fn(),
+  } satisfies StashInput;
+  // SideChatSurface renders an on-screen side chat inside data-side-chat-surface.
+  await using screen = await render(
+    <div data-side-chat-surface>
+      <form
+        ref={(node) => {
+          composerFormRef.current = node;
+        }}
+      >
+        <textarea aria-label="Side chat composer" />
+        <Harness input={input} />
+      </form>
+    </div>,
+  );
+
+  const composer = screen.container.querySelector("textarea")!;
+  composer.focus();
+  const mod = isMacPlatform(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+  const event = new KeyboardEvent("keydown", { key: "s", ...mod, bubbles: true, cancelable: true });
+  await act(() => {
+    composer.dispatchEvent(event);
+  });
+
+  expect(event.defaultPrevented).toBe(true);
+  await vi.waitFor(() => {
+    expect(usePromptStashStore.getState().entries.map((entry) => entry.prompt)).toEqual([
+      "Side chat question",
+    ]);
+  });
+});

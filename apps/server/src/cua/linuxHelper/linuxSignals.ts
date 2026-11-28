@@ -120,24 +120,34 @@ export function makeSignalMonitor(deps: SignalMonitorDependencies): SignalMonito
       probe,
       deps.delay(FOCUS_PROBE_LIMIT_MS).then(() => UNREADABLE),
     ]);
-    // The watch may have changed while AT-SPI answered.
     if (incarnation !== mine || !targets.includes(target)) return;
-    let now = focus.secure || !focus.known;
+    const confirmedSecure = focus.known === true && focus.secure === true;
     const key = keyOf(target);
-    if (!now && focusChanges !== changesBefore) {
+    if (!confirmedSecure && focus.known === true && focusChanges !== changesBefore) {
       const count = (overlapped.get(key) ?? 0) + 1;
       if (count < OVERLAPPED_PROBE_LIMIT) {
         overlapped.set(key, count);
         recheck.set(key, report || (recheck.get(key) ?? false));
         return;
       }
-      // Focus moved under every probe: it cannot be read, which is private.
-      now = true;
+      overlapped.delete(key);
+      if (active.get(key) === true) return;
+      if (!report && active.get(key) === false) return;
+      active.set(key, false);
+      deps.emit(id, { type: "privateMode", active: false, target });
+      return;
     }
     overlapped.delete(key);
-    if (!report && active.get(key) === now) return;
-    active.set(key, now);
-    deps.emit(id, { type: "privateMode", active: now, target });
+    if (!focus.known) {
+      if (active.get(key) === true) return;
+      if (!report && active.get(key) === false) return;
+      active.set(key, false);
+      deps.emit(id, { type: "privateMode", active: false, target });
+      return;
+    }
+    if (!report && active.get(key) === confirmedSecure) return;
+    active.set(key, confirmedSecure);
+    deps.emit(id, { type: "privateMode", active: confirmedSecure, target });
   };
 
   /**

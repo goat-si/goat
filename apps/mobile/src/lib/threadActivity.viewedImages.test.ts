@@ -95,7 +95,9 @@ function viewedImages(settled: boolean, expandedRunIds: ReadonlySet<string> = ne
     settled ? null : at(0),
   );
   return feed.flatMap((entry, index) =>
-    entry.type === "viewed-images" ? [{ after: feed[index - 1]?.type, paths: entry.paths }] : [],
+    entry.type === "viewed-images"
+      ? [{ after: feed[index - 1]?.type, paths: entry.images.map((image) => image.path) }]
+      : [],
   );
 }
 

@@ -82,7 +82,27 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
   };
 }
 
+function splitsSurrogatePair(text: string, offset: number): boolean {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff;
+}
+
 export function deriveThreadTitleFromPrompt(value: string): string {
   const title = threadTitleTextFromPrompt(value) || "New thread";
-  return title.length <= 72 ? title : `${title.slice(0, 69).trimEnd()}...`;
+  if (title.length <= 72) return title;
+  const end = splitsSurrogatePair(title, 69) ? 68 : 69;
+  return `${title.slice(0, end).trimEnd()}...`;
+}
+
+/** Titles a new task the server has not created yet; one with only attachments shows their count. */
+export function deriveUnsentThreadTitle(input: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+}): string {
+  if (input.text.trim().length > 0 || input.attachments.length === 0) {
+    return deriveThreadTitleFromPrompt(input.text);
+  }
+  const count = input.attachments.length;
+  return count === 1 ? "1 attachment" : `${count} attachments`;
 }

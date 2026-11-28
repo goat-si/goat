@@ -41,7 +41,7 @@ export const checkCuaGrants = DesktopIpc.makeIpcMethod({
 
 export const openCuaPermissionGuide = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.OPEN_CUA_PERMISSION_GUIDE_CHANNEL,
-  payload: Schema.Literals(["accessibility", "screen-recording"]),
+  payload: Schema.Literals(["accessibility", "screen-recording", "input-monitoring"]),
   result: Schema.Boolean,
   handler: Effect.fn("desktop.ipc.cua.openPermissionGuide")(function* (pane) {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
@@ -53,13 +53,18 @@ export const openCuaPermissionGuide = DesktopIpc.makeIpcMethod({
       return yield* Effect.fail(new ComputerUseHelperError("helperUnusable", target.message));
     const opened = yield* (yield* ElectronShell.ElectronShell).openSystemSettings(pane);
     if (!opened) return false;
-    const key = pane === "accessibility" ? "accessibility" : "screenRecording";
+    const key =
+      pane === "accessibility"
+        ? "accessibility"
+        : pane === "screen-recording"
+          ? "screenRecording"
+          : "inputMonitoring";
     // The panel polls from a timer; its reads run in this handler's context so they are logged.
     const run = Effect.runPromiseWith(yield* Effect.context<never>());
     yield* (yield* MacPermissions.MacPermissions).showHelper(
       pane,
       owner,
-      () => run(target.read("panel").pipe(Effect.map((grants) => grants[key]))),
+      () => run(target.read("panel").pipe(Effect.map((grants) => grants[key] === true))),
       target.kind === "helper" ? { bundlePath: target.bundlePath, name: target.name } : undefined,
     );
     return true;

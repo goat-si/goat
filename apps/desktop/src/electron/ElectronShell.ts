@@ -1,9 +1,8 @@
-import { MAC_PERMISSION_SETTINGS_URLS } from "../permissions/MacPermission.ts";
+import { MAC_PERMISSION_SETTINGS_URLS, type MacPermission } from "../permissions/MacPermission.ts";
 import {
   isLocalEditorFileUrl,
   REMOTE_CAPABLE_EDITOR_IDS,
   remoteSchemeForEditor,
-  type SystemSettingsPane,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -55,11 +54,17 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   }
 }
 
+/** Links that open in the browser, for callers such as popups that carry no identity. */
+export const parseWebExternalUrl = (rawUrl: unknown): Option.Option<string> =>
+  Option.filter(parseSafeExternalUrl(rawUrl), (url) =>
+    SAFE_WEB_PROTOCOLS.has(new URL(url).protocol),
+  );
+
 export class ElectronShell extends Context.Service<
   ElectronShell,
   {
     readonly openExternal: (rawUrl: unknown) => Effect.Effect<boolean>;
-    readonly openSystemSettings: (pane: SystemSettingsPane) => Effect.Effect<boolean>;
+    readonly openSystemSettings: (pane: MacPermission) => Effect.Effect<boolean>;
     readonly copyText: (text: string) => Effect.Effect<void>;
   }
 >()("@goat/desktop/electron/ElectronShell") {}

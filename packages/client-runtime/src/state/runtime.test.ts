@@ -35,6 +35,7 @@ import {
   createRuntimeCommand,
   environmentSessionGenerationAtom,
   scheduleAtomCommandEffect,
+  squashAtomCommandFailure,
   executeAtomQuery,
 } from "./runtime.ts";
 
@@ -1226,4 +1227,24 @@ describe("persisted environment queries", () => {
       }),
     ),
   );
+});
+
+describe("squashAtomCommandFailure", () => {
+  it("wraps a string defect in an Error so callers can read its message", () => {
+    const error = squashAtomCommandFailure({
+      cause: Cause.die(
+        "RPC contract is registered but unavailable in the control plane: projectClone.start",
+      ),
+    });
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(
+      "RPC contract is registered but unavailable in the control plane: projectClone.start",
+    );
+  });
+
+  it("keeps non-string failures as-is", () => {
+    const original = new Error("boom");
+    expect(squashAtomCommandFailure({ cause: Cause.die(original) })).toBe(original);
+  });
 });

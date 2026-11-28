@@ -101,6 +101,17 @@ export function threadSteersDuringCompaction(projection: Projection | null | und
   );
 }
 
+/** The server rejects a steer into a run that Stop has reached, though the run still reads as running. */
+export function runStopRequested(
+  projection: Pick<Projection, "turnItems"> | null | undefined,
+  runId: Run["id"] | null | undefined,
+): boolean {
+  if (projection == null || runId == null) return false;
+  return projection.turnItems.some(
+    (item) => item.runId === runId && item.type === "run_interrupt_request",
+  );
+}
+
 function supportsSteering(turns: OrchestrationV2ProviderCapabilities["turns"]): boolean {
   return (
     turns.supportsActiveSteering ||
@@ -116,6 +127,7 @@ export function threadCanSteer(
     readonly activeRunId: Run["id"] | null | undefined;
   },
 ): boolean {
+  if (runStopRequested(projection, input.activeRunId)) return false;
   const turns = projection && resolveThreadProviderSession(projection)?.capabilities.turns;
   // A steer submitted before the session attaches can wait for its provider turn.
   if (turns && !supportsSteering(turns)) return false;

@@ -108,7 +108,7 @@ export function pullRequestChecksSummary(pr: Pick<PullRequestDetail, "checks">) 
     } as const;
   if (required)
     return {
-      label: `${required} need attention`,
+      label: `${required} ${required === 1 ? "needs" : "need"} attention`,
       title: "Checks need attention",
       count: `${required} awaiting action`,
       icon: "exclamationmark.circle",

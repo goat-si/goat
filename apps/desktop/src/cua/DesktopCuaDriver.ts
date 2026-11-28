@@ -60,8 +60,6 @@ import {
   PROOF_RESET_DETAIL,
   proofLostDetail,
   REPROVE_TIMEOUT,
-  resetProofOn,
-  type ProofResetSource,
 } from "./readinessProof.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import {
@@ -84,11 +82,17 @@ import {
   type Engine,
   type CuaManifestScope,
 } from "./DesktopCuaNative.ts";
+import {
+  excludedHostBundleIds,
+  makeDesktopCuaHostGuards,
+  type DesktopCuaPowerSource,
+} from "./desktopCuaHostGuards.ts";
 export {
   bitmapHasContent,
   type DesktopCuaDriverDependencies,
   type CuaManifestScope,
 } from "./DesktopCuaNative.ts";
+export type { DesktopCuaPowerEvent } from "./desktopCuaHostGuards.ts";
 
 export class DesktopCuaDriver extends Context.Service<
   DesktopCuaDriver,
@@ -109,7 +113,7 @@ const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.fn("desktop.cua.make")(function* (
   native: DesktopCuaDriverDependencies = dependencies,
-  power?: ProofResetSource,
+  power?: DesktopCuaPowerSource,
 ) {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
@@ -129,6 +133,22 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   let helperSeen = false;
   let lastReadiness: string | undefined;
   let watches = 0;
+  const hostGuards = yield* makeDesktopCuaHostGuards({
+    publisher,
+    power,
+    platform: environment.platform,
+    powerSaveBlocker: native.powerSaveBlocker,
+    mutex,
+    isClosed: () => closed,
+    generation: () => helperGeneration,
+    onProofReset: (detail) =>
+      Effect.suspend(() => {
+        provenBundle = undefined;
+        return noteHelper((state) =>
+          state.confirmed || state.capture !== "pending" ? withoutProof(state, detail) : state,
+        );
+      }),
+  });
   // What the running helper said it can do; a build without a method raises nothing for it.
   let helperCanWatch = false;
   // Whether the running helper's agent connections report a person's input.
@@ -150,6 +170,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const followers = yield* makeHelperFollowers({
     publisher,
     newWatchId: () => "watch-" + helperGeneration + "-" + ++watches,
+    generation: () => helperGeneration,
+    onWatch: hostGuards.onWatch,
   });
   /** Whether the running check reads through the helper; only then do its reads prove anything. */
   let checkingHelper = false;
@@ -303,12 +325,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         : native.checkGrants();
   // An unpackaged Electron on macOS runs under Electron's own bundle id. Agents never get GOAT
   // or its helper as a target; the grant check reads GOAT's own window.
-  const hostBundleIds = (engine: Engine) => [
-    environment.appUserModelId,
-    ...(environment.isPackaged ? [] : ["com.github.Electron"]),
-    ...(environment.platform === "win32" ? [native.executablePath] : []),
-    ...(engine.kind === "helper" ? [engine.bundle.bundleId] : []),
-  ];
+  const hostBundleIds = (engine: Engine) =>
+    excludedHostBundleIds(environment, engine, native.executablePath);
   // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
   const helperListing = (engine: Engine, signal?: AbortSignal) =>
     engine.kind === "helper" &&
@@ -371,7 +389,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
       host = native.helperHost({
         bundle: engine.bundle,
-        driverVersion: cuaDriverRelease("darwin", "arm64")?.version ?? "",
+        driverVersion:
+          cuaDriverRelease(environment.platform, environment.processArch)?.version ?? "",
         capabilityManifestPath: manifestPath,
         environment: driverEnvironment,
         platform: environment.platform,
@@ -903,6 +922,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       closed = true;
+      hostGuards.release();
       yield* stop;
     }),
   );
@@ -933,36 +953,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           if (owned && !owned.cleanup) void retire(owned).catch(() => undefined);
         })
         .pipe(Effect.forkScoped);
-      yield* publisher.cuaWatchApps.pipe(
-        Stream.runForEach((apps) =>
-          mutex.withPermits(1)(
-            Effect.gen(function* () {
-              const entry = owned;
-              if (closed || !entry || entry.cleanup) return;
-              if ((yield* entry.refreshManifest(apps)) && !entry.direct) yield* restartHost;
-            }).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Could not refresh Cua Driver manifest", { cause }),
-              ),
-            ),
-          ),
-        ),
-        Effect.forkScoped,
-      );
+      yield* hostGuards.listen({ getOwned: () => owned, restartHost });
       yield* followers.listen;
-      if (power !== undefined && environment.platform === "darwin")
-        yield* resetProofOn(power, (event) =>
-          mutex.withPermits(1)(
-            Effect.suspend(() => {
-              provenBundle = undefined;
-              return noteHelper((state) =>
-                state.confirmed || state.capture !== "pending"
-                  ? withoutProof(state, proofLostDetail(PROOF_RESET_DETAIL[event], "darwin"))
-                  : state,
-              );
-            }),
-          ),
-        );
       yield* Effect.forever(
         Queue.take(crashes).pipe(
           Effect.flatMap((entry) =>
@@ -991,6 +983,9 @@ export const layer = Layer.effect(
   DesktopCuaDriver,
   Effect.gen(function* () {
     const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
-    return yield* make(dependencies, { on: powerMonitor.onSimpleEvent });
+    return yield* make(dependencies, {
+      on: powerMonitor.onSimpleEvent,
+      getSystemIdleState: powerMonitor.getSystemIdleState,
+    });
   }),
 );

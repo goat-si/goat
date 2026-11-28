@@ -12,6 +12,9 @@ export function countGlyphs(text: string): number {
   return Array.from(text.replace(/\p{M}/gu, "")).length;
 }
 
+// One ideograph or syllable block already reads as a compact mark; two look bulky.
+const SINGLE_GLYPH_SCRIPT = /^[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}\p{scx=Hangul}]/u;
+
 export function projectMonogram(projectName: string): string {
   const words =
     projectName
@@ -23,6 +26,7 @@ export function projectMonogram(projectName: string): string {
 
   const glyphs = Array.from(firstWord);
   const first = glyphs[0] ?? "P";
+  if (SINGLE_GLYPH_SCRIPT.test(first)) return first;
   const second =
     glyphs.slice(1).find((glyph) => /\p{N}/u.test(glyph)) ??
     (words.length > 1 ? Array.from(words.at(-1) ?? "")[0] : glyphs.at(-1)) ??

@@ -10,6 +10,7 @@ import {
   CircleAlertIcon as CircleAlert,
   PlayIcon as Play,
   SmartphoneIcon as Smartphone,
+  SquareIcon as Square,
   XIcon as X,
 } from "~/components/solar";
 import { type ReactNode, useState } from "react";
@@ -25,6 +26,7 @@ import { DiscoveryList } from "~/components/ui/discovery-list";
 import { Dialog } from "~/components/ui/dialog";
 import { WizardPopup } from "~/components/ui/wizard";
 import { Spinner } from "~/components/ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import { focusPanelTerminalAfterClose } from "~/lib/terminalFocus";
 import {
@@ -47,8 +49,12 @@ import { DeviceWorkspace } from "./DeviceWorkspace";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 import { floatPreview } from "../preview/floatPreview";
 
-const platformLabel = (platform: DevicePlatform) =>
-  platform === "ios" ? "iOS Simulators" : "Android Emulators";
+const platformLabel = (platform: DevicePlatform, devices: readonly DeviceSummary[]) =>
+  platform === "ios"
+    ? "iOS Simulators"
+    : devices.some((device) => device.physical)
+      ? "Android Devices"
+      : "Android Emulators";
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
   `${device.hostId}\u0000${device.id}`;
@@ -65,6 +71,7 @@ export function DevicePanel(props: {
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const open = useAtomCommand(deviceEnvironment.open);
   const close = useAtomCommand(deviceEnvironment.close);
+  const shutdown = useAtomCommand(deviceEnvironment.shutdown, { reportFailure: false });
   // The panel stays mounted across thread switches, so an in-flight open or
   // power-off is tagged with the thread it belongs to and only shown there.
   const scope = `${environmentId}\u0000${threadId}`;
@@ -76,6 +83,19 @@ export function DevicePanel(props: {
   const pendingDevice = operation?.scope === scope ? operation.pending : null;
   const operationError = operation?.scope === scope ? operation.error : null;
   const pendingDeviceKey = pendingDevice ? deviceKey(pendingDevice) : null;
+  // Power-offs act on the environment, not the thread, so they outlive thread switches.
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+  const [stopErrors, setStopErrors] = useState<Readonly<Record<string, string>>>({});
+  const stopError = stopErrors[environmentId];
+  const setStopError = (message: string | undefined) =>
+    setStopErrors((current) => {
+      const next = { ...current };
+      if (message === undefined) delete next[environmentId];
+      else next[environmentId] = message;
+      return next;
+    });
+  const stoppingKey = (device: DeviceSummary) => `${environmentId}\u0000${deviceKey(device)}`;
+  const isStopping = (device: DeviceSummary) => stopping.has(stoppingKey(device));
 
   const hostDisabled = state.hostStatus === "disabled";
 
@@ -100,6 +120,7 @@ export function DevicePanel(props: {
     : undefined;
 
   const grouped = groupDevices(state);
+  const stoppable = state.devices.filter((device) => device.booted && !device.physical);
 
   const startOperation = (pending: DeviceSummary | null) => {
     const started = { scope, pending, error: null };
@@ -135,6 +156,27 @@ export function DevicePanel(props: {
       });
       settleOperation(null);
     }
+  };
+
+  const stopDevices = async (devices: readonly DeviceSummary[]) => {
+    setStopError(undefined);
+    setStopping((current) => new Set([...current, ...devices.map(stoppingKey)]));
+    const results = await Promise.all(
+      devices.map((device) =>
+        shutdown({
+          environmentId,
+          input: { hostId: device.hostId, deviceId: device.id, platform: device.platform },
+        }).finally(() =>
+          setStopping((current) => {
+            const next = new Set(current);
+            next.delete(stoppingKey(device));
+            return next;
+          }),
+        ),
+      ),
+    );
+    const failure = results.find((result) => result._tag === "Failure");
+    if (failure?._tag === "Failure") setStopError(formatEnvironmentQueryError(failure.cause));
   };
 
   const floatActive = () => {
@@ -254,6 +296,11 @@ export function DevicePanel(props: {
               {operationError}
             </DeviceNotice>
           ) : null}
+          {stopError !== undefined ? (
+            <DeviceNotice tone="error" onDismiss={() => setStopError(undefined)}>
+              {stopError}
+            </DeviceNotice>
+          ) : null}
         </div>
         <div className="@container relative flex min-h-0 flex-1">
           {activeDevice && activeSession ? (
@@ -327,7 +374,9 @@ export function DevicePanel(props: {
                       <section key={group.platform} className="space-y-3">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
                           <Smartphone className="size-4 shrink-0" />
-                          <h3 className="font-medium">{platformLabel(group.platform)}</h3>
+                          <h3 className="font-medium">
+                            {platformLabel(group.platform, group.devices)}
+                          </h3>
                         </div>
                         <DiscoveryList>
                           {group.devices.map((device) => (
@@ -352,10 +401,31 @@ export function DevicePanel(props: {
                                   device={device}
                                 />
                               </div>
+                              {device.booted && !device.physical ? (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        variant="outline"
+                                        size="icon-sm"
+                                        disabled={
+                                          isStopping(device) ||
+                                          pendingDeviceKey === deviceKey(device)
+                                        }
+                                        aria-label={`Stop ${device.name}`}
+                                        onClick={() => void stopDevices([device])}
+                                      />
+                                    }
+                                  >
+                                    {isStopping(device) ? <Spinner size="xs" /> : <Square />}
+                                  </TooltipTrigger>
+                                  <TooltipPopup>Stop</TooltipPopup>
+                                </Tooltip>
+                              ) : null}
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={pendingDeviceKey !== null}
+                                disabled={pendingDeviceKey !== null || isStopping(device)}
                                 aria-label={`${device.booted ? "Open" : "Start"} ${device.name}`}
                                 onClick={() => void selectDevice(deviceKey(device))}
                               >
@@ -385,14 +455,32 @@ export function DevicePanel(props: {
                   </p>
                 ) : null}
                 {loaded && !hostBusy ? (
-                  <Button
-                    className={grouped.length > 0 ? "self-start" : "self-center"}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => void list({ environmentId, input: {} })}
+                  <div
+                    className={cn(
+                      "flex flex-wrap gap-2",
+                      grouped.length > 0 ? "self-start" : "self-center",
+                    )}
                   >
-                    Refresh devices
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void list({ environmentId, input: {} })}
+                    >
+                      Refresh devices
+                    </Button>
+                    {stoppable.length > 0 ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={stoppable.every(isStopping)}
+                        onClick={() =>
+                          void stopDevices(stoppable.filter((device) => !isStopping(device)))
+                        }
+                      >
+                        Stop all devices
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </div>

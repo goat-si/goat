@@ -1,6 +1,7 @@
 import { AddToChatButton, chatSubject } from "./PullRequestChatActions";
 import { filterPullRequestConversationItems } from "./pullRequestConversationFilter";
 import { pullRequestCommentPreview } from "./pullRequestMarkdown.logic";
+import { usePullRequestSummaryView } from "./pullRequestSummaryScroll.logic";
 import { usePullRequestSummaryReveal } from "./usePullRequestSummaryReveal";
 import { useAtomValue } from "@effect/atom-react";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
@@ -94,7 +95,7 @@ import { canReactPullRequestComment } from "@goat/client-runtime/pull-request-re
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestResolveThreadButton } from "./PullRequestResolveThreadButton";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
-import { Section } from "./PullRequestSummarySection";
+import { MetaRow, Section } from "./PullRequestSummarySection";
 
 function reviewerKey(login: string): string {
   return login.toLowerCase();
@@ -103,10 +104,14 @@ function reviewerKey(login: string): string {
 function CommentIdentity({
   comment,
   detail,
+  threadRef,
 }: {
   comment: PullRequestComment;
   detail: PullRequestDetailView;
+  threadRef: ScopedThreadRef | null;
 }) {
+  const openLink = useOpenLink(threadRef);
+  const url = comment.url;
   const timestampFormat = useClientSettings((settings) => settings.timestampFormat);
   const actor = comment.author;
   const profileUrl = actor
@@ -114,16 +119,25 @@ function CommentIdentity({
     : null;
   return (
     <h2 className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
-      <PullRequestActorLabel actor={actor} profileUrl={profileUrl} className="max-w-full" />
+      <PullRequestActorLabel
+        actor={actor}
+        profileUrl={profileUrl}
+        threadRef={threadRef}
+        className="max-w-full"
+      />
       <Tooltip>
         <TooltipTrigger
           render={
-            comment.url ? (
+            url ? (
               <a
-                href={comment.url}
+                href={url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-muted-foreground hover:text-foreground hover:underline"
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openLink(url, { event }).catch(console.error);
+                }}
               />
             ) : (
               <span className="text-muted-foreground" />
@@ -136,7 +150,7 @@ function CommentIdentity({
         </TooltipTrigger>
         <TooltipPopup>
           {formatFullTimestamp(comment.createdAt, timestampFormat)}
-          {comment.url ? " · Open comment on host" : ""}
+          {url ? " · Open comment on host" : ""}
         </TooltipPopup>
       </Tooltip>
     </h2>
@@ -257,12 +271,15 @@ function CollapsedComment({
       <article className="group rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
         <div className="p-3">
           <div className="flex flex-wrap items-baseline gap-2">
-            <CommentIdentity comment={comment} detail={detail} />
+            <CommentIdentity comment={comment} detail={detail} threadRef={editing.threadRef} />
             {replyCount > 0 ? (
               <span className="shrink-0 py-1 text-xs text-muted-foreground">
                 {replyCount} {replyCount === 1 ? "reply" : "replies"}
               </span>
             ) : null}
+            {/* Collapsed, the status label already says "Resolved". It goes before the
+                trigger so opening doesn't shift the trigger out from under the cursor. */}
+            {open ? resolveButton : null}
             <CollapsibleTrigger
               ref={statusTriggerRef}
               className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -273,8 +290,6 @@ function CollapsedComment({
                 className={cn("size-3.5 transition-transform", open && "rotate-180")}
               />
             </CollapsibleTrigger>
-            {/* Collapsed, the status label already says "Resolved". */}
-            {open ? resolveButton : null}
             {onAddToChat ? <AddToChatButton onClick={onAddToChat} /> : null}
             {reactionBar}
           </div>
@@ -301,26 +316,6 @@ function CollapsedComment({
         {moreReplies ? <div className="px-3 pb-3">{moreReplies}</div> : null}
       </article>
     </Collapsible>
-  );
-}
-
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="grid min-h-7 min-w-0 grid-cols-[6rem_minmax(0,1fr)] items-center gap-2 text-xs sm:min-h-6">
-      <span className="flex items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 text-foreground">{children}</span>
-    </div>
   );
 }
 
@@ -370,8 +365,14 @@ export function PullRequestSummaryTab({
   onRefreshChecks?: () => void;
 }) {
   const terminology = sourceControlClients.get(detail.provider).changeRequest;
-  const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
-  const shownConversations = shown.url === detail.url ? shown.count : COMMENT_PAGE;
+  const {
+    shownConversations,
+    setShown,
+    commentOrder,
+    toggleCommentOrder,
+    initialScrollTop,
+    rememberScrollTop,
+  } = usePullRequestSummaryView(`${environmentId}:${detail.url}`, detail.url);
   const [commentFilter, setCommentFilter] = useLocalStorage(
     COMMENT_FILTER_STORAGE_KEY,
     DEFAULT_COMMENT_FILTER,
@@ -396,7 +397,6 @@ export function PullRequestSummaryTab({
     filteredItems,
     shownConversations,
   );
-  const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
   const visibleItems = orderPullRequestComments(recentItems, commentOrder);
   const showOldestCommentsButton =
     hiddenConversationCount > 0 ? (
@@ -404,7 +404,7 @@ export function PullRequestSummaryTab({
         size="sm"
         variant="outline"
         className="w-full"
-        onClick={() => setShown({ url: detail.url, count: shownConversations + COMMENT_PAGE })}
+        onClick={() => setShown(shownConversations + COMMENT_PAGE)}
       >
         Show {Math.min(hiddenConversationCount, COMMENT_PAGE)} older conversation
         {hiddenConversationCount === 1 ? "" : "s"} ({hiddenConversationCount} hidden)
@@ -480,12 +480,14 @@ export function PullRequestSummaryTab({
   const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
   const editingDescription = bodyScope?.url === detail.url;
-  const { scrollRef, checksReveals, descriptionReveals } = usePullRequestSummaryReveal({
-    revealUrl,
-    onRevealSettled,
-    description,
-    editingDescription,
-  });
+  const { scrollRef, restoringScroll, checksReveals, descriptionReveals } =
+    usePullRequestSummaryReveal({
+      revealUrl,
+      onRevealSettled,
+      description,
+      editingDescription,
+      initialScrollTop,
+    });
   // Checkbox ticks and the editor share one draft, so each starts from the other's latest body.
   const saveDescription = async (body: string) => {
     const key = detail.url;
@@ -585,7 +587,7 @@ export function PullRequestSummaryTab({
       >
         <div className="flex flex-wrap items-baseline gap-2 rounded-t-lg bg-muted/25 px-3 py-2.5">
           <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-2 text-xs text-muted-foreground">
-            <CommentIdentity comment={comment} detail={detail} />
+            <CommentIdentity comment={comment} detail={detail} threadRef={threadRef} />
             {outcome ? (
               <PullRequestReviewOutcomeBadge outcome={outcome} />
             ) : comment.reviewState ? (
@@ -638,7 +640,9 @@ export function PullRequestSummaryTab({
         </div>
       ) : null;
     const moreReplies =
-      item.kind === "thread" && item.hasMoreReplies ? <PullRequestMoreReplies {...item} /> : null;
+      item.kind === "thread" && item.hasMoreReplies ? (
+        <PullRequestMoreReplies {...item} threadRef={threadRef} />
+      ) : null;
     if (isPullRequestCommentFinished(comment, thread)) {
       const chat = chatSubject(comment, thread);
       return (
@@ -674,6 +678,9 @@ export function PullRequestSummaryTab({
       ref={(node) => {
         scrollRef.current = node;
         scrollerRef(node);
+      }}
+      onScroll={(event) => {
+        if (!restoringScroll.current) rememberScrollTop(event.currentTarget.scrollTop);
       }}
       className="h-full overflow-y-auto"
       data-pull-request-summary-scroll
@@ -925,7 +932,7 @@ export function PullRequestSummaryTab({
                   ? "Show oldest comments first"
                   : "Show newest comments first"
               }
-              onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
+              onClick={toggleCommentOrder}
             >
               <ArrowDownUpIcon aria-hidden className="size-3" />
               {commentOrder === "newest" ? "Newest first" : "Oldest first"}
@@ -968,7 +975,7 @@ export function PullRequestSummaryTab({
                     size="sm"
                     variant="ghost"
                     className="w-full"
-                    onClick={() => setShown({ url: detail.url, count: COMMENT_PAGE })}
+                    onClick={() => setShown(COMMENT_PAGE)}
                   >
                     Show only {COMMENT_PAGE} recent conversations
                   </Button>

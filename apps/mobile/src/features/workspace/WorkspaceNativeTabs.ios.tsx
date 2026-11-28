@@ -114,12 +114,12 @@ function RetainedWorkspaceTab(props: {
 
   // oxlint-disable-next-line goat/react-effect-budget -- a removed or reassigned slot must mount again
   useLayoutEffect(() => () => setReady(identity, false), [identity, setReady]);
+  // Built apart from the providers: a header option write re-renders their readers, not the tab.
+  const body = content ? content.children(content.workspace, content.prewarming) : null;
   return content ? (
     <NativeWorkspaceTabActivityContext value={activity}>
       <WorkspaceSlotOptionsContext value={slotOptions}>
-        <WorkspaceTabsContext value={content.workspace}>
-          {content.children(content.workspace, content.prewarming)}
-        </WorkspaceTabsContext>
+        <WorkspaceTabsContext value={content.workspace}>{body}</WorkspaceTabsContext>
       </WorkspaceSlotOptionsContext>
     </NativeWorkspaceTabActivityContext>
   ) : null;

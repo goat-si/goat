@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { ProcessSignalActions } from "./ProcessSignalActions";
 import { AuthEnvironmentMaintainScope } from "@goat/contracts";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -5,20 +6,19 @@ import {
   ActivityIcon,
   TriangleAlertIcon as AlertTriangleIcon,
   BatteryIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CpuIcon,
   DatabaseIcon,
   GaugeIcon,
   HardDriveIcon,
   MemoryStickIcon,
 } from "~/components/solar";
-import { ChevronDownIcon, ChevronRightIcon } from "~/components/solar";
 import type {
-  BackgroundBooleanState,
   EnvironmentId,
   ResourceAttributionEntry,
   ResourceTelemetryAggregate,
   ResourceTelemetryHistoryBucket,
-  ResourceTelemetryIoSemantics,
   ResourceTelemetryProcess,
   ResourceTelemetryProcessCategory,
   ResourceTelemetryProcessSummary,
@@ -53,7 +53,10 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  booleanStateLabel,
+  formatDurationMicros,
   formatSampleInterval,
+  ioSemanticsLabel,
   resourceHistoryBarHeight,
   resourceHistoryCpuScaleMax,
   shouldShowResourceMonitorRetry,
@@ -71,12 +74,6 @@ const HISTORY_WINDOWS = [
 
 function formatRate(value: number): string {
   return `${formatBytes(value)}/s`;
-}
-
-function formatDurationMicros(value: number): string {
-  if (value < 1_000) return `${Math.round(value)} µs`;
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(2)} ms`;
-  return `${(value / 1_000_000).toFixed(2)} s`;
 }
 
 function processIdentityKey(process: ResourceTelemetryProcess): string {
@@ -99,28 +96,6 @@ function categoryDotClass(category: ResourceTelemetryProcessCategory): string {
   if (category.startsWith("electron-")) return "bg-info";
   if (category === "server") return "bg-violet-500";
   return "bg-success";
-}
-
-function ioSemanticsLabel(semantics: ResourceTelemetryIoSemantics): string {
-  switch (semantics) {
-    case "storage":
-      return "Storage bytes";
-    case "logical":
-      return "Logical bytes";
-    case "all-io":
-      return "All I/O bytes";
-    case "unavailable":
-      return "Unavailable";
-  }
-}
-
-function booleanStateLabel(
-  value: BackgroundBooleanState,
-  labels: { readonly true: string; readonly false: string },
-): string {
-  if (value === "true") return labels.true;
-  if (value === "false") return labels.false;
-  return "Unknown";
 }
 
 function sourceStatusTone(status: ResourceTelemetrySourceStatus): "default" | "warning" | "danger" {
@@ -231,6 +206,7 @@ function AggregateCard({
   accentClass: string;
   aggregate: ResourceTelemetryAggregate;
 }) {
+  const gt = useGT();
   return (
     <div className="relative overflow-hidden border-t border-border/60 px-4 py-4 first:border-t-0 md:border-t-0 md:border-l md:first:border-l-0 sm:px-5">
       <span className={cn("absolute inset-x-5 top-0 h-0.5 rounded-full opacity-75", accentClass)} />
@@ -239,7 +215,9 @@ function AggregateCard({
           {label}
         </div>
         <div className="rounded-md bg-muted/55 px-1.5 py-0.5 font-mono text-3xs tabular-nums text-muted-foreground/70">
-          {aggregate.processCount} {aggregate.processCount === 1 ? "process" : "processes"}
+          {gt("{count, plural, one {{count} process} other {{count} processes}}", {
+            count: aggregate.processCount,
+          })}
         </div>
       </div>
       <div className="mt-3.5 grid grid-cols-2 gap-x-4 gap-y-2.5">
@@ -790,6 +768,7 @@ function ResourceTelemetryDiagnosticsBody({
 }: {
   environmentId: EnvironmentId | null;
 }) {
+  const gt = useGT();
   const registry = useContext(RegistryContext);
   const [windowMs, setWindowMs] = useState(15 * 60_000);
   const selectedWindow =
@@ -1012,20 +991,36 @@ function ResourceTelemetryDiagnosticsBody({
               label="Process count"
               value={allT3 ? String(allT3.processCount) : "..."}
               detail={
-                allT3 ? `${allT3.processStarts} starts · ${allT3.processExits} exits` : undefined
+                allT3
+                  ? gt(
+                      "{processStarts, plural, one {{processStarts} start} other {{processStarts} starts}} · {processExits, plural, one {{processExits} exit} other {{processExits} exits}}",
+                      {
+                        processStarts: allT3.processStarts,
+                        processExits: allT3.processExits,
+                      },
+                    )
+                  : undefined
               }
             />
             <IconStat
               icon={<HardDriveIcon className="size-3.5" />}
               label="Read throughput"
               value={allT3 ? formatRate(allT3.ioReadBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioReadBytes)} observed` : undefined}
+              detail={
+                allT3
+                  ? gt("{bytes} observed", { bytes: formatBytes(allT3.ioReadBytes) })
+                  : undefined
+              }
             />
             <IconStat
               icon={<DatabaseIcon className="size-3.5" />}
               label="Write throughput"
               value={allT3 ? formatRate(allT3.ioWriteBytesPerSecond) : "..."}
-              detail={allT3 ? `${formatBytes(allT3.ioWriteBytes)} observed` : undefined}
+              detail={
+                allT3
+                  ? gt("{bytes} observed", { bytes: formatBytes(allT3.ioWriteBytes) })
+                  : undefined
+              }
               tone={
                 allT3 && allT3.ioWriteBytesPerSecond >= 10 * 1_024 * 1_024
                   ? "danger"
@@ -1170,7 +1165,10 @@ function ResourceTelemetryDiagnosticsBody({
                 />
                 <DetailRow
                   label="Process scan"
-                  value={`${snapshot.health.retainedProcessCount}/${snapshot.health.scannedProcessCount} retained`}
+                  value={gt("{retained}/{scanned} retained", {
+                    retained: snapshot.health.retainedProcessCount,
+                    scanned: snapshot.health.scannedProcessCount,
+                  })}
                 />
                 <DetailRow
                   label="Inaccessible"

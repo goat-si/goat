@@ -467,3 +467,36 @@ it.effect("admits a check and retry after cancellation and late native download 
     }).pipe(Effect.provide(harness.layer), Effect.scoped);
   }),
 );
+
+it.effect("downloads again when the downloaded update file was deleted before install", () => {
+  const downloadedFile = "/cache/pending/GOAT-1.2.4-arm64.zip";
+  let installedFileExists: boolean | undefined;
+  const harness = makeHarness({
+    checkForUpdates: Effect.sync(() => harness.emit("update-available", { version: "1.2.4" })),
+    downloadUpdate: Effect.sync(() => {
+      harness.deletedFiles.delete(downloadedFile);
+      harness.emit("update-downloaded", { version: "1.2.4", downloadedFile });
+    }),
+    quitAndInstall: Effect.sync(() => {
+      installedFileExists = !harness.deletedFiles.has(downloadedFile);
+    }),
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const updates = yield* DesktopUpdates.DesktopUpdates;
+      yield* updates.configure;
+      yield* updates.check("poll");
+      yield* updates.download;
+      yield* flushCallbacks;
+      assert.equal(harness.downloadCount(), 1);
+
+      harness.deletedFiles.add(downloadedFile);
+      const result = yield* updates.installPrepared("1.2.4");
+      assert.isTrue(result.accepted);
+      assert.equal(harness.downloadCount(), 2);
+      assert.equal(harness.quitAndInstalls(), 1);
+      assert.isTrue(installedFileExists);
+    }),
+  ).pipe(Effect.provide(harness.layer));
+});

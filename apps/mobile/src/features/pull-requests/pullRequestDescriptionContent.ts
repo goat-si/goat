@@ -1,3 +1,4 @@
+import { mediaReferenceFileName } from "@goat/client-runtime/media-reference";
 import type { PullRequestBodySegment } from "@goat/client-runtime/pull-request-markdown";
 import type { MarkdownNode } from "../../lib/markdownDocument";
 
@@ -43,7 +44,7 @@ export function pullRequestDescriptionContent(
       return;
     }
     if (segment.kind === "attachment" && !attachments.has(segment.url)) {
-      const name = new URL(segment.url).pathname.split("/").pop();
+      const name = mediaReferenceFileName({ kind: "url", url: segment.url });
       attachments.set(segment.url, {
         uri: segment.url,
         caption: segment.media === "video" ? "Video" : name || "Image",

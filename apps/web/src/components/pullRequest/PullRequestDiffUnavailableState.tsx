@@ -1,6 +1,7 @@
-import type { SourceControlProviderKind } from "@goat/contracts";
+import type { ScopedThreadRef, SourceControlProviderKind } from "@goat/contracts";
 import { ExternalLinkIcon, TriangleAlertIcon } from "~/components/solar";
 
+import { useOpenLink } from "~/browser/useOpenLink";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { Button } from "../ui/button";
@@ -12,13 +13,16 @@ export function PullRequestDiffUnavailableState({
   error,
   provider,
   url,
+  threadRef,
   onRetry,
 }: {
   error: string;
   provider: SourceControlProviderKind;
   url: string;
+  threadRef: ScopedThreadRef | null;
   onRetry: () => void;
 }) {
+  const openLink = useOpenLink(threadRef);
   const { providerName, terminology } = getSourceControlPresentationForKind(provider);
   const { title, description } = describePullRequestDiffError(
     error,
@@ -44,6 +48,10 @@ export function PullRequestDiffUnavailableState({
           size="sm"
           variant="outline"
           render={<a href={url} target="_blank" rel="noopener noreferrer" />}
+          onClick={(event) => {
+            event.preventDefault();
+            void openLink(url, { event }).catch(console.error);
+          }}
         >
           <ExternalLinkIcon aria-hidden />
           Open on {providerName}

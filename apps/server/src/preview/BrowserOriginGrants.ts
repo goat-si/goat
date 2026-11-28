@@ -22,7 +22,7 @@ import {
   serverAdmitsBrowserCall,
 } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 import { authorizeClaimBind } from "../cua/ComputerUseClaimBindAuthority.ts";
-import { blockedClaimCall } from "./BrowserClaimBlockedHosts.ts";
+import { blockedClaimCall, isBlockedClaimUrl } from "./BrowserClaimBlockedHosts.ts";
 
 export interface Request {
   readonly threadId: ThreadId;
@@ -102,7 +102,8 @@ const blocked = {
 const isOrigin = Schema.is(BrowserOrigin);
 const originOf = (url: string) => {
   try {
-    return new URL(url).origin;
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : "";
   } catch {
     return "";
   }
@@ -691,6 +692,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     return [...claims.values()].flatMap((claim) => {
       const targetId = targets.get(claim);
       if (claim.threadId !== threadId || targetId === undefined) return [];
+      const claimOrigins = origins.includes(claim.origin)
+        ? [claim.origin, ...origins.filter((entry) => entry !== claim.origin)]
+        : origins;
       return [
         {
           claimId: claim.claimId,
@@ -699,7 +703,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           windowId: claim.tab.windowId,
           tabId: claim.tab.tabId,
           targetId,
-          origins,
+          origins: claimOrigins,
         },
       ];
     });
@@ -755,8 +759,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (claim?.threadId !== threadId || claim.claimGeneration !== expected.claimGeneration)
             return "outside" as const;
         }
-        if (!serverAdmitsBrowserCall(name, args, { claims: claimValues(threadId), bindings: [] }))
-          return "outside" as const;
         const result = blockedClaimCall(
           name,
           args,
@@ -771,7 +773,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
               claimGeneration: result.claim.claimGeneration,
             },
           };
-        return result.blocked ? ("blocked" as const) : ("admit" as const);
+        if (result.blocked) return "blocked" as const;
+        if (!serverAdmitsBrowserCall(name, args, { claims: claimValues(threadId), bindings: [] }))
+          return "outside" as const;
+        return "admit" as const;
       }),
   );
   const admitClaimCall = Effect.fn("BrowserOriginGrants.admitClaimCall")(function* (
@@ -798,7 +803,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           : undefined);
       if (
         hosts === undefined ||
-        (typeof input?.url === "string" && isBlockedBrowserUrl(input.url, hosts)) ||
+        (typeof input?.url === "string" && isBlockedClaimUrl(input.url, claim?.origin, hosts)) ||
         (claim?.threadId === threadId && isBlockedBrowserUrl(claim.origin, hosts))
       )
         return { status: "blocked" as const };
@@ -835,8 +840,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
                 ? ("blocked" as const)
                 : ("outside" as const),
           };
-        const snapshot = { claims: claimValues(threadId), bindings: [] };
-        if (!serverAdmitsBrowserCall(name, args, snapshot)) return { status: "outside" as const };
         const decision = blockedClaimCall(
           name,
           args,
@@ -855,6 +858,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           }
           return { status: "blocked" as const };
         }
+        const snapshot = { claims: claimValues(threadId), bindings: [] };
+        if (!serverAdmitsBrowserCall(name, args, snapshot)) return { status: "outside" as const };
         const input =
           typeof args === "object" && args !== null && !Array.isArray(args)
             ? (args as Record<string, unknown>)

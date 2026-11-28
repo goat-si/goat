@@ -120,8 +120,7 @@ import {
 import { markdownFileEditorTarget, resolveMarkdownFileHostPath } from "../markdownFileHostPath";
 import { normalizeMarkdownLinkHrefKey } from "./chatMarkdownLinkHref";
 import { isMarkdownFileLinkLabel } from "@goat/shared/markdownLinks";
-import { isElectron } from "../env";
-import { contextMenuForEvent } from "../contextMenuSource";
+import { contextMenuForEvent, openContextMenuFromKeyboard } from "../contextMenuSource";
 import { cn } from "../lib/utils";
 import { resolveRemoteOpenState, useRemoteOpenResolution } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -204,9 +203,10 @@ import {
   nodeToPlainText,
 } from "./chat/MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
+import { useShouldFadeStreaming } from "./chat/useStreamingReveal";
 import {
   handleMarkdownLinkAuxClick,
-  markdownLinkNeedsEnvironmentRoute,
+  markdownLinkNeedsExternalBridge,
   openMarkdownLinkExternally,
   openMarkdownLinkInSystemBrowser,
   reportMarkdownExternalOpenFailure,
@@ -223,6 +223,8 @@ interface ChatMarkdownProps {
   environmentId?: EnvironmentId | undefined;
   onTaskListChange?: ((input: { markerOffset: number; checked: boolean }) => void) | undefined;
   isStreaming?: boolean;
+  /** Identifies a streaming reply across remounts, so text already shown does not fade in again. */
+  streamingId?: string | undefined;
   skills?: ReadonlyArray<ServerProviderSkill>;
   className?: string;
   lineBreaks?: boolean;
@@ -436,7 +438,7 @@ function useChatMarkdownState({
             target !== null &&
             resolveRemoteOpenState({
               target,
-              sshTarget: null,
+              routes: [],
               remoteOpenTargets: undefined,
               isDesktopRenderer: window.desktopBridge !== undefined,
             }).mode !== "local-exec"
@@ -1046,12 +1048,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 canOpenInApp: canOpenInPreview,
               }) !== "app"
             ) {
-              // Open desktop Alt-clicks before Chromium downloads them so link routers can read the held key.
-              // A remote environment's loopback link needs its address, which native navigation skips.
-              if (
-                (isElectron && event.altKey) ||
-                markdownLinkNeedsEnvironmentRoute(environmentId, href)
-              ) {
+              // Open desktop Alt-clicks, editor links, and remote loopback links over the bridge.
+              if (markdownLinkNeedsExternalBridge(environmentId, href, event.altKey)) {
                 event.preventDefault();
                 event.stopPropagation();
                 openMarkdownLinkInSystemBrowser(environmentId, href);
@@ -1073,6 +1071,9 @@ const CHAT_MARKDOWN_COMPONENTS = {
           onAuxClick={(event) => {
             props.onAuxClick?.(event);
             handleMarkdownLinkAuxClick(event, environmentId, href);
+          }}
+          onKeyDown={(event) => {
+            if (href && faviconHost) openContextMenuFromKeyboard(event);
           }}
           onContextMenu={(event) => {
             if (!href || !faviconHost) return;
@@ -1544,6 +1545,7 @@ function ChatMarkdown({
   const { componentState, handleCopy, markdownRef, localMediaPreview, closeLocalMediaPreview } =
     useChatMarkdownState({ text, inline, ...props });
   const hasInsights = renderInsights && text.includes("★ Insight");
+  const shouldFadeStreaming = useShouldFadeStreaming(text, props.isStreaming, props.streamingId);
   // Streaming re-renders only the last block; offsets for task edits need the whole text.
   const streamingBlocks =
     props.isStreaming === true &&
@@ -1592,7 +1594,7 @@ function ChatMarkdown({
           "text-sm leading-relaxed text-foreground/[calc(92%+var(--appearance-contrast-boost)/12.5)]",
         className,
       )}
-      data-streaming={componentState.isStreaming ? "" : undefined}
+      data-streaming={componentState.isStreaming && shouldFadeStreaming ? "" : undefined}
       onCopy={handleCopy}
     >
       <ChatMarkdownRendererContext value={componentState}>

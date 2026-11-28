@@ -179,12 +179,12 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
     [WS_METHODS.computerUseStop]: (input: { readonly threadId: ThreadId }) =>
       stopComputerUse(leases, handoffs, sessionId, input.threadId, claims).pipe(
         Effect.orDie,
-        Effect.map(({ stopped }) => ({ stopped })),
+        Effect.map(({ stopped, failed }) => ({ stopped, failed })),
       ),
     [WS_METHODS.computerUseStopAll]: (_input: {}) =>
       stopAllComputerUse(leases, handoffs, sessionId, claims).pipe(
         Effect.orDie,
-        Effect.map(({ stopped }) => ({ stopped })),
+        Effect.map(({ stopped, failed }) => ({ stopped, failed })),
       ),
     [WS_METHODS.computerUseApps]: (_input: {}) =>
       Option.isNone(driver)

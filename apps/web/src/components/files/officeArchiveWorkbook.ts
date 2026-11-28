@@ -175,7 +175,11 @@ function boundedWorksheet(
       const end = cell.selfClosing ? cell.start : xml.lastIndexOf("<", parser.position - 1);
       const raw = cell.opening + xml.slice(cell.start, end) + `</${cell.name}>`;
       const shown = cell.shared ? (strings[Number(cell.value)] ?? "") : cell.text || cell.value;
-      const kept = shown.slice(0, Math.min(4096, budget.remaining));
+      let limit = Math.min(4096, budget.remaining);
+      const before = shown.charCodeAt(limit - 1);
+      const after = shown.charCodeAt(limit);
+      if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) limit--;
+      const kept = shown.slice(0, limit);
       budget.remaining -= kept.length;
       if (kept.length < shown.length) {
         truncated = true;
@@ -363,10 +367,16 @@ export async function boundWorkbook(archive: JSZip) {
   relationships.on("opentag", (tag) => {
     if (tag.local !== "Relationship") return;
     const type = tag.attributes.Type?.value;
-    const path = new URL(
-      tag.attributes.Target?.value ?? "",
-      "https://docx.invalid/xl/workbook.xml",
-    ).pathname.slice(1);
+    const target = tag.attributes.Target?.value ?? "";
+    // Resolve as the engine does: literal ZIP names split on `/`, never URL syntax or escapes.
+    const segments = target.startsWith("/") ? [] : ["xl"];
+    for (const segment of target.split("/")) {
+      if (segment === "..") segments.pop();
+      else if (segment && segment !== ".") segments.push(segment);
+    }
+    const external = tag.attributes.TargetMode?.value.toLowerCase() === "external";
+    // The engine reads an external worksheet from its default part, so leave it unresolved to refuse it.
+    const path = external && type?.endsWith("/worksheet") ? "" : segments.join("/");
     if (type?.endsWith("/worksheet")) paths.set(tag.attributes.Id?.value ?? "", path);
     else if (/\/(?:chartsheet|dialogsheet|xlMacrosheet|xlIntlMacrosheet)$/.test(type ?? ""))
       otherSheets.add(tag.attributes.Id?.value ?? "");

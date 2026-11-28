@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import { WEB_LINK_OPEN_CHANNEL } from "../ipc/channels.ts";
+import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 export const isWebLink = (value: string) => {
   if (!URL.canParse(value)) return false;
@@ -23,10 +24,12 @@ export class DesktopWebLinks extends Context.Service<
 >()("@goat/desktop/app/DesktopWebLinks") {}
 
 const make = Effect.gen(function* () {
+  const desktopWindow = yield* DesktopWindow.DesktopWindow;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const pending: Array<string> = [];
   let listening: Electron.WebContents | null = null;
   let detachListening: (() => void) | null = null;
+  let rendererHasListened = false;
 
   const stopListening = () => {
     detachListening?.();
@@ -53,6 +56,7 @@ const make = Effect.gen(function* () {
     if (listening === webContents) return;
     stopListening();
     listening = webContents;
+    rendererHasListened = true;
     const onNavigation = (
       event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
     ) => {
@@ -69,11 +73,12 @@ const make = Effect.gen(function* () {
   });
 
   return DesktopWebLinks.of({
-    receive: Effect.fn("DesktopWebLinks.receive")(function (url) {
-      return Effect.suspend(() => {
-        pending.push(url);
-        return flush;
-      });
+    receive: Effect.fn("DesktopWebLinks.receive")(function* (url) {
+      pending.push(url);
+      yield* flush;
+      if (!rendererHasListened || Option.isSome(yield* electronWindow.main)) return;
+      // macOS fires `activate` only on reopen, not when a link opens the app.
+      yield* desktopWindow.activate.pipe(Effect.ignore);
     }),
     setRendererReady: Effect.fn("DesktopWebLinks.setRendererReady")(function (ready) {
       return ready ? startListening : Effect.sync(stopListening);

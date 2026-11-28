@@ -1,11 +1,13 @@
 import { GTProvider } from "gt-react";
+import { initializeI18n } from "../../i18n/initializeI18n";
 import zh from "../../i18n/translations/zh.json";
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import * as Schema from "effect/Schema";
 import { describe, expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import "~/index.css";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { TYPOGRAPHY_ADVANCED_STORAGE_KEY } from "../../appearanceFonts";
 import { getLocalStorageItem, removeLocalStorageItem } from "../../hooks/useLocalStorage";
 import { TypographySection } from "./TypographySettings";
@@ -44,6 +46,11 @@ describe("TypographySection", () => {
   });
   it("localizes simple and advanced typography controls", async () => {
     using _storage = setup(null);
+    using _locale = {
+      [Symbol.dispose]() {
+        initializeI18n(() => {});
+      },
+    };
     await using screen = await render(
       <GTProvider locale="zh" translations={{ zh }}>
         <TypographySection />
@@ -52,5 +59,61 @@ describe("TypographySection", () => {
     await expect.element(screen.getByRole("heading", { name: "等宽字体" })).toBeVisible();
     await screen.getByRole("switch", { name: "显示高级字体设置" }).click();
     await expect.element(screen.getByRole("combobox", { name: "终端字号" })).toBeVisible();
+  });
+
+  it("keeps the typed font family when an IME Escape cancels a conversion", async () => {
+    using _storage = setup(null);
+    await using screen = await render(<TypographySection />);
+    const input = screen.getByRole("textbox", { name: "Interface font family" });
+    await input.fill("Noto ゴシック");
+
+    for (const composition of [
+      { key: "Escape", isComposing: true, keyCode: 27 },
+      { key: "Escape", isComposing: false, keyCode: 229 },
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        ...composition,
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(() => input.element().dispatchEvent(event));
+      await expect.element(input).toHaveValue("Noto ゴシック");
+    }
+
+    await userEvent.keyboard("{Escape}");
+    await expect.element(input).toHaveValue(DEFAULT_UNIFIED_SETTINGS.fontFamilySans);
+  });
+
+  it("only intercepts Escape when discarding a draft", async () => {
+    using _storage = setup(null);
+    await using screen = await render(<TypographySection />);
+    const input = screen.getByRole("textbox", { name: "Interface font family" });
+    const dispatchEscape = async () => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      let propagated = false;
+      const onDocumentKeyDown = (received: KeyboardEvent) => {
+        if (received === event) propagated = true;
+      };
+      document.addEventListener("keydown", onDocumentKeyDown);
+      try {
+        await act(() => input.element().dispatchEvent(event));
+      } finally {
+        document.removeEventListener("keydown", onDocumentKeyDown);
+      }
+      return { defaultPrevented: event.defaultPrevented, propagated };
+    };
+
+    await expect.element(input).toHaveValue(DEFAULT_UNIFIED_SETTINGS.fontFamilySans);
+    expect(await dispatchEscape()).toEqual({ defaultPrevented: false, propagated: true });
+
+    await input.fill("Noto Sans");
+    expect(await dispatchEscape()).toEqual({ defaultPrevented: true, propagated: false });
+    await expect.element(input).toHaveValue(DEFAULT_UNIFIED_SETTINGS.fontFamilySans);
+
+    expect(await dispatchEscape()).toEqual({ defaultPrevented: false, propagated: true });
   });
 });

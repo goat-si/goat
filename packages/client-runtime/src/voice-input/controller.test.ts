@@ -83,6 +83,8 @@ describe("resolveTranscriptCommit", () => {
     ["Änderungen", 0, "Weitere", "de_DE", "Weitere Änderungen"],
     ["修正キャッシュ", 7, "テストも", "ja-JP", "修正キャッシュテストも"],
     ["โลก", 0, "สวัสดี", "th-TH", "สวัสดีโลก"],
+    ["你好", 2, "世界", "cmn-Hans-CN", "你好世界"],
+    ["世界", 0, "你好", "cmn-Hans-CN", "你好世界"],
     ["Hello", 5, "𝟚", "auto", "Hello 𝟚"],
     ["Hello", 5, "世界", "auto", "Hello世界"],
   ])("handles dictation spacing for %s and %s", (text, caret, spoken, locale, expected) => {

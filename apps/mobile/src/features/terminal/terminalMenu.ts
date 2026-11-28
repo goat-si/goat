@@ -1,5 +1,6 @@
 import { type KnownTerminalSession } from "@goat/client-runtime/state/terminal";
 import { DEFAULT_TERMINAL_ID, type ProjectScript } from "@goat/contracts";
+import { fileBasename, isWindowsAbsolutePath } from "@goat/shared/path";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@goat/shared/terminalLabels";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
@@ -31,14 +32,12 @@ export function basename(input: string | null): string | null {
   if (!input) {
     return null;
   }
-
-  const normalized = input.replace(/\/+$/, "");
-  if (normalized.length === 0) {
-    return "/";
+  // A backslash is a legal character in POSIX folder names, so only Windows paths split on it.
+  if (isWindowsAbsolutePath(input)) {
+    return fileBasename(input);
   }
-
-  const segments = normalized.split("/");
-  return segments[segments.length - 1] ?? normalized;
+  const normalized = input.replace(/\/+$/, "");
+  return normalized.length === 0 ? "/" : normalized.slice(normalized.lastIndexOf("/") + 1);
 }
 
 export function getTerminalStatusLabel(input: {

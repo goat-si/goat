@@ -6,6 +6,7 @@
 // cursor overlay (trycua/cua, MIT: platform-macos/src/cursor/overlay.rs, dispatch_pin_above).
 
 import CoreGraphics
+import Darwin
 import Foundation
 
 /// One on-screen window as CGWindowListCopyWindowInfo reports it, front to back.
@@ -103,6 +104,7 @@ final class OverlayFollowController {
   private let onFrame: (CGRect?) -> Void
   private let onSteady: () -> Void
   private let onBorder: (Bool) -> Void
+  private let onHideCursor: () -> Void
   private var generation = 0
   private var idleGeneration = 0
   private var target: CGWindowID?
@@ -120,13 +122,15 @@ final class OverlayFollowController {
     frame: @escaping (CGWindowID) -> CGRect?,
     onFrame: @escaping (CGRect?) -> Void,
     onSteady: @escaping () -> Void = {},
-    onBorder: @escaping (Bool) -> Void
+    onBorder: @escaping (Bool) -> Void,
+    onHideCursor: @escaping () -> Void = {}
   ) {
     self.scheduler = scheduler
     self.frame = frame
     self.onFrame = onFrame
     self.onSteady = onSteady
     self.onBorder = onBorder
+    self.onHideCursor = onHideCursor
   }
 
   /// A show for the window already followed keeps its follow timer and frame, so a phase change
@@ -158,6 +162,7 @@ final class OverlayFollowController {
         else { return }
         self.target = nil
         self.setBorder(false)
+        self.onHideCursor()
         self.cancelSchedules()
       }
     }
@@ -204,4 +209,65 @@ final class OverlayFollowController {
   }
 
   deinit { cancelSchedules() }
+}
+
+struct OverlayLineBuffer {
+  static let maxBytes = 1_048_576
+
+  let limit: Int
+  private(set) var bytes: [UInt8] = []
+
+  init(limit: Int = OverlayLineBuffer.maxBytes) {
+    self.limit = limit
+  }
+
+  mutating func append(_ chunk: ArraySlice<UInt8>) -> [Data]? {
+    bytes.append(contentsOf: chunk)
+    var lines: [Data] = []
+    while let end = bytes.firstIndex(of: 0x0A) {
+      if end > limit {
+        bytes.removeAll(keepingCapacity: false)
+        return nil
+      }
+      lines.append(Data(bytes[0..<end]))
+      bytes.removeSubrange(0...end)
+    }
+    if bytes.count > limit {
+      bytes.removeAll(keepingCapacity: false)
+      return nil
+    }
+    return lines
+  }
+}
+
+@discardableResult
+func writeAllBytes(
+  _ data: Data,
+  writeChunk: (UnsafeRawPointer, Int) -> Int,
+  lastError: () -> Int32
+) -> (ok: Bool, errorCode: Int32) {
+  guard !data.isEmpty else { return (true, 0) }
+  return data.withUnsafeBytes { bytes in
+    guard let base = bytes.baseAddress else { return (true, 0) }
+    var offset = 0
+    while offset < bytes.count {
+      let written = writeChunk(base.advanced(by: offset), bytes.count - offset)
+      if written < 0 {
+        let code = lastError()
+        if code == EINTR { continue }
+        return (false, code)
+      }
+      if written == 0 { return (false, EPIPE) }
+      offset += written
+    }
+    return (true, 0)
+  }
+}
+
+@discardableResult
+func writeAllToFileDescriptor(_ fd: Int32, data: Data) -> (ok: Bool, errorCode: Int32) {
+  writeAllBytes(
+    data,
+    writeChunk: { Darwin.write(fd, $0, $1) },
+    lastError: { errno })
 }

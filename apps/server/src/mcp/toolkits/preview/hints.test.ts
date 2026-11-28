@@ -1,5 +1,5 @@
 import { expect, it } from "vite-plus/test";
-import { previewHints, snapshotTransportHints } from "./hints.ts";
+import { failureHint, previewHints, snapshotTransportHints } from "./hints.ts";
 
 it("gives the next useful browser step without claiming action confirmation", () => {
   expect(previewHints("status", { tabId: null })).toEqual({
@@ -125,4 +125,40 @@ it("tells a confirmed click from one that changed nothing", () => {
   expect(previewHints("click", { effect: "suspected_noop", evidence: [] })).toEqual({
     next: "Nothing changed right after the click: check with goat_preview_snapshot diff:true before retrying.",
   });
+});
+
+it("distinguishes pre-input covered target refusals from post-dispatch interception", () => {
+  const preInput = failureHint(
+    "click",
+    {
+      _tag: "PreviewAutomationExecutionError",
+      dispatched: false,
+      clickRefusal: "occluded_refused",
+      interceptedBy: "<div> (dialog) #consent",
+    },
+    {
+      possibleCommit: false,
+      retryClass: "fix_input",
+      writeStatus: "rejected_before_commit",
+      code: "write_refused_fix_input",
+    },
+  );
+  expect(preInput.next).toContain("Nothing was sent");
+  expect(preInput.next).toContain("<div> (dialog) #consent");
+  expect(preInput.next).not.toContain("in case the click landed");
+
+  const postDispatch = failureHint(
+    "click",
+    {
+      _tag: "PreviewAutomationTimeoutError",
+      interceptedBy: "<div> (dialog) #consent",
+    },
+    {
+      possibleCommit: true,
+      retryClass: "never",
+      writeStatus: "may_have_applied",
+      code: "write_timed_out",
+    },
+  );
+  expect(postDispatch.next).toContain("Observe first in case the click landed");
 });

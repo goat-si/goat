@@ -3,6 +3,7 @@ import { useGT } from "gt-react";
 import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
+import { observeVisibleAnimation } from "~/lib/visibleAnimation";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
 import { Spinner } from "~/components/ui/spinner";
@@ -136,7 +137,7 @@ import { excludeGlobalAgentThreads } from "../globalAgentRoute";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { forkMenuWorkspace, readThreadForkMenuState, useForkThread } from "../hooks/useForkThread";
 import { startThreadOnBranch } from "../hooks/threadMenuActions";
-import { buildForkMenuItems } from "./threadActionMenu.logic";
+import { buildForkMenuItems, canMarkLatestRunUnread } from "./threadActionMenu.logic";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
@@ -1258,7 +1259,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const removeFromSelection = useThreadSelectionStore((state) => state.removeFromSelection);
-  const setSelectionAnchor = useThreadSelectionStore((state) => state.setAnchor);
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{
     threadId: ThreadId;
   }>({
@@ -1703,7 +1703,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -1740,16 +1739,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     const isShiftClick = event.shiftKey;
     const threadKey = scopedThreadKey(threadRef);
     const currentSelectionCount = useThreadSelectionStore.getState().selectedThreadKeys.size;
+    const openThreadKey =
+      routeRowKey !== null && orderedProjectThreadKeys.includes(routeRowKey) ? routeRowKey : null;
 
     if (isModClick) {
       event.preventDefault();
-      toggleThreadSelection(threadKey);
+      toggleThreadSelection(threadKey, openThreadKey);
       return;
     }
 
     if (isShiftClick) {
       event.preventDefault();
-      rangeSelectTo(threadKey, orderedProjectThreadKeys);
+      rangeSelectTo(threadKey, orderedProjectThreadKeys, openThreadKey);
       return;
     }
 
@@ -1761,7 +1762,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     if (currentSelectionCount > 0) {
       clearSelection();
     }
-    setSelectionAnchor(threadKey);
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -1789,17 +1789,29 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope),
     );
 
+    const markUnreadEntries = selectedThreadEntries.filter(
+      ({ thread }) =>
+        canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime),
+    );
     const clicked = await api.contextMenu.show(
-      buildMultiSelectThreadContextMenuItems({ count, hasRunningThread }).map((item) =>
-        item.id === "archive" || item.id === "delete"
-          ? { ...item, disabled: item.disabled || !canOperateSelection }
-          : item,
-      ),
+      buildMultiSelectThreadContextMenuItems({ count, hasRunningThread })
+        .flatMap((item) =>
+          item.id === "mark-unread"
+            ? markUnreadEntries.length > 0
+              ? [{ ...item, label: `Mark unread (${markUnreadEntries.length})` }]
+              : []
+            : [item],
+        )
+        .map((item) =>
+          item.id === "archive" || item.id === "delete"
+            ? { ...item, disabled: item.disabled || !canOperateSelection }
+            : item,
+        ),
       position,
     );
 
     if (clicked === "mark-unread") {
-      for (const { threadRef } of selectedThreadEntries) {
+      for (const { threadRef } of markUnreadEntries) {
         markThreadUnread(threadRef);
       }
       clearSelection();
@@ -2154,7 +2166,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ...(appAtomRegistry.get(canShareWithGuestAtom(thread.environmentId))
             ? [{ id: "share-guest", label: "Share with guest" }]
             : []),
-          { id: "mark-unread", label: "Mark unread" },
+          ...(canMarkLatestRunUnread(thread.latestRun) && threadRuntimeCanArchive(thread.runtime)
+            ? [{ id: "mark-unread", label: "Mark unread" }]
+            : []),
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread", label: "Copy Thread" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2203,6 +2217,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
 
       if (clicked === "new-thread-on-branch") {
+        if (isMobile) setOpenMobile(false);
         await startThreadOnBranch(handleNewThread, thread);
         return;
       }
@@ -2307,8 +2322,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 >
                   <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                     <span
+                      ref={projectStatus.pulse ? observeVisibleAnimation : undefined}
                       className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
-                        projectStatus.pulse ? "motion-safe:animate-status-pulse" : ""
+                        projectStatus.pulse ? "motion-safe:visible-animate-status-pulse" : ""
                       }`}
                     />
                   </span>
@@ -3508,7 +3524,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
   const desktopUpdateState = useDesktopUpdateState();
   const [desktopUpdateActionPending, setDesktopUpdateActionPending] = useState(false);
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
-  const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const platform = navigator.platform;
   const {
     projectsLength,
@@ -3561,7 +3576,6 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
     if (useThreadSelectionStore.getState().selectedThreadKeys.size > 0) {
       clearSelection();
     }
-    setSelectionAnchor(scopedThreadKey(threadRef));
     if (isMobile) {
       setOpenMobile(false);
     }
@@ -3812,7 +3826,10 @@ export default function LegacySidebar({ routeReveal }: { routeReveal: SidebarRou
         projectSortOrder={sidebarProjectSortOrder}
         threadSortOrder={sidebarThreadSortOrder}
         threadPreviewCount={sidebarThreadPreviewCount}
-        openAddProject={openAddProjectCommandPalette}
+        openAddProject={() => {
+          if (isMobile) setOpenMobile(false);
+          openAddProjectCommandPalette();
+        }}
         isManualProjectSorting={isManualProjectSorting}
         projectDnDSensors={projectDnDSensors}
         projectCollisionDetection={projectCollisionDetection}

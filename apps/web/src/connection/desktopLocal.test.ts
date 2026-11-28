@@ -1,7 +1,13 @@
 import { type DesktopEnvironmentBootstrap, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@goat/contracts";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { createDesktopSecondaryBootstrapsReader } from "./desktopLocal";
+import {
+  createDesktopSecondaryBootstrapsReader,
+  invalidateDesktopLocalBootstrapsCache,
+  readDesktopLocalBootstrapsResult,
+  readDesktopPrimaryBootstrap,
+} from "./desktopLocal";
+import { readPrimaryEnvironmentTarget } from "../environments/primary/target";
 
 describe("desktop local topology reads", () => {
   it("reuses snapshots when polling returns fresh objects for the same topology", () => {
@@ -107,5 +113,103 @@ describe("desktop local topology reads", () => {
       throw new Error("IPC unavailable again");
     };
     expect(reader.readSnapshot()).toBe(removedSnapshot);
+  });
+
+  it("caches sync bootstrap reads across callers within TTL and refreshes after expiry or invalidation", () => {
+    vi.useFakeTimers();
+    try {
+      let token = "bootstrap-1";
+      const getLocalEnvironmentBootstraps = vi.fn<() => readonly DesktopEnvironmentBootstrap[]>(
+        () => [
+          {
+            id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+            label: "Local",
+            httpBaseUrl: "http://127.0.0.1:3773",
+            wsBaseUrl: "ws://127.0.0.1:3773",
+            bootstrapToken: token,
+          },
+        ],
+      );
+      const bridge = { getLocalEnvironmentBootstraps };
+
+      const first = readDesktopLocalBootstrapsResult(bridge);
+      const second = readDesktopLocalBootstrapsResult(bridge);
+      expect(first._tag).toBe("Success");
+      expect(second).toBe(first);
+      expect(getLocalEnvironmentBootstraps).toHaveBeenCalledTimes(1);
+
+      token = "bootstrap-2";
+      // Still within cache TTL: avoids redundant sync IPC.
+      vi.advanceTimersByTime(5_000);
+      expect(readDesktopLocalBootstrapsResult(bridge)).toBe(first);
+      expect(getLocalEnvironmentBootstraps).toHaveBeenCalledTimes(1);
+
+      // Past TTL: refreshes from bridge.
+      vi.advanceTimersByTime(11_000);
+      const refreshed = readDesktopLocalBootstrapsResult(bridge);
+      expect(refreshed._tag).toBe("Success");
+      if (refreshed._tag === "Success") {
+        expect(refreshed.bootstraps[0]?.bootstrapToken).toBe("bootstrap-2");
+      }
+      expect(getLocalEnvironmentBootstraps).toHaveBeenCalledTimes(2);
+
+      // Explicit invalidation forces an immediate refresh.
+      token = "bootstrap-3";
+      invalidateDesktopLocalBootstrapsCache();
+      const invalidated = readDesktopLocalBootstrapsResult(bridge);
+      expect(invalidated._tag).toBe("Success");
+      if (invalidated._tag === "Success") {
+        expect(invalidated.bootstraps[0]?.bootstrapToken).toBe("bootstrap-3");
+      }
+      expect(getLocalEnvironmentBootstraps).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates IPC failures after a successful primary read instead of falling back to window origin", () => {
+    vi.useFakeTimers();
+    let shouldThrow = false;
+    const primary: DesktopEnvironmentBootstrap = {
+      id: PRIMARY_LOCAL_ENVIRONMENT_ID,
+      label: "Local",
+      httpBaseUrl: "http://127.0.0.1:3773",
+      wsBaseUrl: "ws://127.0.0.1:3773",
+      bootstrapToken: "bootstrap-1",
+    };
+    const bridge = {
+      getLocalEnvironmentBootstraps: vi.fn<() => readonly DesktopEnvironmentBootstrap[]>(() => {
+        if (shouldThrow) throw new Error("IPC unavailable");
+        return [primary];
+      }),
+    };
+    vi.stubGlobal("window", {
+      location: { origin: "http://localhost:5173", href: "http://localhost:5173/" },
+      desktopBridge: bridge,
+    });
+    try {
+      expect(readDesktopPrimaryBootstrap(bridge)).toEqual(primary);
+      expect(readPrimaryEnvironmentTarget()).toEqual({
+        source: "desktop-managed",
+        target: {
+          httpBaseUrl: "http://127.0.0.1:3773/",
+          wsBaseUrl: "ws://127.0.0.1:3773/",
+        },
+      });
+
+      // After TTL expires, an IPC failure must propagate (not coerce to [] or fall back to origin).
+      shouldThrow = true;
+      vi.advanceTimersByTime(16_000);
+      expect(() => readDesktopPrimaryBootstrap(bridge)).toThrow("IPC unavailable");
+      expect(() => readPrimaryEnvironmentTarget()).toThrow("IPC unavailable");
+
+      // Failed reads are not cached; once IPC recovers, primary bootstrap resolves immediately.
+      shouldThrow = false;
+      expect(readDesktopPrimaryBootstrap(bridge)).toEqual(primary);
+    } finally {
+      invalidateDesktopLocalBootstrapsCache();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 });

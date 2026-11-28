@@ -28,6 +28,56 @@ type DesktopTrayAction = Parameters<Parameters<NonNullable<DesktopBridge["onTray
 const SECTION_LIMIT = 20;
 // Titles have no length limit; the tray draws about 40 characters of one.
 const TEXT_LIMIT = 200;
+const TRAY_MENU_THROTTLE_MS = 1_500;
+
+/**
+ * Coalesces bursts of tray menu invalidations: publishes the first burst on the next microtask,
+ * then enforces a trailing throttle window so rapid agent/environment churn cannot recompute
+ * and serialize the full tray menu on every tick.
+ */
+export function createTrayMenuScheduler(
+  publish: () => void,
+  throttleMs: number = TRAY_MENU_THROTTLE_MS,
+): { readonly schedule: () => void; readonly dispose: () => void } {
+  let disposed = false;
+  let pendingMicrotask = false;
+  let dirty = false;
+  let cooldownTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flush = () => {
+    if (disposed) return;
+    dirty = false;
+    publish();
+    cooldownTimer = setTimeout(() => {
+      cooldownTimer = null;
+      if (disposed || !dirty) return;
+      flush();
+    }, throttleMs);
+  };
+
+  const schedule = () => {
+    if (disposed) return;
+    dirty = true;
+    if (cooldownTimer !== null || pendingMicrotask) return;
+    pendingMicrotask = true;
+    queueMicrotask(() => {
+      pendingMicrotask = false;
+      if (disposed || !dirty || cooldownTimer !== null) return;
+      flush();
+    });
+  };
+
+  const dispose = () => {
+    disposed = true;
+    dirty = false;
+    if (cooldownTimer !== null) {
+      clearTimeout(cooldownTimer);
+      cooldownTimer = null;
+    }
+  };
+
+  return { schedule, dispose };
+}
 
 const bounded = (text: string) => Array.from(text).slice(0, TEXT_LIMIT).join("");
 
@@ -121,14 +171,10 @@ export function startDesktopTray(
   if (bridge === undefined || setTrayMenu === undefined) return () => {};
 
   let sent: string | null = null;
-  let scheduled = false;
-  // Several atoms settle in one burst when an environment connects; send once for all of them.
+  // Several atoms settle in one burst when an environment connects; coalesce and throttle updates.
   let publish = () => {};
-  const schedule = () => {
-    if (scheduled) return;
-    scheduled = true;
-    queueMicrotask(() => publish());
-  };
+  const scheduler = createTrayMenuScheduler(() => publish());
+  const schedule = scheduler.schedule;
   const computerUse = watchTrayComputerUse(
     registry,
     {
@@ -141,7 +187,6 @@ export function startDesktopTray(
     schedule,
   );
   publish = () => {
-    scheduled = false;
     const menu = {
       ...deriveTrayMenu(
         registry.get(environmentThreadShells.quietThreadShellsAtom),
@@ -197,6 +242,7 @@ export function startDesktopTray(
   };
 
   const unsubscribes = [
+    scheduler.dispose,
     registry.subscribe(environmentThreadShells.quietThreadShellsAtom, schedule),
     registry.subscribe(environmentProjects.projectsAtom, schedule),
     registry.subscribe(liveShellEnvironmentIdsAtom, schedule),

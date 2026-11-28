@@ -68,6 +68,27 @@ export function resolveTimelineMinimapTopPercent(index: number, itemCount: numbe
   return (Math.max(0, Math.min(index, itemCount - 1)) / (itemCount - 1)) * 100;
 }
 
+// Strips are 2px tall; centers 4px apart or closer merge into one bar once layout
+// rounds their positions.
+const TIMELINE_MINIMAP_MIN_MARK_SPACING = 5;
+
+/** Strips that fit the measured rail; past that, neighbouring items share one. */
+export function resolveTimelineMinimapMarkCount(itemCount: number, railHeight: number): number {
+  if (railHeight <= 0) return itemCount;
+  const capacity = Math.floor(railHeight / TIMELINE_MINIMAP_MIN_MARK_SPACING) + 1;
+  return Math.min(itemCount, Math.max(2, capacity));
+}
+
+/** The strip nearest the item's own position on the rail. */
+export function resolveTimelineMinimapMarkIndex(
+  itemIndex: number,
+  itemCount: number,
+  markCount: number,
+): number {
+  if (markCount >= itemCount) return itemIndex;
+  return Math.round((itemIndex / (itemCount - 1)) * (markCount - 1));
+}
+
 export function resolveTimelineMinimapIndexFromPointer(input: {
   readonly itemCount: number;
   readonly railTop: number;
@@ -149,36 +170,20 @@ export function resolveTimelineMinimapCurrentIndex(input: {
   return precedingIndex;
 }
 
-function resolveTimelineSideGutter(viewportWidth: number, contentWidth: number): number {
-  if (!Number.isFinite(viewportWidth) || viewportWidth <= 0 || !Number.isFinite(contentWidth)) {
-    return 0;
-  }
-  return Math.max(0, (viewportWidth - Math.min(viewportWidth, contentWidth)) / 2);
-}
-
-export function resolveTimelineMinimapHasPersistentGutter(
-  viewportWidth: number,
-  contentWidth: number,
-): boolean {
-  return (
-    resolveTimelineSideGutter(viewportWidth, contentWidth) >= TIMELINE_MINIMAP_PERSISTENT_GUTTER
-  );
+export function resolveTimelineMinimapHasPersistentGutter(sideGutter: number): boolean {
+  return sideGutter >= TIMELINE_MINIMAP_PERSISTENT_GUTTER;
 }
 
 const TIMELINE_MINIMAP_HIT_STRIP_LEFT = 12;
 const TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH = 40;
 
-export function resolveTimelineMinimapHitStripWidth(
-  viewportWidth: number,
-  contentWidth: number,
-): number {
-  const sideGutter = resolveTimelineSideGutter(viewportWidth, contentWidth);
+export function resolveTimelineMinimapHitStripWidth(measuredSideGutter: number): number {
+  const sideGutter = Number.isFinite(measuredSideGutter)
+    ? Math.max(0, Math.floor(measuredSideGutter))
+    : 0;
   return Math.max(
     0,
-    Math.min(
-      TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH,
-      Math.floor(sideGutter) - TIMELINE_MINIMAP_HIT_STRIP_LEFT,
-    ),
+    Math.min(TIMELINE_MINIMAP_HIT_STRIP_MAX_WIDTH, sideGutter - TIMELINE_MINIMAP_HIT_STRIP_LEFT),
   );
 }
 

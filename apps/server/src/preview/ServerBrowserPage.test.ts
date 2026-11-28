@@ -847,12 +847,27 @@ describe("a gate reused across a click's presses", () => {
   it("refuses the second press without claiming the first was never sent", async () => {
     const control = new SessionControl("agent");
     const presses: Array<string> = [];
+    const frame = {
+      evaluateHandle: async (script: string) =>
+        script.includes("STATE_ATTRIBUTES")
+          ? Promise.reject(new Error("no document"))
+          : {
+              asElement: () => null,
+              dispose: async () => undefined,
+            },
+      evaluate: async () => ({
+        tagName: "BUTTON",
+        inputType: undefined,
+        labelControlTagName: "",
+        labelControlInputType: undefined,
+      }),
+    };
     const page = {
       once: () => undefined,
       on: () => undefined,
       off: () => undefined,
       url: () => "about:blank",
-      mainFrame: () => undefined,
+      mainFrame: () => frame,
       evaluateHandle: async () => Promise.reject(new Error("no document")),
       mouse: {
         click: async () => {

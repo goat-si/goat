@@ -1,5 +1,9 @@
 import { commandItemOutput } from "@goat/shared/commandOutput";
-import type { AssetResource, OrchestrationV2TurnItem } from "@goat/contracts";
+import type {
+  AssetResource,
+  OrchestrationV2FileSearchResult,
+  OrchestrationV2TurnItem,
+} from "@goat/contracts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
 import {
@@ -123,13 +127,18 @@ function parseJson(text: string): unknown {
 }
 
 // Match strings whole so digits inside them are not mistaken for JSON numbers.
-const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+const JSON_STRING_OR_NUMBER = /"(?:[^"\\]|\\.)*"|(-?\d+(?:\.\d+)?)(?:[eE][+-]?\d+)?/g;
 
+/** Keep raw JSON when numbers are unsafe integers, overflow, or underflow to zero. */
 function hasLossyJsonNumber(json: string): boolean {
-  for (const [token] of json.matchAll(JSON_STRING_OR_NUMBER)) {
-    if (token.startsWith('"')) continue;
+  for (const [token, mantissa] of json.matchAll(JSON_STRING_OR_NUMBER)) {
+    if (mantissa === undefined) continue;
     const value = Number(token);
-    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) {
+    if (
+      !Number.isFinite(value) ||
+      (Number.isInteger(value) && !Number.isSafeInteger(value)) ||
+      (value === 0 && /[1-9]/.test(mantissa))
+    ) {
       return true;
     }
   }
@@ -258,6 +267,40 @@ function dynamicToolOutputText(
   );
 }
 
+interface FileSearchResultGroup {
+  readonly fileName: string;
+  readonly results: ReadonlyArray<OrchestrationV2FileSearchResult>;
+}
+
+/** Results under one heading per file, in first-seen order, the way `rg --heading` prints them. */
+function groupFileSearchResults(
+  results: ReadonlyArray<OrchestrationV2FileSearchResult>,
+): ReadonlyArray<FileSearchResultGroup> {
+  const groups = new Map<string, OrchestrationV2FileSearchResult[]>();
+  for (const result of results) {
+    const group = groups.get(result.fileName);
+    if (group) group.push(result);
+    else groups.set(result.fileName, [result]);
+  }
+  return Array.from(groups, ([fileName, grouped]) => ({ fileName, results: grouped }));
+}
+
+function fileSearchResultsText(results: ReadonlyArray<OrchestrationV2FileSearchResult>): string {
+  const groups = groupFileSearchResults(results).map((group) => [
+    group.fileName,
+    ...group.results.flatMap((result) => {
+      const preview = result.preview?.trimEnd() ?? "";
+      if (result.line === undefined) return preview.trim() ? [preview] : [];
+      const position = `${result.line}${result.column === undefined ? "" : `:${result.column}`}`;
+      return [`${position}: ${preview}`.trimEnd()];
+    }),
+  ]);
+  // A plain file list stays one path per line; files with matches get a blank line between them.
+  return groups.every((lines) => lines.length === 1)
+    ? groups.map(([fileName]) => fileName).join("\n")
+    : groups.map((lines) => lines.join("\n")).join("\n\n");
+}
+
 /** `omitLinks` leaves out the resource links a client lists separately with turnItemOutputLinks. */
 export function turnItemOutputText(
   item: OrchestrationV2TurnItem,
@@ -273,18 +316,7 @@ export function turnItemOutputText(
         ? null
         : dynamicToolOutputText(item, options.omitLinks === true);
     case "file_search":
-      return item.results?.length
-        ? item.results
-            .map((result) =>
-              [
-                `${result.fileName}${result.line === undefined ? "" : `:${result.line}`}`,
-                result.preview?.trim(),
-              ]
-                .filter(Boolean)
-                .join("\n"),
-            )
-            .join("\n")
-        : null;
+      return item.results?.length ? fileSearchResultsText(item.results) : null;
     case "web_search":
       return item.results?.length
         ? item.results

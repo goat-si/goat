@@ -1,10 +1,3 @@
-/**
- * Refuses screen.app() input aimed at web content in a browser window. Pages are driven over CDP
- * through screen.tab(), which sees the DOM, origin grants and navigation; native browser UI such as
- * the remote debugging alert or a file sheet stays reachable through screen.app().
- * Not yet guarded: right_click, drag, scroll, hover and select_text.
- */
-
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { driverValue } from "./DesktopDriverReplies.ts";
@@ -46,8 +39,8 @@ export interface BrowserSurfaceInput {
   readonly method: string;
   readonly appId: string;
   readonly bundleId?: string | undefined;
-  /** The element the input lands on: the addressed element, or the focused one for keys. */
   readonly target?: SurfaceTarget | undefined;
+  readonly targets?: readonly (SurfaceTarget | undefined)[] | undefined;
 }
 
 export interface BrowserSurfaceRefusal {
@@ -77,9 +70,14 @@ const BROWSER_NAMES: ReadonlySet<string> = new Set(
 
 const GUARDED_METHODS: ReadonlySet<string> = new Set([
   "click",
+  "right_click",
+  "drag",
+  "scroll",
+  "hover",
   "type_text",
   "set_value",
   "press_key",
+  "select_text",
 ]);
 const TEXT_METHODS: ReadonlySet<string> = new Set(["type_text", "set_value", "press_key"]);
 const WEB_ROLES: ReadonlySet<string> = new Set([
@@ -140,38 +138,65 @@ const refusal = (
   },
 });
 
-export const guardBrowserAppSurface = (
-  input: BrowserSurfaceInput,
-): { readonly refused?: BrowserSurfaceRefusal } => {
-  const app = browserAppName(input.appId, input.bundleId);
-  if (app === undefined || !GUARDED_METHODS.has(input.method)) return {};
-  const target = input.target;
+const REFUSAL_PRIORITY: Readonly<Record<BrowserSurfaceRefusal["reason"], number>> = {
+  web_content: 3,
+  address_bar: 2,
+  unverified_target: 1,
+};
+
+const evaluateSurfaceTarget = (
+  app: string,
+  target: SurfaceTarget | undefined,
+): BrowserSurfaceRefusal | undefined => {
   const role = bare(target?.role);
   if (target === undefined || role === "" || role === "unknown")
     return refusal(
       app,
       "unverified_target",
       `GOAT could not tell whether this ${app} element is part of a web page. Observe a browser dialog again before acting on it.`,
-    );
+    ).refused;
   if (WEB_ROLES.has(role) || target.ancestors.some((node) => WEB_ROLES.has(bare(node.role))))
     return refusal(
       app,
       "web_content",
       `That element is web content in ${app}; screen.app() does not drive pages.`,
-    );
+    ).refused;
   const native = target.ancestors.some(isNativeBoundary);
   if (!native && isAddressBar(target))
     return refusal(
       app,
       "address_bar",
       `That is ${app}'s address bar; screen.app() does not navigate pages.`,
-    );
-  if (native || target.ancestryComplete) return {};
+    ).refused;
+  if (native || target.ancestryComplete) return undefined;
   return refusal(
     app,
     "unverified_target",
     `GOAT could not tell whether this ${app} element is part of a web page. Observe a browser dialog again before acting on it.`,
-  );
+  ).refused;
+};
+
+export const guardBrowserAppSurface = (
+  input: BrowserSurfaceInput,
+): { readonly refused?: BrowserSurfaceRefusal } => {
+  const app = browserAppName(input.appId, input.bundleId);
+  if (app === undefined || !GUARDED_METHODS.has(input.method)) return {};
+  const candidates =
+    input.targets !== undefined
+      ? input.targets.length > 0
+        ? input.targets
+        : [undefined]
+      : [input.target];
+  let chosen: BrowserSurfaceRefusal | undefined;
+  for (const candidate of candidates) {
+    const next = evaluateSurfaceTarget(app, candidate);
+    if (
+      next !== undefined &&
+      (chosen === undefined || REFUSAL_PRIORITY[next.reason] > REFUSAL_PRIORITY[chosen.reason])
+    )
+      chosen = next;
+  }
+  return chosen === undefined ? {} : { refused: chosen };
 };
 
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -308,6 +333,36 @@ const noteBrowserSurfaceRead = (
   }
 };
 
+const resolveDragTargets = (
+  args: Record<string, unknown>,
+  read: BrowserSurfaceRead | undefined,
+  resolveToken: (element: Record<string, unknown>) => string | undefined,
+): { readonly targets: readonly (SurfaceTarget | undefined)[]; readonly staleOnly: boolean } => {
+  if (args.fromEnd === undefined && args.toEnd === undefined) {
+    if (record(args.elementRef)) {
+      const token = resolveToken(args.elementRef);
+      if (token === undefined) return { targets: [], staleOnly: true };
+      return { targets: [read?.targets.get(token)], staleOnly: false };
+    }
+    return { targets: [undefined], staleOnly: false };
+  }
+  const targets: Array<SurfaceTarget | undefined> = [];
+  let hasStale = false;
+  for (const raw of [args.fromEnd, args.toEnd]) {
+    if (record(raw) && record(raw.elementRef)) {
+      const token = resolveToken(raw.elementRef);
+      if (token === undefined) {
+        hasStale = true;
+        continue;
+      }
+      targets.push(read?.targets.get(token));
+    } else {
+      targets.push(undefined);
+    }
+  }
+  return { targets, staleOnly: hasStale && targets.length === 0 };
+};
+
 export const browserSurfaceRefusal = (
   bound: BrowserSurfaceHolder,
   method: string,
@@ -321,17 +376,29 @@ export const browserSurfaceRefusal = (
     fresh && bound.snapshotId !== undefined
       ? bound.browserSurface?.get(bound.snapshotId)
       : undefined;
-  let token: string | undefined;
-  if (record(args.elementRef)) {
-    token = resolveToken(args.elementRef);
-    if (token === undefined) return undefined;
-  } else if (TEXT_METHODS.has(method) && method !== "set_value") token = read?.focusedToken;
-  const refused = guardBrowserAppSurface({
-    method,
-    appId: bound.appId,
-    bundleId: bound.bundleId,
-    target: token === undefined ? undefined : read?.targets.get(token),
-  }).refused;
+  let refused: BrowserSurfaceRefusal | undefined;
+  if (method === "drag") {
+    const resolved = resolveDragTargets(args, read, resolveToken);
+    if (resolved.staleOnly) return undefined;
+    refused = guardBrowserAppSurface({
+      method,
+      appId: bound.appId,
+      bundleId: bound.bundleId,
+      targets: resolved.targets,
+    }).refused;
+  } else {
+    let token: string | undefined;
+    if (record(args.elementRef)) {
+      token = resolveToken(args.elementRef);
+      if (token === undefined) return undefined;
+    } else if (TEXT_METHODS.has(method) && method !== "set_value") token = read?.focusedToken;
+    refused = guardBrowserAppSurface({
+      method,
+      appId: bound.appId,
+      bundleId: bound.bundleId,
+      target: token === undefined ? undefined : read?.targets.get(token),
+    }).refused;
+  }
   return refused === undefined
     ? undefined
     : {

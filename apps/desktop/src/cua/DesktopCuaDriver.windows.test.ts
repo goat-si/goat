@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import * as Effect from "effect/Effect";
 import { afterEach, vi } from "vite-plus/test";
 
@@ -220,5 +221,25 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper on Windows", () => 
         }
       }),
     ),
+  );
+
+  it.effect.each(["x64", "arm64", "ia32"] as const)(
+    "resolves Windows helper driverVersion from environment platform and %s arch",
+    (processArch) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "win32",
+            processArch,
+            helper: { granted: true },
+          });
+          yield* test.request("agent");
+          assert.equal((yield* test.next).status, "ready");
+          assert.equal(
+            test.helperLaunches[0]?.driverVersion,
+            cuaDriverRelease("win32", processArch)?.version ?? "",
+          );
+        }),
+      ),
   );
 });

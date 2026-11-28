@@ -19,6 +19,8 @@ const WINDOWS_SHELL_PROGRAMS = new Set([
   "pwsh.exe",
 ]);
 const SHELL_OPTIONS_WITH_VALUE = new Set(["-o", "-O", "--rcfile", "--init-file"]);
+// `-euo pipefail` and `+o history`: a short-option bundle ending in o or O takes the next word.
+const SHELL_OPTION_BUNDLE_WITH_VALUE = /^[-+][a-zA-Z]*[oO]$/;
 const SHELL_COMMAND_WRAPPERS = new Set(["builtin", "command", "exec"]);
 const SHELL_PRECOMMAND_MODIFIERS = new Set(["nocorrect", "noglob", "time"]);
 const POWERSHELL_SETUP_PROGRAMS = new Set(["pop-location", "push-location", "set-location"]);
@@ -167,7 +169,6 @@ const TERMINAL_SHELL_PROGRAMS = new Set([
   "else",
   "end",
   "esac",
-  "eval",
   "exec",
   "exit",
   "false",
@@ -190,15 +191,22 @@ const TERMINAL_SHELL_PROGRAMS = new Set([
   "while",
 ]);
 
-function shellCommandArgumentIndex(tokens: ReadonlyArray<string>, start: number): number | null {
+function shellCommandArgumentIndex(
+  shell: string,
+  tokens: ReadonlyArray<string>,
+  start: number,
+): number | null {
   for (let index = start; index < tokens.length; index += 1) {
     const option = tokens[index]!;
-    if (option === "--" || !option.startsWith("-")) return null;
-    if (SHELL_OPTIONS_WITH_VALUE.has(option)) {
+    if (option === "--" || !/^[-+]/.test(option)) return null;
+    if (SHELL_OPTIONS_WITH_VALUE.has(option) || SHELL_OPTION_BUNDLE_WITH_VALUE.test(option)) {
       index += 1;
       continue;
     }
-    if (option === "--command" || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option)) return index + 1;
+    if (option === "--command" || /^-[a-zA-Z]*c[a-zA-Z]*$/.test(option)) {
+      // fish takes the next token as the script even when it is `--`.
+      return index + (shell !== "fish" && tokens[index + 1] === "--" ? 2 : 1);
+    }
   }
   return null;
 }
@@ -1221,8 +1229,9 @@ function parseCommandProgramName(
       }
       return null;
     }
-    if (tokenProgram && SHELL_PROGRAMS.has(tokenProgram.replace(/\.exe$/i, "").toLowerCase())) {
-      const scriptIndex = shellCommandArgumentIndex(tokens, index + 1);
+    const shellProgram = tokenProgram?.replace(/\.exe$/i, "").toLowerCase();
+    if (shellProgram && SHELL_PROGRAMS.has(shellProgram)) {
+      const scriptIndex = shellCommandArgumentIndex(shellProgram, tokens, index + 1);
       if (scriptIndex !== null) {
         const script = tokens[scriptIndex];
         return script
@@ -1380,12 +1389,13 @@ function withoutShellWrapper(command: string): string {
   const program = tokens?.[0]
     ?.split(/[\\/]/u)
     .at(-1)
-    ?.replace(/\.exe$/iu, "");
+    ?.toLowerCase()
+    .replace(/\.exe$/u, "");
   if (!tokens || !program) return trimmed;
-  const scriptIndex = POWERSHELL_PROGRAMS.has(program.toLowerCase())
+  const scriptIndex = POWERSHELL_PROGRAMS.has(program)
     ? powerShellCommandArgumentIndex(tokens)
     : SHELL_PROGRAMS.has(program)
-      ? shellCommandArgumentIndex(tokens, 1)
+      ? shellCommandArgumentIndex(program, tokens, 1)
       : null;
   // Positional arguments can affect the script; keep those invocations intact.
   if (scriptIndex === null || scriptIndex !== tokens.length - 1) return trimmed;

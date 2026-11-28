@@ -255,6 +255,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
       setDraftThreadContext(composerDraftTarget, {
         envMode: mode,
         sshDestination: null,
+        workspaceExplicit: true,
         startFromOrigin: resolveNewDraftStartFromOrigin({
           envMode: mode,
           newWorktreesStartFromOrigin: activeProjectSettings.settings.newWorktreesStartFromOrigin,
@@ -282,6 +283,7 @@ export function useComposerSelection(input: ComposerSelectionInput) {
     if (isLocalDraftThread) {
       setDraftThreadContext(composerDraftTarget, {
         startFromOrigin: nextStartFromOrigin,
+        workspaceExplicit: true,
       });
     }
   };

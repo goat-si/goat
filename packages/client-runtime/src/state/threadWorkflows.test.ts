@@ -6,6 +6,7 @@ import {
   deriveThreadQueueWorkflowState,
   getUserQueuedThreadRuns,
   resolveLatestMergeBackRun,
+  runStopRequested,
   threadForkAvailability,
   threadCanSteer,
   threadSupportsProviderHandoff,
@@ -35,6 +36,19 @@ const capabilities = (input?: {
   }) as never;
 
 describe("thread workflows", () => {
+  it("detects when Stop has already reached the active run", () => {
+    const activeRunId = RunId.make("active");
+    const otherRunId = RunId.make("other");
+    const projection = {
+      turnItems: [{ runId: activeRunId, type: "run_interrupt_request" }],
+    } as unknown as OrchestrationV2ThreadProjection;
+
+    expect(runStopRequested(projection, activeRunId)).toBe(true);
+    expect(runStopRequested(projection, otherRunId)).toBe(false);
+    expect(runStopRequested(projection, null)).toBe(false);
+    expect(runStopRequested(null, activeRunId)).toBe(false);
+  });
+
   it.each([
     ["queue only", { queued: true }, false, false],
     ["session still attaching", undefined, false, true],
@@ -54,6 +68,7 @@ describe("thread workflows", () => {
         { id: "other", status: "ready", capabilities: capabilities({ steer: true }) },
       ],
       messages: [],
+      turnItems: [],
     } as unknown as OrchestrationV2ThreadProjection;
     expect(
       threadCanSteer(projection, {
@@ -62,6 +77,27 @@ describe("thread workflows", () => {
         activeRunId: projection.runs[0]!.id,
       }),
     ).toBe(expected);
+  });
+
+  it("blocks steering once Stop has reached the active run", () => {
+    const activeRunId = RunId.make("active");
+    const projection = {
+      thread: { id: "thread", activeProviderThreadId: "provider-thread" },
+      runs: [{ id: activeRunId, status: "running", providerThreadId: "provider-thread" }],
+      providerThreads: [{ id: "provider-thread", providerSessionId: "session" }],
+      providerSessions: [
+        { id: "session", status: "running", capabilities: capabilities({ steer: true }) },
+      ],
+      messages: [],
+      turnItems: [{ runId: activeRunId, type: "run_interrupt_request" }],
+    } as unknown as OrchestrationV2ThreadProjection;
+    expect(
+      threadCanSteer(projection, {
+        compactCommandIsActive: false,
+        compactionRunning: false,
+        activeRunId,
+      }),
+    ).toBe(false);
   });
 
   it("skips message history classification when no runs are queued", () => {

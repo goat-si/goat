@@ -1,5 +1,5 @@
 import { resolveEnvironmentMachineKind, type EnvironmentId } from "@goat/contracts";
-import { useLocation, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { ChevronRightIcon, LayersIcon } from "~/components/solar";
 import type { ReactNode } from "react";
 
@@ -21,6 +21,7 @@ import {
   settingsScopeEnvironmentLabels,
   settingsScopeProjectMachines,
 } from "./settingsScopeAxis";
+import { useRenderedSettingsPathname } from "./useRenderedSettingsPathname";
 
 interface ScopeChoice {
   label: string;
@@ -42,7 +43,7 @@ export function SettingsScopeNotice({
 }) {
   const { selectScope, search, groups } = useSettingsScope();
   const navigate = useNavigate({ from: "/settings" });
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const pathname = useRenderedSettingsPathname();
   const { environments } = useEnvironments();
   const environmentIcon = (environment: EnvironmentPresentation | undefined) =>
     environment ? (

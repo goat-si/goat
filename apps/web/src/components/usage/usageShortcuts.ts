@@ -16,7 +16,7 @@ export const WINDOW_OPTIONS = [
   { days: 90, label: "90 days", command: "usage.period.quarter" },
 ] as const;
 
-export function resolveUsageShortcut(
+function resolveUsageShortcut(
   event: ShortcutEventLike & { target: EventTarget | null },
   keybindings: ResolvedKeybindingsConfig,
 ) {
@@ -37,4 +37,22 @@ export function resolveUsageShortcut(
   return resolveShortcutCommand(event, keybindings, {
     context: { usagePageOpen: true },
   });
+}
+
+export type UsageShortcutAction =
+  | { readonly type: "close" }
+  | { readonly type: "metric"; readonly value: UsageMetric }
+  | { readonly type: "window"; readonly days: (typeof WINDOW_OPTIONS)[number]["days"] };
+
+export function resolveUsageShortcutAction(
+  event: ShortcutEventLike & { target: EventTarget | null },
+  keybindings: ResolvedKeybindingsConfig,
+): UsageShortcutAction | null {
+  const command = resolveUsageShortcut(event, keybindings);
+  if (command === "usage.open") return { type: "close" };
+  const metricOption = METRIC_OPTIONS.find((option) => option.command === command);
+  if (metricOption) return { type: "metric", value: metricOption.value };
+  const periodOption = WINDOW_OPTIONS.find((option) => option.command === command);
+  if (periodOption) return { type: "window", days: periodOption.days };
+  return null;
 }

@@ -1,8 +1,15 @@
 import { expect, it, vi } from "vite-plus/test";
-import { cdp } from "vite-plus/test/browser";
+import { cdp, page } from "vite-plus/test/browser";
 import "~/index.css";
 import { act } from "../../../test/render";
-import { baseProps, click, message, renderTimeline } from "./MessagesTimeline.browserHarness";
+import { MessagesTimeline } from "./MessagesTimeline";
+import {
+  baseProps,
+  click,
+  message,
+  renderElement,
+  renderTimeline,
+} from "./MessagesTimeline.browserHarness";
 
 it("steps the minimap's next turn past two adjacent user messages", async () => {
   const props = baseProps();
@@ -46,4 +53,95 @@ it("steps the minimap's next turn past two adjacent user messages", async () => 
   } finally {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   }
+});
+
+it("keeps minimap marks apart in a thread with many user messages", async () => {
+  const entries = Array.from({ length: 400 }, (_, index) =>
+    message(`Question ${index}`, {}, `user-${index}`),
+  );
+  await using screen = await renderTimeline(entries);
+  const tops = () =>
+    [...screen.container.querySelectorAll<HTMLElement>("[data-minimap-strip]")]
+      .map((strip) => strip.getBoundingClientRect().top)
+      .sort((a, b) => a - b);
+  await vi.waitFor(() => expect(tops().length).toBeGreaterThan(1));
+  const markTops = tops();
+  const gaps = markTops.slice(1).map((top, index) => top - markTops[index]!);
+  // A mark is 2px tall; closer than 4px apart and neighbours read as one bar.
+  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(4);
+});
+
+it("keeps the minimap off the copy button when the chat lane is shifted left", async () => {
+  const pageSize = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(1280, 800);
+  await using _pageSize = {
+    [Symbol.asyncDispose]: () => page.viewport(pageSize.width, pageSize.height),
+  };
+  const props = baseProps();
+  const entries = Array.from({ length: 6 }, (_, index) => [
+    message(`Question ${index}`, {}, `user-${index}`),
+    message(`Answer ${index}`, { role: "assistant" }, `assistant-${index}`),
+  ]).flat();
+  // ChatCanvas at 1024px with the details card open: a 48px left gutter, not a centered one.
+  await using screen = await renderElement(
+    <div
+      data-chat-canvas
+      style={{ display: "flex", flexDirection: "column", height: 800, width: 1024 }}
+      className="[--chat-lane-inset-end:276px]"
+    >
+      <MessagesTimeline {...props} timelineEntries={entries} />
+    </div>,
+  );
+  const viewport = props.listRef.current!.getScrollableNode()!;
+  const lane = screen.container.querySelector<HTMLElement>("[data-timeline-root]")!;
+  await vi.waitFor(() => {
+    expect(screen.container.querySelector("[data-minimap-strip]")).not.toBeNull();
+    const laneRect = lane.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    expect(laneRect.left - viewportRect.left).toBeLessThan(viewportRect.right - laneRect.right);
+  });
+
+  const jump = screen.buttons(/^Jump to message/)[0]!;
+  await vi.waitFor(() =>
+    expect(jump.getBoundingClientRect().right).toBeLessThanOrEqual(
+      lane.getBoundingClientRect().left,
+    ),
+  );
+});
+
+it("moves the minimap off the chat lane when the lane shifts left without resizing", async () => {
+  const pageSize = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(1600, 800);
+  await using _pageSize = {
+    [Symbol.asyncDispose]: () => page.viewport(pageSize.width, pageSize.height),
+  };
+  const props = baseProps();
+  const entries = Array.from({ length: 6 }, (_, index) => [
+    message(`Question ${index}`, {}, `user-${index}`),
+    message(`Answer ${index}`, { role: "assistant" }, `assistant-${index}`),
+  ]).flat();
+  await using screen = await renderElement(
+    <div
+      data-chat-canvas
+      style={{ display: "flex", flexDirection: "column", height: 800, width: 1600 }}
+    >
+      <MessagesTimeline {...props} timelineEntries={entries} />
+    </div>,
+  );
+  const canvas = screen.container.querySelector<HTMLElement>("[data-chat-canvas]")!;
+  const lane = screen.container.querySelector<HTMLElement>("[data-timeline-root]")!;
+  await vi.waitFor(() =>
+    expect(screen.container.querySelector("[data-minimap-strip]")).not.toBeNull(),
+  );
+  const laneWidth = lane.getBoundingClientRect().width;
+
+  // Opening the details card on a wide canvas moves the lane left at full width.
+  canvas.style.setProperty("--chat-lane-inset-end", "740px");
+  const jump = screen.buttons(/^Jump to message/)[0]!;
+  await vi.waitFor(() => {
+    expect(lane.getBoundingClientRect().width).toBe(laneWidth);
+    expect(jump.getBoundingClientRect().right).toBeLessThanOrEqual(
+      lane.getBoundingClientRect().left,
+    );
+  });
 });

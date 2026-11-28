@@ -14,7 +14,10 @@ import { readEnvironmentScope } from "./session";
 import { useAtomValue } from "@effect/atom-react";
 import { threadRuntimeIsActive } from "@goat/client-runtime/state/shell";
 import type { ThreadCheckpointSummary } from "@goat/client-runtime/state/thread-checkpoints";
-import { threadSteersDuringCompaction } from "@goat/client-runtime/state/thread-workflows";
+import {
+  runStopRequested,
+  threadSteersDuringCompaction,
+} from "@goat/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@goat/client-runtime/handoff";
 import {
   canResumeThread,
@@ -384,7 +387,10 @@ export function useThreadComposerState() {
     run: selectedThreadProjection?.projection.runs.find((run) => run.id === activeRunId),
     messages: selectedThreadMessages,
   });
-  const canSteerActiveTurn = queueWorkflow?.canPromoteToSteer === true && !compactionBlocksSteer;
+  const canSteerActiveTurn =
+    queueWorkflow?.canPromoteToSteer === true &&
+    !compactionBlocksSteer &&
+    !runStopRequested(selectedThreadProjection?.projection, activeRunId);
   // A stop or a restart holds the queue, completion wakes included, until it
   // is resumed; the queue sheet lists only the user's own messages.
   const queueHeld = queueWorkflow?.isHeld === true;

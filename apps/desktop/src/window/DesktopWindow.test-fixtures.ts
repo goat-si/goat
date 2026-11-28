@@ -7,7 +7,10 @@ export function makeFakeBrowserWindow() {
   let zoomLevel = 0;
   const webContents = {
     id: 1,
-    session: { webRequest: { onBeforeSendHeaders: vi.fn() } },
+    session: {
+      webRequest: { onBeforeSendHeaders: vi.fn() },
+      setPermissionRequestHandler: vi.fn(),
+    },
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),

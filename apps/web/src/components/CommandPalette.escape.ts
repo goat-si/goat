@@ -26,6 +26,7 @@ export function useChildSearchEscape(
       if (isComposingEvent(event) || event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      if (event.repeat) return;
       dispatch({ _tag: "BackToCommand" });
     };
     window.addEventListener("keydown", onEscapeKeyDown, true);
@@ -43,7 +44,10 @@ export function childSearchEscape(
   open: boolean,
   mode: string,
 ): "ignore" | "keep-open" | "back-to-command" {
-  if (open || mode === "command" || details.reason !== "escape-key") return "ignore";
+  if (open || details.reason !== "escape-key") return "ignore";
+  // Held Escape emits repeat keydowns; only a fresh press should step back or close.
+  if (details.event instanceof KeyboardEvent && details.event.repeat) return "keep-open";
+  if (mode === "command") return "ignore";
   return returnsToCommand(details) ? "back-to-command" : "keep-open";
 }
 

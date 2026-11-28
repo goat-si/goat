@@ -188,6 +188,28 @@ export function selectedPullRequestAuthor(
   );
 }
 
+/** The labels a filter names, as choices: a search that hides one keeps its color and count. */
+export function selectedPullRequestLabels(
+  facets: ReadonlyArray<PullRequestLabelFacet>,
+  hosted: ReadonlyArray<PullRequestLabel>,
+  values: ReadonlyArray<string>,
+): ReadonlyArray<PullRequestLabelFacet> {
+  return values.map((name) => {
+    const key = normalize(name);
+    return (
+      facets.find((facet) => normalize(facet.name) === key) ?? {
+        ...(hosted.find((label) => normalize(label.name) === key) ?? { name, color: null }),
+        count: 0,
+      }
+    );
+  });
+}
+
+export {
+  rememberPullRequestAuthors,
+  rememberPullRequestLabels,
+} from "./pullRequestListFilterMemory.logic";
+
 export function pullRequestLabelChoices(
   facets: ReadonlyArray<PullRequestLabelFacet>,
   hosted: ReadonlyArray<PullRequestLabel>,
@@ -272,6 +294,9 @@ export function matchesPullRequestFilters(
       (filters.review === "none"
         ? entry.reviewDecision === undefined
         : entry.reviewDecision === filters.review)) &&
+    (filters.checks === undefined ||
+      entry.checksState === undefined ||
+      entry.checksState === filters.checks) &&
     (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||

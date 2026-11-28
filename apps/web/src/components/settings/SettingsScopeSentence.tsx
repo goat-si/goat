@@ -1,7 +1,6 @@
 import { useGT } from "gt-react";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import { fileDisplayName } from "@goat/shared/path";
-import { useLocation } from "@tanstack/react-router";
 import { CheckIcon, ChevronDownIcon, FolderIcon, LayersIcon } from "~/components/solar";
 import { Fragment, useState, type ReactNode } from "react";
 
@@ -47,6 +46,7 @@ import {
   settingsScopeEnvironmentLabels,
   settingsScopeProjectMachines,
 } from "./settingsScopeAxis";
+import { useRenderedSettingsPathname } from "./useRenderedSettingsPathname";
 
 export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   "/settings/appearance",
@@ -65,7 +65,7 @@ interface SettingsScopeMenuProps {
 export function SettingsScopeSentence() {
   const gt = useGT();
   const scope = useOptionalSettingsScope();
-  const pathname = useLocation({ select: (location) => location.pathname });
+  const pathname = useRenderedSettingsPathname();
   const { environments } = useEnvironments();
   if (scope === null || SETTINGS_DEVICE_ONLY_PATHS.has(pathname)) return null;
   const props: SettingsScopeMenuProps = {
@@ -77,11 +77,11 @@ export function SettingsScopeSentence() {
   };
   return (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-3 text-sm text-muted-foreground sm:px-4">
-      <span className="flex min-w-0 items-center gap-1.5">
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
         <span className="shrink-0">{gt("Applying settings for")}</span>
         <ProjectScopeMenu {...props} />
       </span>
-      <span className="flex min-w-0 items-center gap-1.5">
+      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
         <span className="shrink-0">
           {scope.search.machine || scope.scope.kind === "checkout" ? gt("on") : gt("across")}
         </span>
@@ -144,7 +144,7 @@ function ScopeMenu({
     <Trigger
       aria-label={`${ariaLabel}: ${label}`}
       render={<Button variant="outline" size="sm" />}
-      className="min-w-0 max-w-72"
+      className="min-w-0 max-w-[min(100%,18rem)]"
     >
       {icon}
       <span className="min-w-0 truncate">{label}</span>
@@ -315,7 +315,7 @@ function CheckoutScopeMenu({ value, groups, onChange }: SettingsScopeMenuProps) 
   if (checkouts.length === 0) return null;
   const selected = checkouts.find((member) => member.physicalProjectKey === value.checkout);
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
+    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
       <span className="shrink-0">{gt("in")}</span>
       <ScopeMenu
         ariaLabel={gt("Checkout scope")}

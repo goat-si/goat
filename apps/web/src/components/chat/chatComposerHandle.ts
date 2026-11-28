@@ -13,6 +13,7 @@ import type {
   ThreadContextRecord,
 } from "@goat/contracts";
 import type { ComposerFileAttachment, ComposerImageAttachment } from "../../composerDraftStore";
+import type { PastedComposerClipboard } from "../composerInlineTokenPaste";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import type { TerminalContextDraft, TerminalContextSelection } from "../../lib/terminalContext";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
@@ -27,9 +28,12 @@ export interface ChatComposerHandle {
   hasPendingAttachments: () => boolean;
   insertTextAtEnd: (
     text: string,
-    options?: { ensureLeadingBoundary?: boolean; clipboardData?: DataTransfer },
+    options?: { ensureLeadingBoundary?: boolean; clipboardPaste?: PastedComposerClipboard },
   ) => boolean;
-  pasteTextAtEnd: (text: string, options?: { bypassAutoAttachment?: boolean }) => boolean;
+  pasteTextAtEnd: (
+    clipboardData: DataTransfer,
+    options: { bypassAutoAttachment: boolean },
+  ) => boolean;
   citeAssistantText: (
     citation: AssistantCitation,
     sourceAnchor: AssistantCitationSourceAnchor,

@@ -75,8 +75,7 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
     // A Pen that is down says nothing about who left, but the setting off empties the list anyway.
     if (stored.value.penHubNodes && view.kind === "unavailable") return;
     const enabled = stored.value.penHubNodes && view.kind === "ready";
-    // Looks again as long as something is unsettled, at most RETRY_DELAYS' last apart; a newer
-    // member list or setting ends this pass (switchMap) and starts a fresh one.
+    // Every round re-reads every alias, so a revoked key closes its route within the pass.
     for (let round = 0; ; round++) {
       if (round > 0)
         yield* Effect.sleep(RETRY_DELAYS[Math.min(round, RETRY_DELAYS.length) - 1] ?? "10 minutes");
@@ -107,6 +106,9 @@ export const make = Effect.fn("PenHubNodes.make")(function* (input: {
       // Unreadable aliases, and members Pen has not written to ssh config or known_hosts yet, are
       // looked at again on the retry schedule, like a failed close.
       if (!result.retry && inspected.keep.size === 0 && !inspected.unsettled) return;
+      // Past the schedule only a failed close keeps looking; Pen settles a new member in minutes,
+      // and a newer member list or setting starts a fresh pass.
+      if (!result.retry && round >= RETRY_DELAYS.length) return;
     }
   });
   return { pass };

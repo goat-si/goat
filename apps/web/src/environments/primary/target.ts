@@ -1,6 +1,7 @@
-import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "@goat/contracts";
+import { type DesktopEnvironmentBootstrap } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
+import { readDesktopPrimaryBootstrap } from "../../connection/desktopLocal";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 
 const PrimaryEnvironmentTargetSource = Schema.Literals([
@@ -79,8 +80,7 @@ export interface PrimaryEnvironmentTarget {
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
 function getDesktopLocalEnvironmentBootstrap(): DesktopEnvironmentBootstrap | null {
-  const bootstraps = window.desktopBridge?.getLocalEnvironmentBootstraps() ?? [];
-  return bootstraps.find((entry) => entry.id === PRIMARY_LOCAL_ENVIRONMENT_ID) ?? null;
+  return readDesktopPrimaryBootstrap();
 }
 
 function parseTargetUrl(input: {

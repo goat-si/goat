@@ -41,7 +41,7 @@ import {
   resolveWorkEntryToolPresentation,
   summarizeToolGroup,
   toolGroupSummaryKind,
-  workEntriesViewedImagePaths,
+  workEntriesViewedImages,
   type WorkLogPresentationEntry,
 } from "@goat/client-runtime/work-log/presentation";
 import { itemLifecycleStatus, itemWorkLogTone } from "./threadActivityItemStatus.ts";
@@ -1315,7 +1315,17 @@ function runningSubagentsAtRunTail(feed: ReadonlyArray<ThreadFeedEntry>, runId: 
   let running = 0;
   for (let index = feed.length - 1; index >= 0; index -= 1) {
     const entry = feed[index];
-    if (!entry || entry.type !== "activity-group" || entry.runId !== runId) break;
+    if (!entry) break;
+    // The run's own finished reply is the parent parking on the children, not new work.
+    if (
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      !entry.message.streaming &&
+      entry.message.runId === runId
+    ) {
+      continue;
+    }
+    if (entry.type !== "activity-group" || entry.runId !== runId) break;
     const items = entry.activities.map((activity) => activity.projectedItem.item);
     if (items.some((item) => item.type !== "subagent")) break;
     running += items.filter(isLiveSubagentTurnItem).length;
@@ -1428,14 +1438,14 @@ function appendActivityGroupRows(
       isWorking,
       activeTail && isTrailingRun,
     );
-    const paths = workEntriesViewedImagePaths(groupableRun.map((activity) => activity.workEntry));
-    if (paths.length > 0) {
+    const images = workEntriesViewedImages(groupableRun.map((activity) => activity.workEntry));
+    if (images.length > 0) {
       result.push({
         type: "viewed-images",
         id: `${groupId}:viewed-images`,
         createdAt: first.createdAt,
         runId: first.runId,
-        paths,
+        images,
       });
     }
     groupableRun = [];
@@ -1634,7 +1644,7 @@ export function buildThreadFeed(
     readonly checkpointSummaries?: ReadonlyArray<ThreadCheckpointSummary>;
     readonly cache?: ThreadFeedCache;
   },
-): ThreadFeedEntry[] {
+): ReadonlyArray<ThreadFeedEntry> {
   const anchoredMessages = options?.anchoredMessages ?? [];
   const attemptByRootNodeId = new Map(
     (options?.attempts ?? []).map((attempt) => [attempt.rootNodeId, attempt] as const),
@@ -1688,6 +1698,10 @@ export function buildThreadFeed(
     while (restartIndex >= 0 && previous.restarts[restartIndex]!.row > firstChanged) {
       restartIndex -= 1;
     }
+  }
+  // Unchanged rows rebuild the same feed; returning it keeps the screen's props equal.
+  if (restartIndex !== -1 && previous !== null && previous.rows === visibleTurnItems) {
+    return previous.feed;
   }
   const restart = restartIndex === -1 ? null : previous!.restarts[restartIndex]!;
   const prefix = restart === null ? [] : previous!.feed.slice(0, restart.feedLength);

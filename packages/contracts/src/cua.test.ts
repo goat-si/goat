@@ -13,6 +13,8 @@ import {
   ComputerUsePrimitiveRequest,
   ComputerUseRequestInput,
   ComputerUseRequestResult,
+  ComputerUseStopAllResult,
+  ComputerUseStopResult,
   CuaHostStatus,
   CuaDriverMcpConfiguration,
   CuaAgentBlock,
@@ -20,6 +22,8 @@ import {
   cuaAgentBlockUnder,
   DesktopCuaGrants,
   DesktopCuaDriverReport,
+  DesktopCuaPersonStopReport,
+  DesktopCuaSessionLockReport,
   DesktopCuaWatch,
 } from "./cua.ts";
 import {
@@ -642,5 +646,68 @@ describe("a grant read that got no answer", () => {
         principal: "unusable",
         message: unanswered.message,
       });
+  });
+
+  it("carries optional inputMonitoring on helper and app grant reads", () => {
+    const withMonitoring = {
+      principal: "helper",
+      name: "GOAT Computer Use",
+      bundleId: "si.goat.desktop.computer-use",
+      accessibility: true,
+      screenRecording: true,
+      inputMonitoring: false,
+    } as const;
+    expect(decodeDesktopGrants(withMonitoring)).toEqual(withMonitoring);
+    const { inputMonitoring: _omitted, ...withoutMonitoring } = withMonitoring;
+    expect(decodeDesktopGrants(withoutMonitoring)).toEqual(withoutMonitoring);
+    expect(decodeDesktopGrantsBeforeUnanswered(withMonitoring)).toEqual(withoutMonitoring);
+  });
+});
+
+describe("stop partial-failure counts and host safety signal reports", () => {
+  const decodeStop = Schema.decodeUnknownSync(ComputerUseStopResult);
+  const decodeStopAll = Schema.decodeUnknownSync(ComputerUseStopAllResult);
+  const decodePersonStop = Schema.decodeUnknownSync(DesktopCuaPersonStopReport);
+  const decodeSessionLock = Schema.decodeUnknownSync(DesktopCuaSessionLockReport);
+
+  it("accepts optional non-negative failed counts on stop results", () => {
+    expect(decodeStop({ stopped: true })).toEqual({ stopped: true });
+    expect(decodeStop({ stopped: true, failed: 0 })).toEqual({ stopped: true, failed: 0 });
+    expect(decodeStop({ stopped: false, failed: 2 })).toEqual({ stopped: false, failed: 2 });
+    expect(decodeStopAll({ stopped: 3 })).toEqual({ stopped: 3 });
+    expect(decodeStopAll({ stopped: 3, failed: 1 })).toEqual({ stopped: 3, failed: 1 });
+    expect(() => decodeStop({ stopped: true, failed: -1 })).toThrow();
+    expect(() => decodeStopAll({ stopped: 1, failed: 1.5 })).toThrow();
+  });
+
+  it("decodes person stop and session lock safety reports on the desktop telemetry channel", () => {
+    const personStop = {
+      version: 1,
+      type: "cuaPersonStop",
+      generation: 4,
+      reason: "person_esc",
+    } as const;
+    expect(decodePersonStop(personStop)).toEqual(personStop);
+    expect(decodeTelemetryMessage(personStop)).toEqual(personStop);
+    expect(() => decodePersonStop({ ...personStop, reason: "other" })).toThrow();
+
+    const sessionLock = {
+      version: 1,
+      type: "cuaSessionLock",
+      generation: 4,
+      locked: true,
+      reasons: ["screen_locked", "system_suspended"],
+    } as const;
+    expect(decodeSessionLock(sessionLock)).toEqual(sessionLock);
+    expect(decodeTelemetryMessage(sessionLock)).toEqual(sessionLock);
+    expect(
+      decodeSessionLock({
+        version: 1,
+        type: "cuaSessionLock",
+        locked: false,
+        reasons: [],
+      }),
+    ).toEqual({ version: 1, type: "cuaSessionLock", locked: false, reasons: [] });
+    expect(() => decodeSessionLock({ ...sessionLock, reasons: ["unknown_reason"] })).toThrow();
   });
 });

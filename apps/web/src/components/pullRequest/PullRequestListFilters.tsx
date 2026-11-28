@@ -2,8 +2,10 @@ import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
   ProjectId,
+  PullRequestActor,
   PullRequestFilterOptionsInput,
   PullRequestInvolvement,
+  PullRequestLabel,
   PullRequestListFilters,
   PullRequestListState,
   SourceControlProviderKind,
@@ -21,6 +23,7 @@ import {
   TagIcon,
   UserRoundIcon,
 } from "~/components/solar";
+import { useGT } from "gt-react";
 import { type ElementType, useState } from "react";
 
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -50,8 +53,11 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   pullRequestAuthorChoices,
   selectedPullRequestAuthor,
+  selectedPullRequestLabels,
   pullRequestLabelChoices,
   pullRequestLabelColor,
+  rememberPullRequestAuthors,
+  rememberPullRequestLabels,
   type PullRequestAuthorFacet,
   type PullRequestLabelFacet,
 } from "./pullRequestList.logic";
@@ -110,8 +116,10 @@ export function PullRequestSearchInput({
       <InputGroupAddon>
         {busy ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
       </InputGroupAddon>
+      {/* Native search inputs clear on Escape even during IME composition. */}
       <InputGroupInput
-        type="search"
+        type="text"
+        role="searchbox"
         value={draft ?? value}
         onFocus={() => setDraft(value)}
         onBlur={() => setDraft(null)}
@@ -123,9 +131,16 @@ export function PullRequestSearchInput({
           }
         }}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-            onSubmit(event.currentTarget.value);
-          }
+          const composing = event.nativeEvent.isComposing || event.keyCode === 229;
+          if (event.key === "Enter" && !composing) onSubmit(event.currentTarget.value);
+          if (event.key !== "Escape" || event.defaultPrevented) return;
+          if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          if (!composing && !event.currentTarget.value) return;
+          // The pull requests page leaves on an Escape that reaches it.
+          event.stopPropagation();
+          if (composing) return;
+          setDraft("");
+          onChange("");
         }}
         placeholder="Search pull requests, or label:bug"
         aria-label="Search pull requests"
@@ -280,10 +295,14 @@ function PullRequestAuthorChoices({
   scope: ReadonlyArray<PullRequestFilterOptionScope>;
   onChange: (author: string | undefined) => void;
 }) {
+  const gt = useGT();
   const [query, setQuery] = useState("");
   const hosted = useHostedFilterOptions(scope, "authors", query);
+  const [seen, setSeen] = useState<ReadonlyArray<PullRequestActor>>([]);
+  const remembered = rememberPullRequestAuthors(seen, hosted.authors);
+  if (remembered !== seen) setSeen(remembered);
   const login = value?.toLowerCase() ?? "";
-  const selected = selectedPullRequestAuthor(options, hosted.authors, value);
+  const selected = selectedPullRequestAuthor(options, remembered, value);
   const visible = [
     ...(selected ? [selected] : []),
     ...pullRequestAuthorChoices(options, hosted.authors, query).filter(
@@ -315,7 +334,9 @@ function PullRequestAuthorChoices({
               <span className="min-w-0 flex-1 truncate">{option.actor.login}</span>
               {option.mergedCount > 0 ? (
                 <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                  {option.mergedCount} {option.mergedCount === 1 ? "merge" : "merges"} loaded
+                  {gt("{count, plural, one {{count} merge loaded} other {{count} merges loaded}}", {
+                    count: option.mergedCount,
+                  })}
                 </span>
               ) : null}
             </span>
@@ -376,12 +397,15 @@ function PullRequestLabelChoices({
 }) {
   const [query, setQuery] = useState("");
   const hosted = useHostedFilterOptions(scope, "labels", query);
+  const [seen, setSeen] = useState<ReadonlyArray<PullRequestLabel>>([]);
+  const remembered = rememberPullRequestLabels(seen, hosted.labels);
+  if (remembered !== seen) setSeen(remembered);
   const selected = new Set(value.map((name) => name.toLowerCase()));
   const choices = pullRequestLabelChoices(options, hosted.labels, query);
   const visible = [
-    ...value
-      .filter((name) => !choices.some((option) => option.name.toLowerCase() === name.toLowerCase()))
-      .map((name) => ({ name, color: null, count: 0 })),
+    ...selectedPullRequestLabels(options, remembered, value).filter(
+      (label) => !choices.some((option) => option.name.toLowerCase() === label.name.toLowerCase()),
+    ),
     ...choices,
   ];
   return (

@@ -126,6 +126,15 @@ export function writeTerminalOutputUpdate(
   }
 }
 
+// Full-screen apps such as vim read their own modified arrows; shell motions would break them.
+export function terminalPromptNavigationData(
+  terminal: Pick<GhosttyTerminalSurface, "isAlternateScreen">,
+  event: KeyboardEvent,
+  platform?: string,
+): string | null {
+  return terminal.isAlternateScreen() ? null : terminalNavigationShortcutData(event, platform);
+}
+
 // Avoid formatting unbounded scrollback selections on every output update.
 const MAX_COMPARED_SELECTION_CELLS = 3_000;
 
@@ -439,7 +448,9 @@ function TerminalSessionViewport({
   const validateTerminalLink = useEffectEvent((text: string) =>
     linkValidation.validateTerminalLink(text),
   );
-  const setLinkPath = useEffectEvent((text: string | null) => linkValidation.setLinkPath(text));
+  const setHoveredLink = useEffectEvent((link: { text: string; fallback?: string } | null) =>
+    linkValidation.setHoveredLink(link),
+  );
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -610,7 +621,12 @@ function TerminalSessionViewport({
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         canActivateLink: (text) => canActivateTerminalLink(text),
         validateLink: (text) => validateTerminalLink(text),
-        onLinkHover: (text) => setLinkPath(text !== null && !isTerminalUrl(text) ? text : null),
+        onLinkHover: (text, fallback) =>
+          setHoveredLink(
+            text !== null && !isTerminalUrl(text)
+              ? { text, ...(fallback === undefined ? {} : { fallback }) }
+              : null,
+          ),
         // Surface listeners start before WASM loading finishes and the terminal handler exists.
         onContextMenu: (event) => {
           if (terminalRef.current) void showTerminalContextMenu(event);
@@ -845,7 +861,10 @@ function TerminalSessionViewport({
           return false;
         }
 
-        const navigationData = terminalNavigationShortcutData(event);
+        const activeTerminal = terminalRef.current;
+        const navigationData = activeTerminal
+          ? terminalPromptNavigationData(activeTerminal, event)
+          : null;
         if (navigationData !== null) {
           event.preventDefault();
           event.stopPropagation();

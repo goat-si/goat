@@ -186,6 +186,63 @@ describe("Windows computer use readiness", () => {
     assert.isBelow(stamp, capture.indexOf("CaptureGuard.CaptureNative("));
     assert.match(capture, /frame\["capturedAt"\] = capturedAt;/);
   });
+
+  it("hardens Windows helper signals, relay concurrency, UTF-8 stdin decoding, and display wake state", () => {
+    const signalsSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "Signals.cs"),
+      "utf8",
+    );
+    const frameSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "FrameSource.cs"),
+      "utf8",
+    );
+    const relaySource = NodeFS.readFileSync(NodePath.join(windowsHelperDir, "McpRelay.cs"), "utf8");
+    const programSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "Program.cs"),
+      "utf8",
+    );
+    const nativeSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "NativeMethods.cs"),
+      "utf8",
+    );
+    const driverSource = NodeFS.readFileSync(
+      NodePath.join(windowsHelperDir, "DriverService.cs"),
+      "utf8",
+    );
+
+    assert.match(signalsSource, /const uint VK_ESCAPE = 0x1B;/);
+    assert.match(signalsSource, /const uint WM_KEYDOWN = 0x0100;/);
+    assert.match(signalsSource, /const uint WM_KEYUP = 0x0101;/);
+    assert.match(signalsSource, /const uint WM_SYSKEYDOWN = 0x0104;/);
+    assert.match(signalsSource, /const uint WM_SYSKEYUP = 0x0105;/);
+    assert.match(signalsSource, /signal\["type"\] = "personStop";/);
+    assert.match(signalsSource, /PersonStop\("person_esc"\)/);
+    assert.match(signalsSource, /CallNextHookEx\(IntPtr\.Zero, code, wParam, lParam\)/);
+    assert.match(signalsSource, /return known && password;/);
+    assert.match(signalsSource, /return known && password && focusedPid == targetPid;/);
+    assert.notMatch(signalsSource, /!known \|\|/);
+    assert.match(frameSource, /WindowsFacts\.FocusedSecure\(pid\) != "clear"/);
+
+    assert.notMatch(relaySource, /readonly JavaScriptSerializer\b/);
+    assert.match(relaySource, /MaxPendingEntries = 256;/);
+    assert.match(relaySource, /MaxShotEntries = 256;/);
+    assert.match(relaySource, /new BoundedMap<string, Pending>\(MaxPendingEntries\)/);
+    assert.match(relaySource, /new BoundedMap<IntPtr, Shot>\(MaxShotEntries\)/);
+
+    assert.match(programSource, /catch \(IOException\)/);
+    assert.match(programSource, /catch \(DecoderFallbackException\)/);
+    assert.notMatch(programSource, /readonly JavaScriptSerializer\b/);
+
+    assert.match(nativeSource, /ES_CONTINUOUS = 0x80000000;/);
+    assert.match(nativeSource, /ES_SYSTEM_REQUIRED = 0x00000001;/);
+    assert.match(nativeSource, /ES_DISPLAY_REQUIRED = 0x00000002;/);
+    assert.match(nativeSource, /SetThreadExecutionState\(uint esFlags\)/);
+    assert.match(driverSource, /NativeMethods\.SetThreadExecutionState\(/);
+    assert.match(
+      driverSource,
+      /NativeMethods\.SetThreadExecutionState\(NativeMethods\.ES_CONTINUOUS\)/,
+    );
+  });
 });
 
 // oxlint-disable-next-line goat/no-global-process-runtime -- Compiling the helper's C# needs the real host: csc on Windows, dotnet elsewhere.

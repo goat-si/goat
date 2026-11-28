@@ -39,6 +39,7 @@ import {
 } from "../threadRoutes";
 import { usePreviewFindAvailable } from "./preview/findAvailability";
 import { toastManager } from "./ui/toast";
+import { readPullRequestListPreferences } from "./pullRequest/pullRequestListPreferences";
 
 declare module "@tanstack/react-router" {
   interface HistoryState {
@@ -141,7 +142,7 @@ export function ReopenClosedViewShortcut() {
       );
       destination = linkOptions({
         to: "/pull-requests",
-        search: (previous) => pullRequestsSearchForRestore(previous, selected),
+        search: pullRequestsSearchForRestore(readPullRequestListPreferences(), selected),
       });
     } else {
       const draftId = thread === null ? drafts.getDraftIdByRef(ref) : null;
