@@ -38,4 +38,9 @@ Not ported, and why:
 - `probeManagement.ts` (session list/delete, provider list/set/disable, logout): management operations, not part of `probe()`.
 - `learnedModels.ts`, `learnedModelOptions.ts` store, `authenticationState.ts`, `enrichmentCache.ts` cache state: host-side state kept across probes and sessions; only their pure functions are here.
 - Grok skills discovery and slash commands, Antigravity workspace snapshots, version advisories: no contract field.
-- URL sign-in elicitations during a probe (`authAction`, probe.ts:461-489): `ServerProviderAuth` has no action field; the URL is kept in `RegistryProbeError.auth_url`.
+- URL sign-in actions during a probe (`authAction`, probe.ts:461-489): `ServerProviderAuth.action` exists (`goat2-contracts/src/probe.rs` 82-85), but probes never fill it (`probe_support.rs` sets `action: None`). A probe has no `RuntimeCoordinator` to wait for the person's consent, so it declines the URL elicitation and keeps the URL in `RegistryProbeError.auth_url`. Remaining work: when the host hands probes a coordinator, publish the action through `request_url_authentication` (v1 `requestUrlAuthentication`) and set `ServerProviderAuth.action` from it.
+
+Final review fixes (review on c5b44fee4b), each with a regression test that failed before the fix:
+- finding 19, `probe_support.rs` `resolve_executable`: the agent is looked up where and as it runs, a relative path from the run directory and only executable files (v1 AntigravityInstallationLookup.ts:60-70, shell.ts:99-154); test `tests/probe_status.rs` `registry_probe_resolves_the_agent_as_it_will_run`.
+- finding 20, `probe.rs` `open_probe_within`: the session start and the advertisement waits share one deadline, and a probe that runs out deletes its session (v1 probe.ts:521-525, 535-569); test `tests/probe.rs` `advertisement_wait_counts_against_the_probe_deadline`.
+- finding 3, `probe_support.rs` `command_environments`: a registry command with its complete environment is probed with that environment, not the host's.
