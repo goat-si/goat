@@ -49,6 +49,8 @@ fn spec(cwd: &std::path::Path, resume: Option<goat2_contracts::EngineRef>) -> Se
         },
         host_generation: 1,
         process_generation: 1,
+        instructions: None,
+        launch: None,
     }
 }
 

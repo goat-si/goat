@@ -106,16 +106,31 @@ impl EngineFactory for CodexEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
         start_session(self.options.clone(), spec).await
     }
+
+    /// v1 `CodexProviderCapabilitiesV2` (src/capabilities.rs, compared whole by a test).
+    fn capabilities(&self) -> crate::contract::ProviderCapabilities {
+        crate::capabilities::codex_capabilities()
+    }
 }
 
 /// v1 `codexAppServerArgs(launchArgs, routeArgs, unloadImmediately = true)`.
-fn launch_for(options: &CodexEngineOptions, cwd: &str) -> Launch {
-    let mut launch = Launch::new(&options.program).without_host_identity();
+/// The launch for one session: the factory's options, then the host's [LaunchSpec] (binary,
+/// extra arguments, environment) on top.
+fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
+    let program = spec
+        .launch
+        .as_ref()
+        .and_then(|l| l.binary.clone())
+        .unwrap_or_else(|| options.program.clone());
+    let mut launch = Launch::new(&program).without_host_identity();
     for arg in ["app-server", "-c", "thread_unload_delay_secs=0"] {
         launch = launch.arg(arg);
     }
     launch.args.extend(options.extra_args.iter().cloned());
-    launch.cwd = Some(PathBuf::from(cwd));
+    if let Some(host) = &spec.launch {
+        launch.args.extend(host.args.iter().map(OsString::from));
+    }
+    launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
     launch.kill_grace = options.kill_grace;
     // v1 codexAppServerEnvironment: the originator first, the supplied environment may override.
     launch.env_set.push((
@@ -123,16 +138,42 @@ fn launch_for(options: &CodexEngineOptions, cwd: &str) -> Launch {
         CODEX_CLIENT_NAME.into(),
     ));
     launch.env_set.extend(options.env_set.iter().cloned());
+    if let Some(host) = &spec.launch {
+        launch.env_set.extend(
+            host.env
+                .iter()
+                .map(|(k, v)| (OsString::from(k), OsString::from(v))),
+        );
+    }
     launch
+}
+
+/// GOAT's instructions go into Codex's developer instructions (its system slot) on thread/start
+/// and thread/resume. Codex has a system slot, so a first-message preamble goes there too.
+fn developer_instructions(spec: &SessionSpec) -> Option<String> {
+    let parts: Vec<&str> = spec
+        .instructions
+        .iter()
+        .flat_map(|i| {
+            [
+                i.append_system_prompt.as_deref(),
+                i.first_message_preamble.as_deref(),
+            ]
+        })
+        .flatten()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
 async fn start_session(
     options: CodexEngineOptions,
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
-    let launch = launch_for(&options, &spec.engine.cwd);
+    let launch = launch_for(&options, &spec);
     let mut child = ChildProcess::spawn(&launch).map_err(|error| {
-        EngineError::StartFailed(format!("spawn {}: {error}", options.program.display()))
+        EngineError::StartFailed(format!("spawn {}: {error}", launch.program.display()))
     })?;
     let (Some(stdin), Some(stdout)) = (child.take_stdin(), child.take_stdout()) else {
         child.kill_group();
@@ -232,7 +273,7 @@ async fn open_thread(
         cwd: spec.engine.cwd.clone(),
         approval_policy: None,
         sandbox: None,
-        developer_instructions: None,
+        developer_instructions: developer_instructions(spec),
         goat_mcp: Some((spec.mcp.url.clone(), spec.mcp.bearer_token.clone())),
     };
     let opened: ThreadOpenResponse = match &spec.resume {
@@ -362,6 +403,14 @@ impl EngineSession for CodexSession {
         result
             .await
             .unwrap_or_else(|_| Err(EngineError::Transport("the Codex driver stopped".into())))
+    }
+
+    /// Codex takes the model and runtime mode with every turn/start (v1 CodexTurnStartParams), so
+    /// a switch in session (v1 capabilities: supportsModelSwitchInSession and
+    /// supportsRuntimeModeSwitchInSession) needs nothing sent now: the host's next start_turn
+    /// carries the new TurnSettings, and a mode change ends the session allowances there.
+    async fn set_config(&self, _settings: &TurnSettings) -> Result<(), EngineError> {
+        Ok(())
     }
 
     fn group_rss_bytes(&self) -> Option<u64> {

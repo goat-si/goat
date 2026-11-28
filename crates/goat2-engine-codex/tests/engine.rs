@@ -45,6 +45,8 @@ fn spec(mode: RuntimeMode, resume: Option<&str>) -> SessionSpec {
         },
         host_generation: 1,
         process_generation: 1,
+        instructions: None,
+        launch: None,
     }
 }
 
@@ -1395,6 +1397,59 @@ async fn an_elicitation_without_a_turn_waits_for_the_start_answer() {
         .await
         .unwrap();
     until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn host_launch_and_instructions_reach_codex() {
+    // The factory's own binary does not exist: the host's LaunchSpec (binary + environment) must
+    // start the session, and its instructions must reach thread/start as developerInstructions.
+    let mut t = load("codex-0.167.0/basic.json");
+    for e in &mut t.entries {
+        if let Entry::ExpectOutbound { frame, .. } = e
+            && frame["method"] == "thread/start"
+        {
+            frame["params"]["developerInstructions"] = json!("GOAT rules\n\nBot brief");
+        }
+    }
+    let entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
+    let path = write_temp(&synthetic("host-launch", entries));
+    let factory = CodexEngineFactory::new(CodexEngineOptions {
+        program: "/nonexistent/codex".into(),
+        kill_grace: Duration::from_millis(500),
+        client_version: "0.0.0".into(),
+        ..CodexEngineOptions::default()
+    });
+    let mut s = spec(RuntimeMode::ApprovalRequired, None);
+    s.launch = Some(goat2_engine_api::LaunchSpec {
+        binary: Some(env!("CARGO_BIN_EXE_goat2-fake-codex").into()),
+        args: Vec::new(),
+        env: [(
+            "GOAT2_FAKE_CODEX_TRANSCRIPT".to_string(),
+            path.to_string_lossy().into_owned(),
+        )]
+        .into_iter()
+        .collect(),
+    });
+    s.instructions = Some(goat2_engine_api::Instructions {
+        append_system_prompt: Some("GOAT rules".into()),
+        first_message_preamble: Some("Bot brief".into()),
+    });
+    let h = factory
+        .start(s)
+        .await
+        .expect("started through the host launch");
+    // Codex applies model and mode per turn, so an in-session switch is accepted (v1 flags).
+    assert_eq!(
+        h.session
+            .set_config(&settings(RuntimeMode::FullAccess))
+            .await,
+        Ok(())
+    );
+    assert_eq!(
+        factory.capabilities(),
+        goat2_engine_codex::capabilities::codex_capabilities()
+    );
     finish(h).await;
 }
 
