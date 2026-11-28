@@ -141,9 +141,7 @@ function Chat({ bot, runtime, onRuntime }: { bot: BotRow; runtime: BotRuntime; o
   return (
     <main style={{ backgroundColor: "#FFFFFF", display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, height: "100%", minWidth: 0 }}>
       <ChatHeader botId={bot.id} botName={bot.name} />
-      <div style={{ display: "flex", flexShrink: 0, justifyContent: "center", paddingBottom: 8, paddingInline: 40 }}>
-        <RuntimePicker value={runtime} onChange={onRuntime} placement="below" variant="bar" />
-      </div>
+      {/* One model picker only: the composer chip (Paper SSOT, 2026-11-28). */}
       <div style={{ alignItems: "center", display: "flex", flexBasis: "0%", flexDirection: "column", flexGrow: 1, minHeight: 0, overflow: "auto", paddingInline: 40, paddingTop: 8 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14, width: 640, paddingBottom: 16 }}>
           <RoutineEvent />

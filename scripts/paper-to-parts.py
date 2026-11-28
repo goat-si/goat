@@ -3,7 +3,7 @@
 
 Usage: scripts/paper-to-parts.py <ssot.jsx> > apps/web/src/bot-home/ssotParts.tsx
 
-Line numbers are 1-based against the 2026-11-28 export of artboard "봇 홈 — SSOT".
+Line numbers are 1-based against the 2026-11-28 (single model picker) export of artboard "봇 홈 — SSOT".
 Re-export from Paper and re-check the ranges when the artboard changes (docs/PAPER.md).
 """
 import re, sys
@@ -48,13 +48,13 @@ comp("RosterTop", "{ onFold }: { onFold: () => void }",
 comp("RosterFooter", "", seg(198, 228))
 r = {**drop(234, 238), 234: '<BotBody id={botId} size={24} />', 240: "{botName}"}
 comp("ChatHeader", "{ botId, botName }: { botId: string; botName: string }", seg(231, 250, r))
-comp("RoutineEvent", "", seg(268, 276))
-comp("BotBubble", "", seg(277, 281))
-comp("EvidenceCard", "", seg(301, 344))
-comp("ApprovalCard", "", seg(377, 403))
-r = {**drop(411, 423), 409: "{`Message ${botName}`}", 411: "{picker}"}
-comp("Composer", "{ botName, picker }: { botName: string; picker: ReactNode }", seg(406, 430, r))
-r = {**drop(435, 439), 435: '<BotBody id={botId} size={44} />', 442: "{botName}",
-     449: L[448].replace("<div ", "<div role=\"button\" aria-label=\"Fold overview\" onClick={onFold} ", 1)}
-comp("OverviewHeader", "{ botId, botName, onFold }: { botId: string; botName: string; onFold: () => void }", seg(433, 455, r))
-comp("ThreadsBody", "", "<>\n" + seg(525, 553) + "\n</>")
+comp("RoutineEvent", "", seg(253, 261))
+comp("BotBubble", "", seg(262, 266))
+comp("EvidenceCard", "", seg(286, 329))
+comp("ApprovalCard", "", seg(362, 388))
+r = {**drop(396, 408), 394: "{`Message ${botName}`}", 396: "{picker}"}
+comp("Composer", "{ botName, picker }: { botName: string; picker: ReactNode }", seg(391, 415, r))
+r = {**drop(420, 424), 420: '<BotBody id={botId} size={44} />', 427: "{botName}",
+     434: L[433].replace("<div ", "<div role=\"button\" aria-label=\"Fold overview\" onClick={onFold} ", 1)}
+comp("OverviewHeader", "{ botId, botName, onFold }: { botId: string; botName: string; onFold: () => void }", seg(418, 440, r))
+comp("ThreadsBody", "", "<>\n" + seg(510, 538) + "\n</>")
