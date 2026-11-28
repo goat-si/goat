@@ -41,6 +41,9 @@ pub struct LogLine {
     /// Line format version, [LOG_FORMAT_VERSION] when written by this build.
     pub v: u32,
     /// Per-thread sequence, starting at 1, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub seq: u64,
     /// RFC 3339 UTC timestamp.
     pub at: String,
@@ -290,6 +293,9 @@ pub struct RunStarted {
     pub run_id: RunId,
     pub input_ids: Vec<InputId>,
     /// Host generation; outputs from older generations are dropped.
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub generation: u64,
     pub engine_ref: Option<EngineRef>,
 }
@@ -539,8 +545,17 @@ pub struct HeldInputs {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FoldCounters {
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub inputs: u64,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub runs: u64,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub items: u64,
 }
 
@@ -552,4 +567,39 @@ pub struct Checkpoint {
     /// The card with `appliedSeq` equal to this line's seq.
     pub card: ThreadCard,
     pub fold: Fold,
+}
+
+/// A `goat.jsonl` event line as a reader sees it: a known event, or a newer event type this build
+/// does not know, which readers skip (format freeze rule: new event types are additive).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedLine {
+    Known(Box<LogLine>),
+    Unknown { v: u32, seq: u64, type_tag: String },
+}
+
+/// Parse one event line (not the header). Unknown `type` values become [ParsedLine::Unknown];
+/// a known type with a bad payload is an error.
+pub fn parse_log_line(text: &str) -> Result<ParsedLine, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(text)?;
+    let type_tag = value
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default();
+    if LogEvent::TYPE_TAGS.contains(&type_tag) {
+        return serde_json::from_value(value).map(|line| ParsedLine::Known(Box::new(line)));
+    }
+    #[derive(Deserialize)]
+    struct Envelope {
+        v: u32,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        seq: u64,
+        #[serde(rename = "type")]
+        type_tag: String,
+    }
+    let envelope: Envelope = serde_json::from_value(value)?;
+    Ok(ParsedLine::Unknown {
+        v: envelope.v,
+        seq: envelope.seq,
+        type_tag: envelope.type_tag,
+    })
 }

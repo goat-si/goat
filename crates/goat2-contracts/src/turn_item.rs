@@ -105,6 +105,9 @@ pub struct BlobRef {
     /// Path relative to the thread folder, e.g. `blobs/<itemId>.txt`.
     pub path: String,
     /// Full size in bytes.
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub size_bytes: u64,
 }
 
@@ -125,6 +128,9 @@ pub struct ChatAttachment {
     pub id: String,
     pub name: String,
     pub mime_type: String,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub size_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -152,6 +158,9 @@ pub struct PlanStep {
     pub duration_anchor_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    #[serde(with = "crate::serde_util::safe_u64_opt")]
+    #[schemars(with = "Option<u64>")]
+    #[ts(as = "Option<u64>")]
     pub duration_ms: Option<u64>,
 }
 
@@ -326,6 +335,9 @@ pub struct ProviderFailure {
 pub struct ProviderRetry {
     pub attempt: u32,
     pub max_attempts: Option<u32>,
+    #[serde(with = "crate::serde_util::safe_u64_opt")]
+    #[schemars(with = "Option<u64>")]
+    #[ts(as = "Option<u64>")]
     pub retry_delay_ms: Option<u64>,
 }
 
@@ -500,9 +512,15 @@ pub enum TurnItemBody {
         summary: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
+        #[serde(with = "crate::serde_util::safe_u64_opt")]
+        #[schemars(with = "Option<u64>")]
+        #[ts(as = "Option<u64>")]
         before_token_count: Option<u64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
+        #[serde(with = "crate::serde_util::safe_u64_opt")]
+        #[schemars(with = "Option<u64>")]
+        #[ts(as = "Option<u64>")]
         after_token_count: Option<u64>,
     },
     SystemNotice {

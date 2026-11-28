@@ -21,6 +21,9 @@ use crate::turn_item::ChatAttachment;
 pub struct ThreadCursor {
     pub epoch: Epoch,
     /// At most [crate::limits::MAX_SAFE_WIRE_INTEGER].
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub seq: u64,
 }
 
@@ -29,6 +32,9 @@ pub struct ThreadCursor {
 #[serde(rename_all = "camelCase")]
 pub struct CardCursor {
     pub epoch: Epoch,
+    #[serde(with = "crate::serde_util::safe_u64")]
+    #[ts(as = "u64")]
+    #[schemars(with = "u64")]
     pub card_seq: u64,
 }
 
@@ -75,6 +81,9 @@ pub enum ClientFrame {
     ReadPage {
         req_id: String,
         thread_id: ThreadId,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        #[ts(as = "u64")]
+        #[schemars(with = "u64")]
         before: u64,
         limit: u32,
     },
@@ -357,6 +366,9 @@ pub enum HostFrame {
     CardRemoved {
         sub_id: String,
         thread_id: ThreadId,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        #[ts(as = "u64")]
+        #[schemars(with = "u64")]
         card_seq: u64,
     },
     CardsCaughtUp {
@@ -390,6 +402,9 @@ pub enum HostFrame {
         sub_id: String,
         thread_id: ThreadId,
         item_id: ItemId,
+        #[serde(with = "crate::serde_util::safe_u64")]
+        #[ts(as = "u64")]
+        #[schemars(with = "u64")]
         offset: u64,
         text: String,
     },

@@ -17,4 +17,13 @@ pnpm --filter @goat2/contracts-rs typecheck
 - `schema/<Root>.schema.json`: JSON Schema draft 2020-12 per root type. Schemas describe what readers
   accept (serde deserialize contract): fields with defaults may be omitted, and a missing nullable field
   reads as `null` because the log is never migrated. Every `uint64` carries `maximum: 2^53-1`
-  (`MAX_SAFE_WIRE_INTEGER`) so JavaScript numbers stay exact.
+  (`MAX_SAFE_WIRE_INTEGER`) so JavaScript numbers stay exact; the Rust types enforce the same bound when
+  encoding and decoding (`serde_util::safe_u64`), so serde, the schemas and the TypeScript `number` agree.
+
+## Format freeze
+
+Format v1 of `goat.jsonl` lines and `card.json` freezes at the goat2 merge where the thread store (lane A)
+first writes these files; `cards.sqlite` is a cache and may change freely. Before that, contract changes
+need no legacy readers. After it, persisted shapes change only additively (new optional fields, new event
+types that readers skip; Rust readers use `parse_log_line`) or bump `v` with a reader for the old version.
+`crates/goat2-contracts/tests/frozen_v1.rs` pins a sample log and card file, so a breaking change fails CI.
