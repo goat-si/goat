@@ -20,11 +20,17 @@ export type GoatProjectFileLookup =
   | { readonly known: true; readonly file: GoatProjectFile | null }
   | { readonly known: false };
 
+interface InFlightProjectFileLoad {
+  readonly promise: Promise<GoatProjectFileLookup>;
+  readonly controller: AbortController;
+  activeWaiters: number;
+}
+
 const UNKNOWN: GoatProjectFileLookup = { known: false };
 // The last known contents per project, kept for the session so opening a new thread never waits
 // for a file read. Every load refreshes it.
 const lastKnownFiles = new Map<string, GoatProjectFile | null>();
-const loadsInFlight = new Map<string, Promise<GoatProjectFileLookup>>();
+const loadsInFlight = new Map<string, InFlightProjectFileLoad>();
 // A prefetch only warms the cache; it gives up instead of holding a mounted query while an
 // environment stays unreachable.
 const PREFETCH_TIMEOUT_MS = 15_000;
@@ -34,6 +40,7 @@ function projectFileKey(environmentId: EnvironmentId, workspaceRoot: string): st
 }
 
 export function clearGoatProjectFileDefaultsForTests(): void {
+  for (const entry of loadsInFlight.values()) entry.controller.abort();
   lastKnownFiles.clear();
   loadsInFlight.clear();
 }
@@ -58,52 +65,90 @@ export function loadGoatProjectFile(
   workspaceRoot: string,
   options: { readonly signal?: AbortSignal } = {},
 ): Promise<GoatProjectFileLookup> {
+  if (options.signal?.aborted) return Promise.resolve(UNKNOWN);
   const key = projectFileKey(environmentId, workspaceRoot);
-  const inFlight = loadsInFlight.get(key);
-  if (inFlight) return inFlight;
-  const read = async (relativePath: string) => {
-    const result = await executeAtomQuery(
-      appAtomRegistry,
-      getProjectFileQueryAtom(environmentId, workspaceRoot, relativePath),
-      {
-        reportDefect: false,
-        reportFailure: false,
-        ...(options.signal ? { signal: options.signal } : {}),
-      },
-    );
-    const data = resolveProjectFileQueryData(
-      environmentId,
-      workspaceRoot,
-      relativePath,
-      result._tag === "Success" ? result.value : null,
-    );
-    return { data, error: result._tag === "Failure" ? Cause.squash(result.cause) : null };
-  };
-  const load = (async (): Promise<GoatProjectFileLookup> => {
-    const primary = await read(GOAT_PROJECT_FILE_NAME);
-    const relativePath = goatProjectFileReadPath(primary.data, primary.error);
-    const settled = relativePath === GOAT_PROJECT_FILE_NAME ? primary : await read(relativePath);
-    let lookup: GoatProjectFileLookup = UNKNOWN;
-    if (settled.data !== null) {
-      lookup = {
-        known: true,
-        file:
-          settled.data.exists === false || settled.data.truncated
-            ? null
-            : parseGoatProjectFile(settled.data.contents),
-      };
-    } else if (
-      relativePath === LEGACY_PROJECT_FILE_NAME &&
-      goatProjectFileReadPath(null, settled.error) === LEGACY_PROJECT_FILE_NAME
-    ) {
-      // Neither file exists.
-      lookup = { known: true, file: null };
-    }
-    if (lookup.known) lastKnownFiles.set(key, lookup.file);
-    return lookup;
-  })().finally(() => loadsInFlight.delete(key));
-  loadsInFlight.set(key, load);
-  return load;
+  let entry = loadsInFlight.get(key);
+  if (!entry) {
+    const controller = new AbortController();
+    const read = async (relativePath: string) => {
+      const result = await executeAtomQuery(
+        appAtomRegistry,
+        getProjectFileQueryAtom(environmentId, workspaceRoot, relativePath),
+        {
+          reportDefect: false,
+          reportFailure: false,
+          signal: controller.signal,
+        },
+      );
+      const data = resolveProjectFileQueryData(
+        environmentId,
+        workspaceRoot,
+        relativePath,
+        result._tag === "Success" ? result.value : null,
+      );
+      return { data, error: result._tag === "Failure" ? Cause.squash(result.cause) : null };
+    };
+    const promise = (async (): Promise<GoatProjectFileLookup> => {
+      const primary = await read(GOAT_PROJECT_FILE_NAME);
+      if (controller.signal.aborted) return UNKNOWN;
+      const relativePath = goatProjectFileReadPath(primary.data, primary.error);
+      const settled = relativePath === GOAT_PROJECT_FILE_NAME ? primary : await read(relativePath);
+      if (controller.signal.aborted) return UNKNOWN;
+      let lookup: GoatProjectFileLookup = UNKNOWN;
+      if (settled.data !== null) {
+        lookup = {
+          known: true,
+          file:
+            settled.data.exists === false || settled.data.truncated
+              ? null
+              : parseGoatProjectFile(settled.data.contents),
+        };
+      } else if (
+        relativePath === LEGACY_PROJECT_FILE_NAME &&
+        goatProjectFileReadPath(null, settled.error) === LEGACY_PROJECT_FILE_NAME
+      ) {
+        // Neither file exists.
+        lookup = { known: true, file: null };
+      }
+      if (lookup.known) lastKnownFiles.set(key, lookup.file);
+      return lookup;
+    })().finally(() => {
+      if (loadsInFlight.get(key) === activeEntry) loadsInFlight.delete(key);
+    });
+    const activeEntry: InFlightProjectFileLoad = { promise, controller, activeWaiters: 0 };
+    entry = activeEntry;
+    loadsInFlight.set(key, entry);
+  }
+  const activeEntry = entry;
+  activeEntry.activeWaiters += 1;
+  const signal = options.signal;
+  if (!signal) {
+    return activeEntry.promise.finally(() => {
+      activeEntry.activeWaiters -= 1;
+    });
+  }
+  return new Promise<GoatProjectFileLookup>((resolve) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      activeEntry.activeWaiters -= 1;
+      if (activeEntry.activeWaiters === 0) {
+        activeEntry.controller.abort();
+        if (loadsInFlight.get(key) === activeEntry) loadsInFlight.delete(key);
+      }
+      resolve(UNKNOWN);
+    };
+    const onResolve = (value: GoatProjectFileLookup) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      activeEntry.activeWaiters -= 1;
+      resolve(value);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void activeEntry.promise.then(onResolve, () => onResolve(UNKNOWN));
+  });
 }
 
 /** Warm `peekGoatProjectFile` for projects the user is about to choose between. */

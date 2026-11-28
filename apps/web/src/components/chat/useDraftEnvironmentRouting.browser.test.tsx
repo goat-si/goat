@@ -8,7 +8,7 @@ import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { act, render } from "../../../test/render";
+import { act, fakeTimers, render } from "../../../test/render";
 
 const state = vi.hoisted(() => {
   const projects = new Map<string, unknown>();
@@ -506,5 +506,35 @@ describe("useDraftEnvironmentRouting: machines without the project", () => {
       branch: "main",
     });
     expect(readPendingWorkspaceDefault(draftId)).toBeNull();
+  });
+
+  it("times out a stalled destination ref lookup instead of blocking pre-send routing", async () => {
+    await using screen = await setup({ automaticEnvironment: true });
+    state.setProject(onMacmini, {
+      ...SOURCE,
+      environmentId: macmini,
+      id: onMacmini.projectId,
+      defaultThreadEnvMode: "worktree" as const,
+    });
+    state.refreshSelection.mockResolvedValue(macmini);
+    state.readRefs.mockImplementation(() => new Promise(() => {}));
+    await act(() => {
+      useComposerDraftStore.getState().setDraftThreadContext(draftId, {
+        envMode: "local",
+        startFromOrigin: false,
+        environmentSelection: "auto",
+        loadBalancedEnvironmentId: laptop,
+      });
+    });
+
+    using _clock = fakeTimers();
+    const pending = screen.routing.current?.refreshBeforeSend();
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(await pending).toBe(true);
+    expect(screen.draft()).toMatchObject({
+      environmentId: macmini,
+      envMode: "worktree",
+      branch: null,
+    });
   });
 });

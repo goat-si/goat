@@ -17,6 +17,8 @@ import {
   TrashIcon,
 } from "~/components/solar";
 
+import { isGlobalAgentThread } from "../globalAgentRoute";
+import { useGlobalAgentStore } from "../globalAgentStore";
 import { useThreadActionMenu } from "../hooks/useThreadActionMenu";
 import {
   ADDON_ICON_CLASS,
@@ -46,7 +48,12 @@ const ICONS: Record<string, IconComponent> = {
 };
 
 // The palette has its own rows for these, and no inline title editor for rename.
-const SKIPPED: ReadonlySet<ThreadActionMenuId> = new Set(["rename", "project-settings"]);
+const SKIPPED: ReadonlySet<ThreadActionMenuId> = new Set([
+  "rename",
+  "project-settings",
+  "bot-follow",
+  "bot-stop-following",
+]);
 
 const SHORTCUTS: Partial<Record<ThreadActionMenuId, KeybindingCommand>> = {
   settle: "thread.settle",
@@ -61,7 +68,14 @@ export function useCommandPaletteThreadActions(input: {
   readonly threadRef: ScopedThreadRef | null;
   readonly projectCwd: string | null;
 }): Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> {
-  const { readMenu } = useThreadActionMenu({ ...input, canShareWithGuest: false });
+  const globalAgentRef = useGlobalAgentStore((state) => state.ref);
+  const globalAgent =
+    input.threadRef !== null &&
+    isGlobalAgentThread(
+      { environmentId: input.threadRef.environmentId, id: input.threadRef.threadId },
+      globalAgentRef,
+    );
+  const { readMenu } = useThreadActionMenu({ ...input, globalAgent, canShareWithGuest: false });
   const menu = readMenu();
   if (!menu) return [];
 
