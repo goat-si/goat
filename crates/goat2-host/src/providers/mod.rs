@@ -30,6 +30,8 @@ pub type ProviderList = Option<Vec<ServerProviderEntry>>;
 const FILE: &str = "provider-instances.json";
 /// Upper bound on one driver's probe; a slower probe is reported as timed out.
 const PROBE_DEADLINE: Duration = Duration::from_secs(30);
+/// The message of a row whose probe is still running.
+const CHECKING: &str = "Checking status…";
 
 /// v1 settings `providerInstances` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,10 +502,14 @@ impl Providers {
             } else if state
                 .probes
                 .get(&next.instance_id)
-                .is_some_and(|p| p.status == ServerProviderState::Disabled)
+                .is_none_or(|p| p.status == ServerProviderState::Disabled)
             {
-                // Turned back on: probed again below before it is listed as ready.
-                state.probes.remove(&next.instance_id);
+                // Turned back on, or new: listed as being checked until its probe lands (a
+                // frame is the whole list, so the row must not vanish meanwhile).
+                state.probes.insert(
+                    next.instance_id.clone(),
+                    status_only(ServerProviderState::Warning, CHECKING),
+                );
             }
         }
         self.publish(host);

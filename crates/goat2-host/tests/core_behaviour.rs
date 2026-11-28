@@ -3156,6 +3156,39 @@ async fn cancelling_an_older_flow_keeps_the_running_one() {
     assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Waiting);
 }
 
+#[tokio::test]
+async fn turning_a_provider_back_on_never_sends_an_empty_list() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    let mut rx = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    t.host
+        .command(set_instance("chk-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| !e.enabled).await;
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    rx.borrow_and_update();
+    t.host
+        .command(set_instance("chk-on", "codex", "codex", true))
+        .await
+        .unwrap();
+    // Every list sent until the probe lands keeps the codex row (as being checked).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let changed = tokio::time::timeout_at(deadline.into(), rx.changed()).await;
+        let list = rx.borrow_and_update().clone().unwrap();
+        let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+        assert!(codex.is_some(), "a list without the codex row: {list:?}");
+        let codex = codex.unwrap();
+        if codex.probe.status == goat2_contracts::ServerProviderState::Ready || changed.is_err() {
+            assert!(codex.enabled);
+            break;
+        }
+        assert_eq!(codex.probe.message.as_deref(), Some("Checking status…"));
+    }
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
