@@ -11,6 +11,8 @@ import * as Schema from "effect/Schema";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as AcpWireSchema from "effect-acp/schema-v1";
 
+import type { AcpAdapterV2Flavor } from "@goat/provider-acp/server/adapter";
+import { parseElicitationForm } from "@goat/provider-acp/server/elicitationForm";
 import type { AcpToolCallState } from "@goat/provider-acp/server/runtimeModel";
 
 import {
@@ -201,6 +203,36 @@ function boundQuestionText(text: string, limit: number): string {
 function questionLabel(option: EffectAcpSchema.PermissionOption): string {
   return boundQuestionText(option.name.trim() || option.optionId, QUESTION_LABEL_LIMIT);
 }
+
+const isAskQuestionForm = Schema.is(
+  Schema.Struct({ properties: Schema.Record(Schema.String, Schema.Unknown) }),
+);
+const isAskQuestionField = Schema.is(
+  Schema.Struct({ title: Schema.String, description: Schema.optional(Schema.String) }),
+);
+
+/** agy's ask_question puts each question in its field's title and a count in the message. */
+export const extractAntigravityElicitationForm: NonNullable<
+  AcpAdapterV2Flavor["extractElicitationForm"]
+> = (request) => {
+  if (request.mode !== "form" || !isAskQuestionForm(request.requestedSchema)) return undefined;
+  const form = parseElicitationForm(request.requestedSchema, request.message);
+  if (form === undefined) return undefined;
+  const { properties } = request.requestedSchema;
+  return {
+    questions: form.questions.map((question, index) => {
+      const field = properties[question.id];
+      if (!isAskQuestionField(field) || field.description?.trim() || !field.title.trim()) {
+        return question;
+      }
+      return { ...question, header: `Question ${index + 1}`, question: field.title.trim() };
+    }),
+    respond: (answers) => {
+      const content = form.content(answers);
+      return content === undefined ? { action: "cancel" } : { action: "accept", content };
+    },
+  };
+};
 
 export function extractAntigravityUserInputQuestion(
   request: EffectAcpSchema.RequestPermissionRequest,
