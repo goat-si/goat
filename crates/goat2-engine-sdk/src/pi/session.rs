@@ -27,6 +27,9 @@ use std::{
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const PROBE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const PROBE_ATTEMPTS: u8 = 3;
 static CUSTOM_TOTAL: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 struct CustomAnswers {
@@ -180,15 +183,20 @@ struct Shared {
     custom: CustomAnswers,
     pending_prompts: HashMap<String, PendingPrompt>,
     idle_probe: Option<String>,
+    probe_attempt: u8,
+    probe_failed: bool,
+    process: Arc<Mutex<ChildProcess>>,
     settled: Option<Value>,
     saw_activity: bool,
+    command_candidate: bool,
+    compacting: bool,
     abort_pending: bool,
     barriers: HashMap<String, oneshot::Sender<bool>>,
     translator: Translator,
 }
 struct PiSession {
     client: Arc<Client>,
-    process: Mutex<ChildProcess>,
+    process: Arc<Mutex<ChildProcess>>,
     pgid: u32,
     shared: Arc<Mutex<Shared>>,
     events: mpsc::UnboundedSender<EngineEvent>,
@@ -287,6 +295,95 @@ async fn prompt_payload(
     }
     Ok((message, images))
 }
+
+fn retry_probe(
+    shared: Arc<Mutex<Shared>>,
+    client: Arc<Client>,
+    tx: mpsc::UnboundedSender<EngineEvent>,
+    marker: String,
+    attempt: u8,
+    delay: Duration,
+) {
+    let deadline = tokio::time::Instant::now() + delay;
+    tokio::spawn(async move {
+        tokio::time::sleep_until(deadline).await;
+        let mut state = shared.lock().await;
+        if state.idle_probe.as_deref() != Some(&marker) || state.turn.is_none() {
+            return;
+        }
+        if attempt >= PROBE_ATTEMPTS {
+            state.idle_probe = None;
+            state.probe_failed = true;
+            let process = state.process.clone();
+            drop(state);
+            let _ = tx.send(EngineEvent::Exited {
+                reason: "Pi settlement state check failed after retries".into(),
+            });
+            process.lock().await.kill_group();
+            return;
+        }
+        let id = client.next_id();
+        state.idle_probe = Some(id.clone());
+        state.probe_attempt = attempt + 1;
+        let sent = client.conn.send(&json!({"type":"get_state","id":id})).await;
+        if sent.is_ok() {
+            watch_probe(shared.clone(), client.clone(), tx.clone(), id, attempt + 1);
+        } else {
+            retry_probe(
+                shared.clone(),
+                client.clone(),
+                tx.clone(),
+                id,
+                attempt + 1,
+                PROBE_RETRY_DELAY,
+            );
+        }
+    });
+}
+
+fn watch_probe(
+    shared: Arc<Mutex<Shared>>,
+    client: Arc<Client>,
+    tx: mpsc::UnboundedSender<EngineEvent>,
+    id: String,
+    attempt: u8,
+) {
+    let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
+    tokio::spawn(async move {
+        tokio::time::sleep_until(deadline).await;
+        let mut state = shared.lock().await;
+        if state.idle_probe.as_deref() != Some(&id) || state.turn.is_none() {
+            return;
+        }
+        let marker = client.next_id();
+        state.idle_probe = Some(marker.clone());
+        retry_probe(
+            shared.clone(),
+            client.clone(),
+            tx.clone(),
+            marker,
+            attempt,
+            PROBE_RETRY_DELAY,
+        );
+    });
+}
+
+async fn start_probe(
+    state: &mut Shared,
+    shared: Arc<Mutex<Shared>>,
+    client: Arc<Client>,
+    tx: mpsc::UnboundedSender<EngineEvent>,
+) {
+    let id = client.next_id();
+    state.idle_probe = Some(id.clone());
+    state.probe_attempt = 1;
+    let sent = client.conn.send(&json!({"type":"get_state","id":id})).await;
+    if sent.is_ok() {
+        watch_probe(shared, client, tx, id, 1);
+    } else {
+        retry_probe(shared, client, tx, id, 1, PROBE_RETRY_DELAY);
+    }
+}
 async fn pump(
     mut inbound: mpsc::UnboundedReceiver<Inbound>,
     shared: Arc<Mutex<Shared>>,
@@ -297,11 +394,14 @@ async fn pump(
         match msg {
             Inbound::Closed(reason) => {
                 let mut state = shared.lock().await;
+                state.idle_probe = None;
                 state.requests.clear();
                 state.custom.clear();
                 state.pending_prompts.clear();
                 state.barriers.clear();
-                let _ = tx.send(EngineEvent::Exited { reason });
+                if !state.probe_failed {
+                    let _ = tx.send(EngineEvent::Exited { reason });
+                }
                 return;
             }
             Inbound::Record(record) => {
@@ -316,6 +416,11 @@ async fn pump(
                                 .pointer("/data/isCompacting")
                                 .and_then(Value::as_bool)
                                 != Some(true)
+                            && record
+                                .pointer("/data/pendingMessageCount")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                                == 0
                             && !state.unowned;
                         let _ = barrier.send(idle);
                         continue;
@@ -363,23 +468,34 @@ async fn pump(
                             && (state.settled.is_some()
                                 || (is_start
                                     && !state.saw_activity
-                                    && record.pointer("/data/disposition").and_then(Value::as_str)
-                                        == Some("handled")))
+                                    && (state.command_candidate
+                                        || record
+                                            .pointer("/data/disposition")
+                                            .and_then(Value::as_str)
+                                            == Some("handled"))))
                         {
-                            let probe = client.next_id();
-                            state.idle_probe = Some(probe.clone());
-                            if client
-                                .conn
-                                .send(&json!({"type":"get_state","id":probe}))
-                                .await
-                                .is_err()
-                            {
-                                state.idle_probe = None;
+                            if state.settled.is_none() {
+                                state.settled = Some(json!({"type":"agent_settled"}));
                             }
+                            start_probe(&mut state, shared.clone(), client.clone(), tx.clone())
+                                .await;
                         }
                         continue;
                     }
                     if state.idle_probe.as_deref() == Some(id) {
+                        if record.get("success").and_then(Value::as_bool) != Some(true) {
+                            let marker = client.next_id();
+                            state.idle_probe = Some(marker.clone());
+                            retry_probe(
+                                shared.clone(),
+                                client.clone(),
+                                tx.clone(),
+                                marker,
+                                state.probe_attempt,
+                                PROBE_RETRY_DELAY,
+                            );
+                            continue;
+                        }
                         state.idle_probe = None;
                         if record.get("success").and_then(Value::as_bool) == Some(true)
                             && record.pointer("/data/isStreaming").and_then(Value::as_bool)
@@ -388,8 +504,14 @@ async fn pump(
                                 .pointer("/data/isCompacting")
                                 .and_then(Value::as_bool)
                                 != Some(true)
+                            && record
+                                .pointer("/data/pendingMessageCount")
+                                .and_then(Value::as_u64)
+                                .unwrap_or(0)
+                                == 0
                             && state.pending_prompts.is_empty()
                             && !state.abort_pending
+                            && !state.compacting
                             && let Some(turn) = state.turn.clone()
                         {
                             let settled = state
@@ -438,12 +560,29 @@ async fn pump(
                 if let Some(turn) = state.turn.clone() {
                     if record.get("type").and_then(Value::as_str) == Some("agent_start") {
                         state.saw_activity = true;
+                        state.idle_probe = None;
                     }
-                    if record.get("type").and_then(Value::as_str) == Some("agent_settled")
-                        && (!state.pending_prompts.is_empty() || state.abort_pending)
-                    {
+                    if record.get("type").and_then(Value::as_str) == Some("compaction_start") {
+                        state.idle_probe = None;
+                        state.compacting = true;
+                    }
+                    if record.get("type").and_then(Value::as_str) == Some("agent_settled") {
                         state.settled = Some(record);
+                        if state.pending_prompts.is_empty() && !state.abort_pending {
+                            start_probe(&mut state, shared.clone(), client.clone(), tx.clone())
+                                .await;
+                        }
                         continue;
+                    }
+                    if record.get("type").and_then(Value::as_str) == Some("compaction_end") {
+                        state.compacting = false;
+                        if state.settled.is_some()
+                            && state.pending_prompts.is_empty()
+                            && !state.abort_pending
+                        {
+                            start_probe(&mut state, shared.clone(), client.clone(), tx.clone())
+                                .await;
+                        }
                     }
                     if record.get("type").and_then(Value::as_str) == Some("extension_ui_request")
                         && let (Some(id), Some(method)) = (
@@ -746,6 +885,7 @@ impl EngineFactory for PiFactory {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let pgid = process.pid();
+        let process = Arc::new(Mutex::new(process));
         let (tx, rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Mutex::new(Shared {
             turn: None,
@@ -756,8 +896,13 @@ impl EngineFactory for PiFactory {
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::new(),
             idle_probe: None,
+            probe_attempt: 0,
+            probe_failed: false,
+            process: process.clone(),
             settled: None,
             saw_activity: false,
+            command_candidate: false,
+            compacting: false,
             abort_pending: false,
             barriers: HashMap::new(),
             translator: Translator::new(
@@ -775,7 +920,7 @@ impl EngineFactory for PiFactory {
         ));
         let session = PiSession {
             client,
-            process: Mutex::new(process),
+            process,
             pgid,
             shared,
             events: tx,
@@ -887,6 +1032,7 @@ impl EngineSession for PiSession {
                 };
             }
         }
+        let command_candidate = message.trim_start().starts_with('/');
         let mut preamble = self.preamble.lock().await;
         if let Some(prefix) = preamble.as_ref() {
             message = format!("{prefix}\n\n{message}");
@@ -914,6 +1060,8 @@ impl EngineSession for PiSession {
             state.idle_probe = None;
             state.settled = None;
             state.saw_activity = false;
+            state.command_candidate = command_candidate;
+            state.compacting = false;
             state.abort_pending = false;
             if let Err(error) = self.client.conn.send(&json!({"id": id, "type":"prompt","message":message,"images":images,"streamingBehavior":"steer"})).await {
                 return TurnStartResult::Unknown { reason: error.to_string() };
@@ -943,6 +1091,7 @@ impl EngineSession for PiSession {
         }
         let id = self.client.next_id();
         let (ack_tx, ack_rx) = oneshot::channel();
+        state.idle_probe = None;
         state
             .pending_prompts
             .insert(id.clone(), PendingPrompt::Steer(ack_tx));
@@ -954,12 +1103,20 @@ impl EngineSession for PiSession {
         drop(state);
         drop(_guard);
         if let Err(e) = sent {
-            finish_uncertain_steer(&self.shared, &self.client, &id).await;
+            finish_uncertain_steer(&self.shared, &self.client, &self.events, &id).await;
             return SteerResult::Unknown {
                 reason: e.to_string(),
             };
         }
-        wait_steer(&self.shared, &self.client, &id, ack_rx, TIMEOUT).await
+        wait_steer(
+            &self.shared,
+            &self.client,
+            &self.events,
+            &id,
+            ack_rx,
+            TIMEOUT,
+        )
+        .await
     }
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError> {
         let _guard = self.command_lock.lock().await;
@@ -970,6 +1127,7 @@ impl EngineSession for PiSession {
             }
             state.translator.interrupt();
             state.abort_pending = true;
+            state.idle_probe = None;
         }
         if let Err(error) = self.client.call(json!({"type":"abort"})).await {
             self.finish_abort(turn_id, matches!(error, CallError::Remote(_)))
@@ -1076,6 +1234,7 @@ impl EngineSession for PiSession {
     }
     async fn shutdown(&self) {
         let mut state = self.shared.lock().await;
+        state.idle_probe = None;
         state.requests.clear();
         state.custom.clear();
         drop(state);
@@ -1083,7 +1242,12 @@ impl EngineSession for PiSession {
         self.process.lock().await.shutdown().await;
     }
 }
-async fn finish_uncertain_steer(shared: &Mutex<Shared>, client: &Client, id: &str) {
+async fn finish_uncertain_steer(
+    shared: &Arc<Mutex<Shared>>,
+    client: &Arc<Client>,
+    tx: &mpsc::UnboundedSender<EngineEvent>,
+    id: &str,
+) {
     let mut state = shared.lock().await;
     if state.pending_prompts.remove(id).is_none() {
         return;
@@ -1093,21 +1257,13 @@ async fn finish_uncertain_steer(shared: &Mutex<Shared>, client: &Client, id: &st
         && !state.abort_pending
         && state.turn.is_some()
     {
-        let probe = client.next_id();
-        state.idle_probe = Some(probe.clone());
-        if client
-            .conn
-            .send(&json!({"type":"get_state","id":probe}))
-            .await
-            .is_err()
-        {
-            state.idle_probe = None;
-        }
+        start_probe(&mut state, shared.clone(), client.clone(), tx.clone()).await;
     }
 }
 async fn wait_steer(
-    shared: &Mutex<Shared>,
-    client: &Client,
+    shared: &Arc<Mutex<Shared>>,
+    client: &Arc<Client>,
+    tx: &mpsc::UnboundedSender<EngineEvent>,
     id: &str,
     ack: oneshot::Receiver<Result<(), String>>,
     timeout: Duration,
@@ -1116,7 +1272,7 @@ async fn wait_steer(
         Ok(Ok(Ok(()))) => SteerResult::Accepted,
         Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
         _ => {
-            finish_uncertain_steer(shared, client, id).await;
+            finish_uncertain_steer(shared, client, tx, id).await;
             SteerResult::Unknown {
                 reason: "Pi did not acknowledge the steer".into(),
             }
@@ -1134,17 +1290,13 @@ impl PiSession {
         }
         state.abort_pending = false;
         if state.settled.is_some() && state.pending_prompts.is_empty() {
-            let id = self.client.next_id();
-            state.idle_probe = Some(id.clone());
-            if self
-                .client
-                .conn
-                .send(&json!({"type":"get_state","id":id}))
-                .await
-                .is_err()
-            {
-                state.idle_probe = None;
-            }
+            start_probe(
+                &mut state,
+                self.shared.clone(),
+                self.client.clone(),
+                self.events.clone(),
+            )
+            .await;
         }
     }
     // v1 adapter.ts:2550-2621, match reported model pairs before slug splitting.
@@ -1264,9 +1416,248 @@ impl PiSession {
 mod dialog_lifecycle_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn failed_settlement_probe_retries_then_finishes() {
+        let (session, mut outbound) = test_session();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut events) = mpsc::unbounded_channel();
+        let task = tokio::spawn(pump(
+            in_rx,
+            session.shared.clone(),
+            event_tx,
+            session.client.clone(),
+        ));
+        in_tx
+            .send(Inbound::Record(json!({"type":"agent_settled"})))
+            .unwrap();
+        let Inbound::Record(first) = outbound.recv().await.unwrap() else {
+            panic!("expected probe")
+        };
+        tokio::time::pause();
+        let (barrier_tx, barrier_rx) = oneshot::channel();
+        session
+            .shared
+            .lock()
+            .await
+            .barriers
+            .insert("sync".into(), barrier_tx);
+        in_tx
+            .send(Inbound::Record(
+                json!({"type":"response","id":first["id"],"success":false,"error":"unavailable"}),
+            ))
+            .unwrap();
+        in_tx
+            .send(Inbound::Record(
+                json!({"type":"response","id":"sync","success":true,"data":{"isStreaming":false}}),
+            ))
+            .unwrap();
+        barrier_rx.await.unwrap();
+        tokio::time::advance(PROBE_RETRY_DELAY).await;
+        tokio::time::resume();
+        let Inbound::Record(retry) = tokio::time::timeout(Duration::from_secs(3), outbound.recv())
+            .await
+            .expect("retry required")
+            .unwrap()
+        else {
+            panic!("expected retry")
+        };
+        assert_eq!(retry["type"], "get_state");
+        in_tx.send(Inbound::Record(json!({"type":"response","id":retry["id"],"success":true,"data":{"isStreaming":false,"isCompacting":false,"pendingMessageCount":0}}))).unwrap();
+        loop {
+            match events.recv().await.expect("event") {
+                EngineEvent::TurnFinished { .. } => break,
+                EngineEvent::Exited { reason } => panic!("unexpected exit: {reason}"),
+                _ => {}
+            }
+        }
+        drop(in_tx);
+        task.await.unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn settlement_probe_exhaustion_exits_and_terminates_process() {
+        let (session, mut outbound) = test_session();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut events) = mpsc::unbounded_channel();
+        let task = tokio::spawn(pump(
+            in_rx,
+            session.shared.clone(),
+            event_tx,
+            session.client.clone(),
+        ));
+        in_tx
+            .send(Inbound::Record(json!({"type":"agent_settled"})))
+            .unwrap();
+        for attempt in 0..3 {
+            let Inbound::Record(probe) = outbound.recv().await.unwrap() else {
+                panic!("expected probe {attempt}")
+            };
+            tokio::time::pause();
+            let (barrier_tx, barrier_rx) = oneshot::channel();
+            session
+                .shared
+                .lock()
+                .await
+                .barriers
+                .insert("sync".into(), barrier_tx);
+            in_tx
+                .send(Inbound::Record(
+                    json!({"type":"response","id":probe["id"],"success":false}),
+                ))
+                .unwrap();
+            in_tx.send(Inbound::Record(json!({"type":"response","id":"sync","success":true,"data":{"isStreaming":false}}))).unwrap();
+            barrier_rx.await.unwrap();
+            tokio::time::advance(PROBE_RETRY_DELAY).await;
+            tokio::time::resume();
+        }
+        assert!(
+            matches!(events.recv().await, Some(EngineEvent::Exited { reason }) if reason.contains("settlement state check failed"))
+        );
+        assert!(matches!(outbound.recv().await, Some(Inbound::Closed(_))));
+        drop(in_tx);
+        task.await.unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn lost_settlement_probe_retries_after_timeout() {
+        let (session, mut outbound) = test_session();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut events) = mpsc::unbounded_channel();
+        let task = tokio::spawn(pump(
+            in_rx,
+            session.shared.clone(),
+            event_tx,
+            session.client.clone(),
+        ));
+        in_tx
+            .send(Inbound::Record(json!({"type":"agent_settled"})))
+            .unwrap();
+        let Inbound::Record(first) = outbound.recv().await.unwrap() else {
+            panic!("expected probe")
+        };
+        tokio::time::pause();
+        tokio::time::advance(PROBE_TIMEOUT).await;
+        tokio::time::advance(PROBE_RETRY_DELAY).await;
+        tokio::time::resume();
+        let Inbound::Record(retry) = outbound.recv().await.unwrap() else {
+            panic!("expected retry")
+        };
+        assert_ne!(first["id"], retry["id"]);
+        in_tx.send(Inbound::Record(json!({"type":"response","id":retry["id"],"success":true,"data":{"isStreaming":false,"isCompacting":false}}))).unwrap();
+        loop {
+            match events.recv().await.expect("event") {
+                EngineEvent::TurnFinished { .. } => break,
+                EngineEvent::Exited { reason } => panic!("unexpected exit: {reason}"),
+                _ => {}
+            }
+        }
+        drop(in_tx);
+        task.await.unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn settlement_probe_send_failure_is_visible() {
+        let (session, _) = test_session();
+        session.client.conn.close_input().await;
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut events) = mpsc::unbounded_channel();
+        let task = tokio::spawn(pump(
+            in_rx,
+            session.shared.clone(),
+            event_tx,
+            session.client.clone(),
+        ));
+        in_tx
+            .send(Inbound::Record(json!({"type":"agent_settled"})))
+            .unwrap();
+        assert!(
+            matches!(events.recv().await, Some(EngineEvent::Exited { reason }) if reason.contains("settlement state check failed"))
+        );
+        drop(in_tx);
+        task.await.unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn admission_barrier_rejects_pending_messages() {
+        let (session, _) = test_session();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let task = tokio::spawn(pump(
+            in_rx,
+            session.shared.clone(),
+            event_tx,
+            session.client.clone(),
+        ));
+        let (barrier_tx, barrier_rx) = oneshot::channel();
+        session
+            .shared
+            .lock()
+            .await
+            .barriers
+            .insert("barrier".into(), barrier_tx);
+        in_tx.send(Inbound::Record(json!({"type":"response","id":"barrier","success":true,"data":{"isStreaming":false,"isCompacting":false,"pendingMessageCount":1}}))).unwrap();
+        assert!(!barrier_rx.await.unwrap());
+        drop(in_tx);
+        task.await.unwrap();
+        session.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn busy_probe_waits_and_new_activity_invalidates_retry() {
+        for activity in [false, true] {
+            let (session, mut outbound) = test_session();
+            let (in_tx, in_rx) = mpsc::unbounded_channel();
+            let (event_tx, _) = mpsc::unbounded_channel();
+            let task = tokio::spawn(pump(
+                in_rx,
+                session.shared.clone(),
+                event_tx,
+                session.client.clone(),
+            ));
+            in_tx
+                .send(Inbound::Record(json!({"type":"agent_settled"})))
+                .unwrap();
+            let Inbound::Record(probe) = outbound.recv().await.unwrap() else {
+                panic!("expected probe")
+            };
+            tokio::time::pause();
+            let (barrier_tx, barrier_rx) = oneshot::channel();
+            session
+                .shared
+                .lock()
+                .await
+                .barriers
+                .insert("sync".into(), barrier_tx);
+            in_tx.send(Inbound::Record(if activity {
+                json!({"type":"response","id":probe["id"],"success":false})
+            } else {
+                json!({"type":"response","id":probe["id"],"success":true,"data":{"isStreaming":true}})
+            })).unwrap();
+            if activity {
+                in_tx
+                    .send(Inbound::Record(json!({"type":"agent_start"})))
+                    .unwrap();
+            }
+            in_tx.send(Inbound::Record(json!({"type":"response","id":"sync","success":true,"data":{"isStreaming":false}}))).unwrap();
+            barrier_rx.await.unwrap();
+            tokio::time::advance(Duration::from_secs(10)).await;
+            assert!(session.shared.lock().await.idle_probe.is_none());
+            assert!(outbound.try_recv().is_err());
+            tokio::time::resume();
+            drop(in_tx);
+            task.await.unwrap();
+            session.shutdown().await;
+        }
+    }
+
     fn test_session() -> (PiSession, mpsc::UnboundedReceiver<Inbound>) {
         let (child, client, outbound) = spawn(&Launch::new("/bin/cat")).unwrap();
         let pgid = child.pid();
+        let child = Arc::new(Mutex::new(child));
         let mut translator =
             Translator::new(ThreadId::from("test"), "engine".into(), "pi", "test".into());
         translator.translate(
@@ -1282,8 +1673,13 @@ mod dialog_lifecycle_tests {
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::new(),
             idle_probe: None,
+            probe_attempt: 0,
+            probe_failed: false,
+            process: child.clone(),
             settled: None,
             saw_activity: true,
+            command_candidate: false,
+            compacting: false,
             abort_pending: false,
             barriers: HashMap::new(),
             translator,
@@ -1292,7 +1688,7 @@ mod dialog_lifecycle_tests {
         (
             PiSession {
                 client,
-                process: Mutex::new(child),
+                process: child,
                 pgid,
                 shared: Arc::new(Mutex::new(state)),
                 events,
@@ -1441,7 +1837,9 @@ mod dialog_lifecycle_tests {
     #[tokio::test]
     async fn uncertain_steer_releases_settlement_after_idle_probe() {
         let launch = Launch::new("/bin/cat");
-        let (mut child, client, mut outbound) = spawn(&launch).unwrap();
+        let (child, client, mut outbound) = spawn(&launch).unwrap();
+        let child = Arc::new(Mutex::new(child));
+        let (probe_tx, _) = mpsc::unbounded_channel();
         let (ack_tx, ack_rx) = oneshot::channel();
         let shared = Arc::new(Mutex::new(Shared {
             turn: Some("turn".into()),
@@ -1452,8 +1850,13 @@ mod dialog_lifecycle_tests {
             custom: CustomAnswers::default(),
             pending_prompts: HashMap::from([("steer".into(), PendingPrompt::Steer(ack_tx))]),
             idle_probe: None,
+            probe_attempt: 0,
+            probe_failed: false,
+            process: child.clone(),
             settled: Some(json!({"type":"agent_settled"})),
             saw_activity: true,
+            command_candidate: false,
+            compacting: false,
             abort_pending: false,
             barriers: HashMap::new(),
             translator: Translator::new(
@@ -1463,7 +1866,8 @@ mod dialog_lifecycle_tests {
                 "test".into(),
             ),
         }));
-        let outcome = wait_steer(&shared, &client, "steer", ack_rx, Duration::ZERO).await;
+        let outcome =
+            wait_steer(&shared, &client, &probe_tx, "steer", ack_rx, Duration::ZERO).await;
         assert!(matches!(outcome, SteerResult::Unknown { .. }));
         let Inbound::Record(probe) = outbound.recv().await.unwrap() else {
             panic!("expected idle probe")
@@ -1490,6 +1894,6 @@ mod dialog_lifecycle_tests {
         drop(in_tx);
         task.await.unwrap();
         client.conn.close_input().await;
-        child.shutdown().await;
+        child.lock().await.shutdown().await;
     }
 }

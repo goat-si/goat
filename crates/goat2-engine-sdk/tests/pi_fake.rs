@@ -768,6 +768,48 @@ async fn command_only_and_late_ack_both_settle_once() {
 }
 
 #[tokio::test]
+async fn slash_command_without_disposition_settles() {
+    let mut h = start("pi-consumed-command").await;
+    accepted(
+        h.session
+            .start_turn(input("/consumed-no-disposition"), &settings())
+            .await,
+    );
+    let events = finished(&mut h).await;
+    assert!(matches!(
+        events.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn settled_before_compaction_recovery_keeps_turn_open() {
+    for scenario in [
+        "compaction-recovery",
+        "pending-recovery",
+        "stale-recovery",
+        "stale-agent-recovery",
+    ] {
+        let mut h = start(scenario).await;
+        accepted(h.session.start_turn(input(scenario), &settings()).await);
+        let events = finished(&mut h).await;
+        assert_eq!(text(&events), "recovered", "{scenario}");
+        assert!(matches!(
+            events.last(),
+            Some(EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Done,
+                ..
+            })
+        ));
+        h.session.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn concurrent_dialog_responses_are_sent_only_once() {
     let mut h = start("pi-concurrent-dialog").await;
     accepted(h.session.start_turn(input("question"), &settings()).await);

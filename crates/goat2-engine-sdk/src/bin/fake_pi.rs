@@ -50,6 +50,8 @@ fn main() {
     let mut model_id = "fake-model".to_owned();
     let mut thinking = "off".to_owned();
     let mut tier = "default".to_owned();
+    let mut recover_compaction = 0;
+    let mut background = "";
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
@@ -57,10 +59,40 @@ fn main() {
         };
         let kind = request["type"].as_str().unwrap_or("");
         match kind {
-            "get_state" => response(
-                &request,
-                json!({"sessionId":"fake-session", "sessionFile":session, "isStreaming":active, "isCompacting":false, "model":{"provider":model_provider, "id":model_id}, "thinkingLevel":thinking}),
-            ),
+            "get_state" => {
+                if recover_compaction == 4 {
+                    emit(json!({"type":"agent_start"}));
+                }
+                response(
+                    &request,
+                    json!({"sessionId":"fake-session", "sessionFile":session, "isStreaming":if recover_compaction > 0 { false } else { active }, "isCompacting":recover_compaction == 1, "pendingMessageCount":if recover_compaction == 2 { 1 } else { 0 }, "model":{"provider":model_provider, "id":model_id}, "thinkingLevel":thinking}),
+                );
+                if recover_compaction > 0 {
+                    if recover_compaction != 3 && recover_compaction != 4 {
+                        emit(json!({"type":"compaction_start", "reason":"auto"}));
+                    }
+                    let resumed_agent = recover_compaction == 4;
+                    recover_compaction = 0;
+                    if !resumed_agent {
+                        emit(json!({"type":"compaction_end", "reason":"auto", "willRetry":true}));
+                        emit(json!({"type":"agent_start"}));
+                    }
+                    finish("recovered", false);
+                    active = false;
+                }
+                if background == "subagent" {
+                    let snapshot = json!({"runs":[{"id":"run-1","state":"complete","children":[{"id":"child-1","kind":"step","agent":"worker","state":"complete"}]}]});
+                    emit(
+                        json!({"type":"extension_ui_request","method":"setWidget","widgetKey":"subagent-async","widgetLines":[format!("PI_SUBAGENT_ASYNC_JSON:{snapshot}")]}),
+                    );
+                    background = "";
+                } else if background == "dialog" {
+                    emit(
+                        json!({"type":"extension_ui_request","id":"background-1","method":"confirm","title":"Background approval"}),
+                    );
+                    background = "";
+                }
+            }
             "get_available_models" => response(
                 &request,
                 json!({"models":[{"provider":"fake", "id":"fake-model", "name":"Fake model", "reasoning":false}, {"provider":"vendor/nested", "id":"custom/model", "name":"Slash model"}]}),
@@ -109,6 +141,36 @@ fn main() {
                 }
                 if text == "command-only" || text == "/computer off" {
                     response(&request, json!({"disposition":"handled"}));
+                    continue;
+                }
+                if text == "/consumed-no-disposition" {
+                    response(&request, json!({}));
+                    continue;
+                }
+                if [
+                    "compaction-recovery",
+                    "pending-recovery",
+                    "stale-recovery",
+                    "stale-agent-recovery",
+                ]
+                .contains(&text)
+                {
+                    response(&request, json!({}));
+                    active = true;
+                    emit(json!({"type":"agent_start"}));
+                    emit(json!({"type":"agent_settled"}));
+                    recover_compaction = if text == "pending-recovery" {
+                        2
+                    } else if text == "stale-recovery" {
+                        3
+                    } else if text == "stale-agent-recovery" {
+                        4
+                    } else {
+                        1
+                    };
+                    if recover_compaction == 3 {
+                        emit(json!({"type":"compaction_start", "reason":"auto"}));
+                    }
                     continue;
                 }
                 if text.starts_with("/goat-service-tier") {
@@ -205,17 +267,12 @@ fn main() {
                         );
                         finish("spawned", false);
                         active = false;
-                        let snapshot = json!({"runs":[{"id":"run-1","state":"complete","children":[{"id":"child-1","kind":"step","agent":"worker","state":"complete"}]}]});
-                        emit(
-                            json!({"type":"extension_ui_request","method":"setWidget","widgetKey":"subagent-async","widgetLines":[format!("PI_SUBAGENT_ASYNC_JSON:{snapshot}")]}),
-                        );
+                        background = "subagent";
                     }
                     "background-dialog" => {
                         finish("done", false);
                         active = false;
-                        emit(
-                            json!({"type":"extension_ui_request","id":"background-1","method":"confirm","title":"Background approval"}),
-                        );
+                        background = "dialog";
                     }
                     "inspect-launch" => {
                         let extension = args
