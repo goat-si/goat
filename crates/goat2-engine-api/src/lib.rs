@@ -142,10 +142,18 @@ pub struct RequestAnswer {
 /// Events from a running engine process, in order.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
-    /// Streaming text for an unfinished item. Never stored.
+    /// Assistant text shorthand for ContentDelta with AssistantText. Never stored.
     TextDelta {
         turn_id: String,
         item_id: ItemId,
+        text: String,
+    },
+    /// Streaming text for an unfinished item of the given kind. Never stored.
+    /// Reasoning deltas use the reasoning item id, followed by ItemCompleted with that id.
+    ContentDelta {
+        turn_id: String,
+        item_id: ItemId,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// A finished item.
@@ -173,9 +181,21 @@ pub enum EngineEvent {
     /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
     /// named by `turn_id` when there is one.
     AuthRequired {
+        /// Engine handle answered through `answer_request` with Accept or Decline when the
+        /// person resolves sign-in (v1 ACP URL elicitation: provider-acp/src/server/adapter.ts:5329-5362).
+        /// Unique per engine request within a session: the host answers each key at most once,
+        /// gives a key at most one sign-in request, and ignores later events naming a key it
+        /// already answered.
+        key: Option<String>,
         turn_id: Option<String>,
         url: Option<String>,
         message: String,
+    },
+    /// Cumulative and last-turn usage reported by the engine. Cost is present only when
+    /// reported by the engine; the host never estimates it.
+    TokenUsage {
+        turn_id: Option<String>,
+        usage: goat2_contracts::ThreadTokenUsageSnapshot,
     },
     /// Progress of an engine-native subagent (Claude `task_*`, ACP `subagent_update`). Not stored;
     /// the finished subagent arrives as `ItemCompleted` with `TurnItemBody::Subagent`.
@@ -191,6 +211,15 @@ pub enum EngineEvent {
     /// `steer.updated`, `ProviderAdapter.ts:149-157`; Claude `command_lifecycle`, Pi). An
     /// accepted steer is v1 `pending` until the engine reads it. Not stored as such; the host
     /// decides what a cancelled steer means for its inputs.
+    ///
+    /// Contract: a driver whose engine can hold an accepted steer unread (Claude, Pi, OpenCode)
+    /// reports `SteerUpdated` for each such steer, `Cancelled` for any left unread, before that
+    /// turn's `TurnFinished`. The host reads events in order, so a cancel lands while its run is
+    /// still active; one after `TurnFinished` is ignored. An accepted steer with no
+    /// `SteerUpdated` is treated as `Completed`. That is the host's v1-compatible policy, not
+    /// proof the engine read it: v1 never emits `steer.updated` for Codex, and the Codex driver
+    /// sends none, although Codex queues an accepted steer and can discard queued input. Known
+    /// limitation: such an input is not requeued.
     SteerUpdated {
         turn_id: String,
         input_ids: Vec<InputId>,

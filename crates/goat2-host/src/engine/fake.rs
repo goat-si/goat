@@ -72,6 +72,7 @@ pub enum FakeCall {
     Answer {
         thread_id: ThreadId,
         key: String,
+        outcome: goat2_contracts::RequestOutcome,
     },
     Shutdown {
         thread_id: ThreadId,
@@ -88,6 +89,8 @@ struct Shared {
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
     pgids: HashMap<ThreadId, i32>,
+    /// When set, answer_request fails with an error naming the key (as the Codex driver does).
+    fail_answers: bool,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -103,6 +106,11 @@ impl FakeEngine {
         let engine = Self::default();
         engine.shared.lock().expect("fake").script = script;
         engine
+    }
+
+    /// Make every later answer_request fail with an error that names the key.
+    pub fn fail_answers(&self, fail: bool) {
+        self.shared.lock().expect("fake").fail_answers = fail;
     }
 
     pub fn set_script(&self, script: FakeScript) {
@@ -173,6 +181,28 @@ impl FakeEngine {
             .senders
             .get(thread_id)
             .is_some_and(|tx| tx.send(event).is_ok())
+    }
+
+    /// Emit a content delta for the current turn.
+    pub fn content_delta(
+        &self,
+        thread_id: &ThreadId,
+        item_id: ItemId,
+        stream_kind: goat2_contracts::ContentStreamKind,
+        text: &str,
+    ) -> bool {
+        let Some(turn_id) = self.active_turn(thread_id) else {
+            return false;
+        };
+        self.emit(
+            thread_id,
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text: text.to_owned(),
+            },
+        )
     }
 
     /// Finish the running turn with a final answer.
@@ -423,16 +453,19 @@ impl EngineSession for FakeSession {
         Ok(())
     }
 
-    async fn answer_request(&self, key: &str, _answer: RequestAnswer) -> Result<(), EngineError> {
-        self.engine
-            .shared
-            .lock()
-            .expect("fake")
-            .calls
-            .push(FakeCall::Answer {
+    async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError> {
+        let fail = {
+            let mut shared = self.engine.shared.lock().expect("fake");
+            shared.calls.push(FakeCall::Answer {
                 thread_id: self.thread_id.clone(),
                 key: key.to_owned(),
+                outcome: answer.outcome,
             });
+            shared.fail_answers
+        };
+        if fail {
+            return Err(EngineError::Transport(format!("no pending request {key}")));
+        }
         let _ = self.tx.send(EngineEvent::RequestClosed {
             key: key.to_owned(),
         });

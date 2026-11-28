@@ -22,8 +22,8 @@ use goat2_contracts::limits::{
     MAX_CHILDREN_PER_BOT, MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
 };
 use goat2_contracts::{
-    BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RequestId, RunId,
-    ThreadCursor, ThreadId, ThreadKind, text::utf16_len,
+    BotId, BotProfile, ChildResultStatus, ContentStreamKind, ItemId, LogEvent, NotifyKind,
+    RequestId, RunId, ThreadCursor, ThreadId, ThreadKind, text::utf16_len,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -52,6 +52,9 @@ pub struct HostOptions {
     pub memory_sample: Duration,
     /// Longest `thread.wait` / `thread.start {mode: wait}` block.
     pub max_wait: Duration,
+    /// How long a background subagent that reported its end keeps its origin turn and the
+    /// engine's idle protection while its finished item is still on the way.
+    pub subagent_item_grace: Duration,
 }
 
 impl HostOptions {
@@ -75,6 +78,7 @@ impl HostOptions {
             memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
             memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
+            subagent_item_grace: Duration::from_secs(60),
         }
     }
 }
@@ -145,7 +149,7 @@ pub type LiveSession = (u64, Arc<dyn EngineSession>);
 
 struct LiveThread {
     tx: broadcast::Sender<ThreadLive>,
-    streaming: Vec<(ItemId, String)>,
+    streaming: Vec<(ItemId, ContentStreamKind, String)>,
 }
 
 pub(crate) struct Inner {
@@ -386,31 +390,62 @@ impl Host {
     }
 
     /// Streaming text for an unfinished item (never stored).
-    pub(crate) fn stream_text(&self, id: &ThreadId, item_id: &ItemId, text: &str) {
+    pub(crate) fn stream_text(
+        &self,
+        id: &ThreadId,
+        item_id: &ItemId,
+        kind: ContentStreamKind,
+        text: &str,
+    ) {
         let mut live = self.inner.live.lock().expect("live");
         let entry = live.entry(id.clone()).or_insert_with(new_live);
-        let offset = match entry.streaming.iter_mut().find(|(i, _)| i == item_id) {
-            Some((_, buf)) => {
+        let (offset, stream_kind) = match entry.streaming.iter_mut().find(|(i, _, _)| i == item_id)
+        {
+            Some((_, first_kind, buf)) => {
+                if *first_kind != kind {
+                    tracing::debug!(
+                        ?item_id,
+                        ?first_kind,
+                        ?kind,
+                        "stream kind changed; retaining first kind"
+                    );
+                }
                 let offset = utf16_len(buf);
                 buf.push_str(text);
-                offset
+                (offset, *first_kind)
             }
             None => {
-                entry.streaming.push((item_id.clone(), text.to_owned()));
-                0
+                entry
+                    .streaming
+                    .push((item_id.clone(), kind, text.to_owned()));
+                (0, kind)
             }
         };
         let _ = entry.tx.send(ThreadLive::Text {
             item_id: item_id.clone(),
             offset,
+            stream_kind,
             text: text.to_owned(),
+        });
+    }
+
+    pub(crate) fn usage_update(
+        &self,
+        id: &ThreadId,
+        usage: goat2_contracts::ThreadTokenUsageSnapshot,
+    ) {
+        let mut live = self.inner.live.lock().expect("live");
+        let entry = live.entry(id.clone()).or_insert_with(new_live);
+        let _ = entry.tx.send(ThreadLive::Usage {
+            usage: Box::new(usage),
+            updated_at: crate::util::now_rfc3339(),
         });
     }
 
     pub(crate) fn stream_done(&self, id: &ThreadId, item_id: &ItemId) {
         let mut live = self.inner.live.lock().expect("live");
         if let Some(entry) = live.get_mut(id) {
-            entry.streaming.retain(|(i, _)| i != item_id);
+            entry.streaming.retain(|(i, _, _)| i != item_id);
             let _ = entry.tx.send(ThreadLive::TextDone {
                 item_id: item_id.clone(),
             });
@@ -420,7 +455,7 @@ impl Host {
     pub(crate) fn stream_clear(&self, id: &ThreadId) {
         let mut live = self.inner.live.lock().expect("live");
         if let Some(entry) = live.get_mut(id) {
-            for (item_id, _) in std::mem::take(&mut entry.streaming) {
+            for (item_id, _, _) in std::mem::take(&mut entry.streaming) {
                 let _ = entry.tx.send(ThreadLive::TextDone { item_id });
             }
         }
@@ -435,7 +470,8 @@ impl Host {
         let snapshot = entry
             .streaming
             .iter()
-            .map(|(item_id, text)| StreamingItem {
+            .map(|(item_id, stream_kind, text)| StreamingItem {
+                stream_kind: *stream_kind,
                 item_id: item_id.clone(),
                 text: text.clone(),
             })

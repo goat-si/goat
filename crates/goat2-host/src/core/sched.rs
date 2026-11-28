@@ -136,6 +136,10 @@ impl RunSlot {
             let mut st = self.st.lock().expect("slot");
             st.parks = st.parks.saturating_sub(1);
         }
+        self.reacquire().await;
+    }
+
+    async fn reacquire(self: Arc<Self>) {
         // Several resumptions of one run share a single acquisition: the first acquires, the
         // others wait for it (four parents each queueing twice could otherwise hold every slot).
         loop {
@@ -154,7 +158,13 @@ impl RunSlot {
             }
             notified.await;
         }
+        // Cancelled while queued (its MCP call dropped): the guard hands the acquisition to a
+        // background task, so the run's other resumptions are not left waiting on it.
+        let mut guard = Reacquiring {
+            slot: Some(self.clone()),
+        };
         let permit = self.sched.acquire(Priority::Child).await.ok();
+        guard.slot = None;
         let take = {
             let mut st = self.st.lock().expect("slot");
             st.reacquiring = false;
@@ -168,6 +178,26 @@ impl RunSlot {
             permit.disown();
         }
         self.reacquired.notify_waiters();
+    }
+}
+
+/// Held by the resumption acquiring a run's slot back; see [RunSlot::reacquire].
+struct Reacquiring {
+    slot: Option<Arc<RunSlot>>,
+}
+
+impl Drop for Reacquiring {
+    fn drop(&mut self) {
+        let Some(slot) = self.slot.take() else {
+            return;
+        };
+        slot.st.lock().expect("slot").reacquiring = false;
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(slot.reacquire());
+            }
+            Err(_) => slot.reacquired.notify_waiters(),
+        }
     }
 }
 
@@ -426,6 +456,31 @@ mod tests {
         assert_eq!(sched.running(), 0);
         drop(permit);
         parked.resume().await;
+        assert_eq!(sched.running(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_reacquisition_leaves_no_resumption_waiting() {
+        // The run is parked by two waits; a child holds the only slot. The first resumption
+        // starts acquiring and is cancelled (its MCP call dropped) while the child still runs.
+        let sched = Scheduler::new(1, 1);
+        let permit = sched.acquire(Priority::Human).await.unwrap();
+        let (a, b) = (permit.slot().park(), permit.slot().park());
+        let child = sched.acquire(Priority::Child).await.unwrap();
+        let cancelled = tokio::spawn(a.resume());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!cancelled.is_finished());
+        cancelled.abort();
+        let _ = cancelled.await;
+        // The other resumption still gets the run its slot once the child ends.
+        let resume_b = tokio::spawn(b.resume());
+        drop(child);
+        tokio::time::timeout(Duration::from_secs(2), resume_b)
+            .await
+            .expect("the second resumption is not left waiting")
+            .unwrap();
+        assert_eq!(sched.running(), 1);
+        drop(permit);
         assert_eq!(sched.running(), 0);
     }
 

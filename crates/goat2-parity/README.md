@@ -10,6 +10,15 @@ first run.started order, wakes are `w1` through `wN` per parent in child.reporte
 order, and calls use the Mcp step's `call`. An unmappable id is an error naming
 that id. Global sequence numbers describe observation order across threads.
 
+Multi-thread and MCP scenarios: a call to a path that puts a message into a thread
+(`task.create`, `thread.send`) names that input after the call id. Child threads
+bind to the declared threads whose `parent` is the creating thread, in creation
+order. Mcp `args` may use `$thread:<alias>` for a thread id and
+`$result:<call>.<field>` for a field of an earlier call's result. A run-status
+wait for `running` is satisfied once the run's own engine turn runs. Tool results
+are ordered after every stored event at or below the highest sequence read when
+the call returned (events committed in between may precede them).
+
 Each scenario's provenance cites its pinned v1 transcript and the fixture input
 or integration test it mirrors. Stored transcript hashes are checked, and the
 source hash is checked against `GOAT_V1_ROOT` when set. Update schemas with
@@ -49,3 +58,24 @@ trace incomplete. The harness registers request and child aliases and binds each
 child input to its observed report with `AliasMap::bind_child_input`; absent
 correlation is an error. GOAT 2 logs do not prove enqueue, queued wake or
 cancelled wake, so the mapper never emits those transitions.
+
+## GOAT 2 target
+
+`cargo run -p goat2-parity -- run --target goat2` runs `goat2-parity-goat2-runner` per scenario. It starts a
+real `goat2-host` (`GOAT2_HOST_BIN`, default next to the runner) on a temporary data dir with
+`GOAT2_ENGINE=codex` and `GOAT2_CODEX_BIN` pointing at `goat2-parity-fake-codex`, drives the steps over the
+host WebSocket (start_thread, send_input, queue commands, stop), reads the thread log (the lines before the
+replayed checkpoint through read_page) and maps it with `AliasMap`. The fake replays the scenario's v1
+recording method by method (GOAT 2 frames differ from v1's): each process claims one native thread, answers
+each request from the next recorded exchange of that method, skips v1 setup reads, never skips a thread or
+turn request, compares turn/start and turn/steer text and the model of thread/start, thread/resume and turn/start (not
+approvalPolicy: the fixtures predate v1's current full-access mapping, which GOAT 2 follows), and reports per claim in `GOAT2_PARITY_FAKE_DIR`.
+GOAT 2 logs a thread's first input as steer; a requested start observed as steer with no active run maps to
+start. restart_host stops the host and starts it again on the same data dir; the thread's new fake process claims
+the recording's next session (claims are per thread started or resumed, in recorded order). Each turn/completed
+is held until the runner reaches a wait for a run to end (GOAT2_PARITY_FAKE_HOLD), so commands meant for a
+running turn reach it while it runs. Single-thread scenarios without MCP steps only, so far; others report
+unsupported.
+The stream counts as consumed only when every session the recording opens (each thread/start or
+thread/resume, per runtime_exit segment) has a report with all its thread and turn requests consumed.
+REQUIRED.json gates the v1 target only; an unfiltered goat2 run fails when no scenario passes.

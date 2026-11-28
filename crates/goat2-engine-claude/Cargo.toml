@@ -1,0 +1,29 @@
+[package]
+name = "goat2-engine-claude"
+version = "0.0.0"
+description = "Claude Code driver: per-thread claude CLI process, stream-json control protocol over stdio."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+goat2-engine-api = { path = "../goat2-engine-api" }
+goat2-contracts = { path = "../goat2-contracts" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "goat2-fake-claude"
+path = "src/bin/fake_claude.rs"

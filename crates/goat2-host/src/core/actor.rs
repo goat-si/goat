@@ -154,9 +154,13 @@ struct ActiveRun {
     permit: RunPermit,
     /// Set when an engine request id must map back (key -> request).
     engine_requests: Vec<(String, RequestId)>,
-    /// `signin` requests opened for this run's turn, closed when the run ends. Answered by the
-    /// person, never through the engine, so they are kept apart from `engine_requests`.
+    /// Inputs this run's turn accepted as steers and the engine has not settled yet: a later
+    /// `SteerUpdated` Cancelled may requeue only these, each once.
+    steered: Vec<InputId>,
+    /// `signin` requests opened for this run, closed when the run ends. Engine handles are
+    /// tracked separately in `signin_keys`.
     signins: Vec<RequestId>,
+    usage: Option<Box<goat2_contracts::ThreadTokenUsageSnapshot>>,
 }
 
 struct Session {
@@ -176,6 +180,26 @@ struct Actor {
     idle_gen: u64,
     /// `signin` requests the engine raised outside any turn, closed when the session ends.
     session_signins: Vec<RequestId>,
+    signin_keys: Vec<(RequestId, String)>,
+    /// Engine sign-in keys whose decline failed: retried at the next run end and before the
+    /// engine stops, so no engine request is left waiting without a retry.
+    undeclined_signin_keys: Vec<String>,
+    /// Engine sign-in keys already answered or declined in this session. Each key is answered
+    /// at most once: later events naming one are ignored.
+    settled_signin_keys: std::collections::HashSet<String>,
+    /// Set when a write to this thread's log fails. A failed write can leave the store refusing
+    /// writes until restart, and an engine request nobody can see must not wait: the fenced
+    /// thread stops its engine session and starts no run until the host restarts.
+    fenced: std::sync::atomic::AtomicBool,
+    /// Turns accepted in the current engine session and their runs (newest last, at most
+    /// [TURN_RUNS_KEPT] settled ones): items a driver delivers after their turn ended
+    /// (background subagents) go to their origin run. A turn with a live subagent is never
+    /// evicted, so its subagent's late item always finds its run.
+    turn_runs: std::collections::VecDeque<(String, RunId)>,
+    /// Engine-native subagents still running in this session (non-terminal SubagentUpdate):
+    /// subagent id -> the turn it belongs to. The engine is not idle-stopped while any runs
+    /// (v1 keeps background subagents alive).
+    live_subagents: std::collections::HashMap<String, LiveSubagent>,
     tx: mpsc::UnboundedSender<Msg>,
 }
 
@@ -198,13 +222,27 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         not_before: None,
         idle_gen: 0,
         session_signins: Vec::new(),
+        signin_keys: Vec::new(),
+        undeclined_signin_keys: Vec::new(),
+        settled_signin_keys: std::collections::HashSet::new(),
+        fenced: std::sync::atomic::AtomicBool::new(false),
+        turn_runs: std::collections::VecDeque::new(),
+        live_subagents: std::collections::HashMap::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
+        actor.close_stale_session_signins();
         while let Some(msg) = rx.recv().await {
             let started = Instant::now();
             let label = format!("{msg:?}");
             actor.handle(msg).await;
+            if actor.is_fenced() && actor.session.is_some() {
+                actor
+                    .stop_session("the thread log could not be written")
+                    .await;
+                // Text that was streaming will never complete: later subscribers must not see it.
+                actor.host.stream_clear(&actor.id);
+            }
             actor.sync_runtime();
             let took = started.elapsed();
             if took >= crate::stall::STALL_THRESHOLD {
@@ -246,7 +284,8 @@ impl Actor {
         match self.host.append(&self.id, events) {
             Ok(a) => Some(a),
             Err(err) => {
-                tracing::error!(thread = %self.id, %err, "append failed");
+                tracing::error!(thread = %self.id, %err, "append failed: fencing the thread");
+                self.fenced.store(true, std::sync::atomic::Ordering::SeqCst);
                 None
             }
         }
@@ -346,7 +385,13 @@ impl Actor {
                     && matches!(self.phase, Phase::Idle)
                     && self.session.is_some()
                 {
-                    self.stop_session("idle").await;
+                    self.prune_ended_subagents();
+                    if self.live_subagents.is_empty() {
+                        self.stop_session("idle").await;
+                    } else if self.live_subagents.values().all(|s| s.ended.is_some()) {
+                        // Only finished items are still on the way: look again later.
+                        self.arm_idle();
+                    }
                 }
             }
             Msg::MemoryLimit { pgen, bytes } => {
@@ -467,6 +512,11 @@ impl Actor {
         match session.steer(&turn_id, vec![to_engine(q)]).await {
             SteerResult::Accepted => {
                 self.append(vec![delivered(DeliveryOutcome::Accepted)]);
+                if let Phase::Running(run) = &mut self.phase
+                    && run.run_id == run_id
+                {
+                    run.steered.push(q.input_id.clone());
+                }
                 Ok(Some(run_id))
             }
             SteerResult::Declined { .. } => {
@@ -530,8 +580,34 @@ impl Actor {
         }
     }
 
+    fn is_fenced(&self) -> bool {
+        self.fenced.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Session-level sign-ins left open by an engine session that no longer exists (a host
+    /// restart, or a fenced write): the engine that asked is gone, so they close.
+    fn close_stale_session_signins(&self) {
+        let Some(fold) = self.host.inner.store.fold(&self.id) else {
+            return;
+        };
+        let stale: Vec<RequestId> = fold
+            .open_requests
+            .iter()
+            .filter(|r| r.run_id.is_none() && r.kind == RequestKind::Signin)
+            .map(|r| r.request_id.clone())
+            .collect();
+        let events = self.close_signins(&stale, "the engine that asked has stopped");
+        if !events.is_empty() {
+            self.append(events);
+        }
+    }
+
     fn maybe_start(&mut self) {
-        if !matches!(self.phase, Phase::Idle) || self.held || self.resend_blocked() {
+        if !matches!(self.phase, Phase::Idle)
+            || self.held
+            || self.resend_blocked()
+            || self.is_fenced()
+        {
             return;
         }
         let pending = self.pending();
@@ -672,6 +748,7 @@ impl Actor {
                 engine_ref: None,
             }),
             LogEvent::RunFinished(RunFinished {
+                token_usage: None,
                 run_id,
                 outcome: RunOutcome::Failed,
                 reason: Some(reason.to_owned()),
@@ -748,12 +825,16 @@ impl Actor {
                 })];
                 events.extend(delivered(DeliveryOutcome::Accepted));
                 self.append(events);
+                self.forget_settled_turn();
+                self.turn_runs.push_back((turn_id.clone(), run_id.clone()));
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id,
                     permit,
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
+                    usage: None,
+                    steered: Vec::new(),
                 });
             }
             TurnStartResult::RefusedUnowned { reason } => {
@@ -762,6 +843,7 @@ impl Actor {
                 let run_id_for_report = run_id.clone();
                 let mut events = delivered(DeliveryOutcome::Refused);
                 events.push(LogEvent::RunFinished(RunFinished {
+                    token_usage: None,
                     run_id,
                     outcome: RunOutcome::Failed,
                     reason: Some(reason),
@@ -779,6 +861,7 @@ impl Actor {
                 let run_id_for_report = run_id.clone();
                 let mut events = delivered(DeliveryOutcome::Declined);
                 events.push(LogEvent::RunFinished(RunFinished {
+                    token_usage: None,
                     run_id,
                     outcome: RunOutcome::Failed,
                     reason: Some(reason),
@@ -797,6 +880,8 @@ impl Actor {
                     permit,
                     engine_requests: Vec::new(),
                     signins: Vec::new(),
+                    usage: None,
+                    steered: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
             }
@@ -807,20 +892,71 @@ impl Actor {
 
     async fn on_engine(&mut self, event: EngineEvent) {
         match event {
-            EngineEvent::TextDelta { item_id, text, .. } => {
-                if matches!(self.phase, Phase::Running(_)) {
-                    self.host.stream_text(&self.id, &item_id, &text);
+            EngineEvent::TextDelta {
+                turn_id,
+                item_id,
+                text,
+            } => {
+                // Live text only for the running turn; a late item arrives whole.
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host.stream_text(
+                        &self.id,
+                        &item_id,
+                        goat2_contracts::ContentStreamKind::AssistantText,
+                        &text,
+                    );
                 }
             }
-            EngineEvent::ItemCompleted { item, locator, .. } => {
-                let Some(run_id) = self.active_run_id() else {
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                if matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id) {
+                    self.host
+                        .stream_text(&self.id, &item_id, stream_kind, &text);
+                }
+            }
+            EngineEvent::ItemCompleted {
+                turn_id,
+                item,
+                locator,
+            } => {
+                // A subagent's finished item ends its hold on its turn and on the engine, also
+                // when the item itself cannot be filed.
+                if let TurnItemBody::Subagent { subagent_id, .. } = &item.body
+                    && is_terminal(item.status)
+                    && self.live_subagents.remove(subagent_id).is_some()
+                    && matches!(self.phase, Phase::Idle)
+                    // The others (if any) only wait for their items: the idle check runs again.
+                    && self.live_subagents.values().all(|s| s.ended.is_some())
+                {
+                    self.arm_idle();
+                }
+                // The run of the item's turn: the active run, or the earlier run of this session
+                // a late item (a background subagent finishing after its turn) belongs to. It is
+                // appended after that run's run.finished; the run is not reopened.
+                let active = matches!(&self.phase, Phase::Running(run) if run.turn_id == turn_id);
+                let run_id = if active {
+                    self.active_run_id()
+                } else {
+                    self.turn_runs
+                        .iter()
+                        .rev()
+                        .find(|(t, _)| *t == turn_id)
+                        .map(|(_, r)| r.clone())
+                };
+                let Some(run_id) = run_id else {
+                    tracing::warn!(thread = %self.id, "item for a turn this session did not start: dropped");
                     return;
                 };
                 let mut item = *item;
                 item.run_id = Some(run_id.clone());
                 item.thread_id = self.id.clone();
                 let item_id = item.id.clone();
-                if let TurnItemBody::AssistantMessage { phase, text, .. } = &item.body
+                if active
+                    && let TurnItemBody::AssistantMessage { phase, text, .. } = &item.body
                     && !matches!(phase, Some(AssistantMessagePhase::Commentary))
                 {
                     let text = text.clone();
@@ -884,13 +1020,32 @@ impl Actor {
                 self.append(events);
             }
             EngineEvent::RequestClosed { key } => {
-                let request = match &mut self.phase {
+                let mut request = match &mut self.phase {
                     Phase::Running(run) => {
                         let found = run.engine_requests.iter().position(|(k, _)| *k == key);
                         found.map(|i| run.engine_requests.remove(i).1)
                     }
                     _ => None,
                 };
+                // The engine closed a keyed sign-in itself (e.g. an interrupt cancelled the
+                // agent's request): close the person's sign-in too, and treat the key as
+                // answered so nothing answers it later.
+                if request.is_none()
+                    && let Some(index) = self.signin_keys.iter().position(|(_, k)| *k == key)
+                {
+                    let (request_id, _) = self.signin_keys.remove(index);
+                    self.undeclined_signin_keys.retain(|k| *k != key);
+                    self.settled_signin_keys.insert(key.clone());
+                    self.host.forget_signin_link(&request_id);
+                    request = Some(request_id);
+                } else if request.is_none() && self.undeclined_signin_keys.contains(&key) {
+                    // A replaced key whose decline failed: the engine closed it, so no retry.
+                    self.undeclined_signin_keys.retain(|k| *k != key);
+                    self.settled_signin_keys.insert(key.clone());
+                }
+                // If this write fails, the request stays listed under its run or session and is
+                // closed when that ends; its key is already settled, so nothing answers the
+                // engine for it, and a person resolving it first reaches no engine either.
                 if let Some(request_id) = request
                     && self.is_open(&request_id)
                 {
@@ -915,26 +1070,91 @@ impl Actor {
                     self.finish_run(outcome, reason).await;
                 }
             }
+            EngineEvent::TokenUsage { turn_id, usage } => {
+                if let Phase::Running(run) = &mut self.phase
+                    && turn_id.as_ref().is_none_or(|id| id == &run.turn_id)
+                {
+                    run.usage = Some(Box::new(usage.clone()));
+                    self.host.usage_update(&self.id, usage);
+                }
+            }
             EngineEvent::AuthRequired {
+                key,
                 turn_id,
                 url,
                 message,
-            } => self.on_auth_required(turn_id, url, message),
-            EngineEvent::SubagentUpdate { subagent_id, .. } => {
+            } => self.on_auth_required(turn_id, key, url, message).await,
+            EngineEvent::SubagentUpdate {
+                turn_id,
+                subagent_id,
+                status,
+                ..
+            } => {
                 // Progress of an unfinished native subagent: not stored (PRD storage.md: no
                 // progress updates in the log). The finished subagent arrives as an item. There
-                // is no live wire frame for it yet (structure/30_wire.md).
+                // is no live wire frame for it yet (structure/30_wire.md). A running one keeps
+                // the engine from being idle-stopped.
                 tracing::debug!(thread = %self.id, %subagent_id, "subagent progress (not stored)");
+                let running = match &self.phase {
+                    Phase::Running(run) if !run.turn_id.is_empty() => Some(run.turn_id.clone()),
+                    _ => None,
+                };
+                if is_terminal(status) {
+                    // Ended, but its finished item comes separately: keep its origin and the
+                    // idle protection until that item is recorded, or until the grace runs out.
+                    // A subagent first heard of at its end gets the same hold.
+                    let live =
+                        self.live_subagents
+                            .entry(subagent_id)
+                            .or_insert_with(|| LiveSubagent {
+                                origin: turn_id.or(running),
+                                ended: None,
+                            });
+                    live.ended.get_or_insert_with(Instant::now);
+                    if matches!(self.phase, Phase::Idle)
+                        && self.live_subagents.values().all(|s| s.ended.is_some())
+                    {
+                        self.arm_idle();
+                    }
+                } else {
+                    // The subagent's origin turn: the one an update names; for a first update
+                    // without one, the turn running now (drivers report a subagent during the
+                    // turn that started it); with no turn running it stays unknown, which
+                    // stops all eviction while it lives. A later named turn replaces it.
+                    match self.live_subagents.entry(subagent_id) {
+                        std::collections::hash_map::Entry::Occupied(mut known) => {
+                            let known = known.get_mut();
+                            known.ended = None;
+                            if turn_id.is_some() {
+                                known.origin = turn_id;
+                            }
+                        }
+                        std::collections::hash_map::Entry::Vacant(new) => {
+                            new.insert(LiveSubagent {
+                                origin: turn_id.or(running),
+                                ended: None,
+                            });
+                        }
+                    }
+                }
             }
             EngineEvent::SteerUpdated {
-                turn_id, status, ..
-            } => {
-                // Owner decision: a cancelled steer is requeued as a followup with the same
-                // inputId (a second input.delivered {as: steer, outcome: declined}, which the
-                // store folds back into the queue). The host side of that lands in a later merge
-                // (lane E); until then the accepted delivery stands and this is only logged.
-                tracing::debug!(thread = %self.id, %turn_id, ?status, "steer settled (not acted on yet)");
-            }
+                turn_id,
+                input_ids,
+                status,
+            } => match status {
+                crate::engine::SteerStatus::Completed => {
+                    // The engine read these steers: a later cancel for them is not honoured.
+                    if let Phase::Running(run) = &mut self.phase
+                        && run.turn_id == turn_id
+                    {
+                        run.steered.retain(|s| !input_ids.contains(s));
+                    }
+                }
+                crate::engine::SteerStatus::Cancelled { reason } => {
+                    self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
+                }
+            },
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {
@@ -953,19 +1173,146 @@ impl Actor {
             .is_some_and(|f| f.open_requests.iter().any(|r| &r.request_id == request_id))
     }
 
+    /// Make room in [Actor::turn_runs] before a new turn is recorded: below [TURN_RUNS_KEPT],
+    /// dropping the oldest turns without a live subagent. Turns with live subagents stay even
+    /// past the cap. While a live subagent's origin is unknown nothing is dropped, since any
+    /// turn could be its origin; the record shrinks back once it ends.
+    fn forget_settled_turn(&mut self) {
+        self.prune_ended_subagents();
+        if self.live_subagents.values().any(|s| s.origin.is_none()) {
+            return;
+        }
+        while self.turn_runs.len() >= TURN_RUNS_KEPT {
+            let live_subagents = &self.live_subagents;
+            let Some(pos) = self.turn_runs.iter().position(|(t, _)| {
+                !live_subagents
+                    .values()
+                    .any(|s| s.origin.as_deref() == Some(t))
+            }) else {
+                return;
+            };
+            self.turn_runs.remove(pos);
+        }
+    }
+
+    /// Forget subagents that reported their end longer than the grace ago and whose item never
+    /// came (a driver that sends none): they no longer hold a turn or the engine.
+    fn prune_ended_subagents(&mut self) {
+        let grace = self.host.inner.opts.subagent_item_grace;
+        let now = Instant::now();
+        self.live_subagents
+            .retain(|_, s| s.ended.is_none_or(|t| now.duration_since(t) < grace));
+    }
+
+    /// An accepted steer the engine later cancelled (owner 2026-11-29, a deliberate difference
+    /// from v1, which marks it cancelled): its inputs go back to the queue as followups with the
+    /// same input ids, like [SteerResult::Declined]. The log gets a second `input.delivered`
+    /// (steer, declined) per input; the fold puts the input back. No new message is written.
+    fn requeue_cancelled_steer(&mut self, turn_id: &str, input_ids: Vec<InputId>, reason: &str) {
+        // Drivers report a turn's steers before its TurnFinished (engine-api contract); one
+        // after it would be refused by the store once the next run started, so it is ignored.
+        let Phase::Running(run) = &mut self.phase else {
+            tracing::warn!(thread = %self.id, "steer settled after its turn ended: ignored");
+            return;
+        };
+        if run.turn_id != turn_id {
+            tracing::warn!(thread = %self.id, "steer settled after its turn ended: ignored");
+            return;
+        }
+        let run_id = run.run_id.clone();
+        // Only inputs this turn accepted as steers, each once.
+        let mut requeue = Vec::new();
+        for id in input_ids {
+            match run.steered.iter().position(|s| *s == id) {
+                Some(pos) => requeue.push(run.steered.remove(pos)),
+                None => {
+                    tracing::warn!(thread = %self.id, input = %id, "cancelled steer for an input this turn did not accept as a steer: skipped")
+                }
+            }
+        }
+        let events: Vec<LogEvent> = requeue
+            .iter()
+            .cloned()
+            .map(|input_id| {
+                LogEvent::InputDelivered(InputDelivered {
+                    input_id,
+                    run_id: run_id.clone(),
+                    delivered_as: DeliveredAs::Steer,
+                    outcome: DeliveryOutcome::Declined,
+                })
+            })
+            .collect();
+        if events.is_empty() {
+            return;
+        }
+        tracing::info!(thread = %self.id, reason, "steer cancelled by the engine: requeued as followup");
+        if self.append(events).is_none() {
+            // Not recorded: the inputs stay accepted steers of this run, so a later cancel for
+            // them can still requeue them.
+            if let Phase::Running(run) = &mut self.phase {
+                run.steered.extend(requeue);
+            }
+            return;
+        }
+        self.sync_runtime();
+        self.maybe_start();
+    }
+
     /// The engine needs the person to sign in: a `signin` request, answered by the person. A
     /// sign-in naming a turn belongs to that run and only while it runs; one naming a turn that
     /// is no longer running is dropped (the next turn asks again). One without a turn belongs to
     /// the engine session. Each scope keeps at most one open sign-in; a repeat refreshes its link.
-    fn on_auth_required(&mut self, turn_id: Option<String>, url: Option<String>, message: String) {
+    async fn on_auth_required(
+        &mut self,
+        turn_id: Option<String>,
+        key: Option<String>,
+        url: Option<String>,
+        message: String,
+    ) {
+        // Each engine key is answered at most once per session (keys are unique per engine
+        // request): a later event naming a settled key is ignored, with no request and no answer.
+        if let Some(key) = &key
+            && self.settled_signin_keys.contains(key)
+        {
+            tracing::debug!(thread = %self.id, "sign-in for a key already answered: ignored");
+            return;
+        }
         let run_id = match (&turn_id, &self.phase) {
-            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => Some(run.run_id.clone()),
-            (Some(_), _) => {
-                tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
-                return;
+            (Some(turn), Phase::Running(run)) if run.turn_id == *turn => {
+                Some(Some(run.run_id.clone()))
             }
-            (None, _) => None,
+            (Some(_), _) => None,
+            (None, _) => Some(None),
         };
+        let Some(run_id) = run_id else {
+            tracing::debug!(thread = %self.id, "sign-in for a turn that is not running: dropped");
+            // The engine still waits for an answer to a keyed request: decline it.
+            if let Some(key) = key {
+                self.decline_signin_key(&key, "the sign-in named a turn that is not running")
+                    .await;
+            }
+            return;
+        };
+        // One engine key has at most one sign-in request: a key an open sign-in already holds
+        // refreshes that request, so every answer, decline and close stays one-to-one.
+        if let Some(key) = &key
+            && let Some(existing) = self
+                .signin_keys
+                .iter()
+                .find(|(id, held)| held == key && self.is_open(id))
+                .map(|(id, _)| id.clone())
+        {
+            match url.filter(|u| !u.trim().is_empty()) {
+                Some(url) => self.host.set_signin_link(crate::core::SigninLink {
+                    thread_id: self.id.clone(),
+                    request_id: existing,
+                    url,
+                    message,
+                }),
+                None => self.host.forget_signin_link(&existing),
+            }
+            return;
+        }
         let scope: &[RequestId] = match (&run_id, &self.phase) {
             (Some(_), Phase::Running(run)) => &run.signins,
             _ => &self.session_signins,
@@ -975,7 +1322,7 @@ impl Actor {
             Some(request_id) => request_id,
             None => {
                 let request_id = RequestId::new(new_id("req"));
-                self.append(vec![LogEvent::RequestOpened(RequestOpened {
+                let recorded = self.append(vec![LogEvent::RequestOpened(RequestOpened {
                     request_id: request_id.clone(),
                     run_id: run_id.clone(),
                     item_id: Some(goat2_contracts::ItemId::new(format!("signin:{request_id}"))),
@@ -985,6 +1332,15 @@ impl Actor {
                     options: None,
                     recommended: None,
                 })]);
+                if recorded.is_none() {
+                    // Nobody can see or answer an unrecorded request: decline the engine's
+                    // request now instead of holding its key.
+                    if let Some(key) = &key {
+                        self.decline_signin_key(key, "the sign-in request could not be recorded")
+                            .await;
+                    }
+                    return;
+                }
                 match (&run_id, &mut self.phase) {
                     (Some(_), Phase::Running(run)) => run.signins.push(request_id.clone()),
                     _ => self.session_signins.push(request_id.clone()),
@@ -992,6 +1348,24 @@ impl Actor {
                 request_id
             }
         };
+        if let Some(key) = key {
+            // A repeat with a new key replaces the earlier engine request: decline that one so it
+            // does not wait forever.
+            if let Some(index) = self
+                .signin_keys
+                .iter()
+                .position(|(id, _)| id == &request_id)
+            {
+                let (_, old) = self.signin_keys.remove(index);
+                if old != key {
+                    self.decline_signin_key(&old, "a newer sign-in request replaced it")
+                        .await;
+                }
+            }
+            // A key that is live again is no longer waiting for a retried decline.
+            self.undeclined_signin_keys.retain(|k| k != &key);
+            self.signin_keys.push((request_id.clone(), key));
+        }
         match url.filter(|u| !u.trim().is_empty()) {
             Some(url) => self.host.set_signin_link(crate::core::SigninLink {
                 thread_id: self.id.clone(),
@@ -1045,11 +1419,21 @@ impl Actor {
                 }));
             }
         }
+        for request_id in &run.signins {
+            if let Some(index) = self.signin_keys.iter().position(|(id, _)| id == request_id) {
+                let (_, key) = self.signin_keys.remove(index);
+                if self.is_open(request_id) {
+                    self.decline_signin_key(&key, "the run ended").await;
+                }
+            }
+        }
+        self.retry_undeclined_signin_keys().await;
         events.extend(self.close_signins(&run.signins, "the run ended"));
         events.push(LogEvent::RunFinished(RunFinished {
             run_id: run.run_id.clone(),
             outcome,
             reason,
+            token_usage: run.usage.clone(),
         }));
         if outcome == RunOutcome::Unknown {
             events.push(LogEvent::RequestOpened(RequestOpened {
@@ -1249,7 +1633,16 @@ impl Actor {
                     | RequestOutcome::Decline
                     | RequestOutcome::Cancel
             ),
-            RequestKind::Question | RequestKind::Signin => {
+            RequestKind::Signin => matches!(
+                r.outcome,
+                RequestOutcome::Accept
+                    | RequestOutcome::AcceptForSession
+                    | RequestOutcome::AcceptAlways
+                    | RequestOutcome::Answered
+                    | RequestOutcome::Cancel
+                    | RequestOutcome::Decline
+            ),
+            RequestKind::Question => {
                 matches!(
                     r.outcome,
                     RequestOutcome::Answered | RequestOutcome::Cancel | RequestOutcome::Decline
@@ -1275,6 +1668,45 @@ impl Actor {
             } else {
                 None
             };
+        if request.kind == RequestKind::Signin
+            && let Some(index) = self
+                .signin_keys
+                .iter()
+                .position(|(id, _)| id == &r.request_id)
+        {
+            let key = self.signin_keys[index].1.clone();
+            let session = self
+                .session
+                .as_ref()
+                .ok_or_else(|| Refusal::new(Reason::NotAllowed, "the engine has stopped"))?;
+            let outcome = if matches!(r.outcome, RequestOutcome::Decline | RequestOutcome::Cancel) {
+                RequestOutcome::Decline
+            } else {
+                RequestOutcome::Accept
+            };
+            session
+                .session
+                .answer_request(
+                    &key,
+                    RequestAnswer {
+                        outcome,
+                        text: None,
+                        answers: None,
+                    },
+                )
+                .await
+                // The engine's error text can name the key; neither the reply nor the log carries it.
+                .map_err(|_| {
+                    tracing::warn!(thread = %self.id, "the engine did not take the sign-in answer");
+                    Refusal::new(
+                        Reason::Internal,
+                        "the engine did not take the sign-in answer",
+                    )
+                })?;
+            self.signin_keys.remove(index);
+            self.undeclined_signin_keys.retain(|k| k != &key);
+            self.settled_signin_keys.insert(key);
+        }
         // Engine request of the running turn: answer the engine first.
         let engine_key = match &self.phase {
             Phase::Running(run) => run
@@ -1296,7 +1728,11 @@ impl Actor {
                     },
                 )
                 .await
-                .map_err(|e| Refusal::new(Reason::Internal, e.to_string()))?;
+                .map_err(|_| {
+                    // The engine's error can name the request key: a fixed message only.
+                    tracing::warn!(thread = %self.id, "the engine did not take the answer");
+                    Refusal::new(Reason::Internal, "the engine did not take the answer")
+                })?;
             if let Phase::Running(run) = &mut self.phase {
                 run.engine_requests.retain(|(k, _)| k != key);
             }
@@ -1440,7 +1876,52 @@ impl Actor {
         });
     }
 
+    /// Decline one engine sign-in request while the session lives. The engine's error text can
+    /// name the key, so only the reason is logged.
+    /// A failed decline keeps the key for [Self::retry_undeclined_signin_keys].
+    /// Callers remove their own entry first; a key that another open sign-in still holds (the
+    /// session and a run can share one) is never declined.
+    async fn decline_signin_key(&mut self, key: &str, why: &str) {
+        if self.signin_keys.iter().any(|(_, live)| live == key)
+            || self.settled_signin_keys.contains(key)
+        {
+            return;
+        }
+        let Some(session) = &self.session else { return };
+        let answer = RequestAnswer {
+            outcome: RequestOutcome::Decline,
+            text: None,
+            answers: None,
+        };
+        if session.session.answer_request(key, answer).await.is_err() {
+            tracing::warn!(thread = %self.id, why, "failed to decline a sign-in; will retry");
+            if !self.undeclined_signin_keys.iter().any(|k| k == key) {
+                self.undeclined_signin_keys.push(key.to_owned());
+            }
+        } else {
+            self.undeclined_signin_keys.retain(|k| k != key);
+            self.settled_signin_keys.insert(key.to_owned());
+        }
+    }
+
+    /// Retry the declines that failed earlier; a key that fails again stays for the next try.
+    async fn retry_undeclined_signin_keys(&mut self) {
+        for key in std::mem::take(&mut self.undeclined_signin_keys) {
+            // Never decline a key that belongs to an open sign-in again.
+            if self.signin_keys.iter().any(|(_, live)| live == &key) {
+                continue;
+            }
+            self.decline_signin_key(&key, "retrying an earlier decline")
+                .await;
+        }
+    }
+
     fn drop_session(&mut self) {
+        self.signin_keys.clear();
+        self.undeclined_signin_keys.clear();
+        self.settled_signin_keys.clear();
+        self.turn_runs.clear();
+        self.live_subagents.clear();
         let signins = std::mem::take(&mut self.session_signins);
         let closed = self.close_signins(&signins, "the engine stopped");
         if !closed.is_empty() {
@@ -1458,7 +1939,33 @@ impl Actor {
     }
 
     async fn stop_session(&mut self, why: &str) {
+        // Last chance for declines that failed earlier; the session ends after this.
+        self.retry_undeclined_signin_keys().await;
         if let Some(s) = &self.session {
+            let mut declined: Vec<&String> = Vec::new();
+            for (id, key) in &self.signin_keys {
+                // Each key is declined once; the engine's error text can name it, so it is not
+                // logged.
+                if declined.contains(&key) || self.settled_signin_keys.contains(key) {
+                    continue;
+                }
+                declined.push(key);
+                if self.is_open(id)
+                    && s.session
+                        .answer_request(
+                            key,
+                            RequestAnswer {
+                                outcome: RequestOutcome::Decline,
+                                text: None,
+                                answers: None,
+                            },
+                        )
+                        .await
+                        .is_err()
+                {
+                    tracing::warn!(thread = %self.id, "failed to decline a sign-in before stopping the engine");
+                }
+            }
             tracing::info!(thread = %self.id, why, "stopping engine process");
             s.session.shutdown().await;
         }
@@ -1473,6 +1980,25 @@ impl Actor {
 /// a path, bare codes), so none of it goes to `goat.jsonl`. The message and link stay in memory
 /// only ([crate::core::SigninLink]).
 const SIGNIN_SUMMARY: &str = "Sign in to continue";
+
+/// Turns of one engine session remembered for late items.
+const TURN_RUNS_KEPT: usize = 64;
+
+/// An engine-native subagent of the session: the turn it came from (unknown = `None`) and
+/// when it reported its end, if it did.
+struct LiveSubagent {
+    origin: Option<String>,
+    ended: Option<Instant>,
+}
+
+/// A subagent status after which nothing more happens.
+fn is_terminal(status: goat2_contracts::TurnItemStatus) -> bool {
+    use goat2_contracts::TurnItemStatus as S;
+    matches!(
+        status,
+        S::Completed | S::Failed | S::Cancelled | S::Interrupted
+    )
+}
 
 /// The parent's wake input for a child result. The clientRequestId names (child, child run).
 pub(crate) fn wake_input(outcome: &ChildOutcome, child_title: &str) -> NewInput {

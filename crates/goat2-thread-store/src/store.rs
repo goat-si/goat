@@ -619,6 +619,7 @@ impl Store {
                 run_id: run_id.clone(),
                 outcome,
                 reason: Some("The host restarted before the run finished.".into()),
+                token_usage: None,
             }));
             store.append_locked(&mut slot, events)?;
             report.settled.push(Settled {

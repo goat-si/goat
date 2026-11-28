@@ -20,6 +20,19 @@ use crate::{
     ProviderAuthState, ProviderInstallState, ProviderInstanceId, ServerProviderEntry,
 };
 
+/// Kind of content streamed for an unfinished item (v1 RuntimeContentStreamKind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentStreamKind {
+    AssistantText,
+    ReasoningText,
+    ReasoningSummaryText,
+    PlanText,
+    CommandOutput,
+    FileChangeOutput,
+    Unknown,
+}
+
 /// Position in one thread's `goat.jsonl`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -616,6 +629,13 @@ pub enum HostFrame {
         thread_id: ThreadId,
         line: Box<LogLine>,
     },
+    /// Live, non-stored usage; updated_at is host receipt time (v1 contextWindow.ts:46-90).
+    ThreadUsage {
+        sub_id: String,
+        thread_id: ThreadId,
+        usage: crate::ThreadTokenUsageSnapshot,
+        updated_at: String,
+    },
     /// Replay done; live events follow.
     ThreadCaughtUp {
         sub_id: String,
@@ -634,6 +654,10 @@ pub enum HostFrame {
         #[ts(as = "u64")]
         #[schemars(with = "u64")]
         offset: u64,
+        /// Omitted for assistant_text, which is the default.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        stream_kind: Option<ContentStreamKind>,
         text: String,
     },
     /// Answer to [ClientFrame::ReadPage], oldest line first.

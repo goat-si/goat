@@ -681,6 +681,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "goat2-engine-claude"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "goat2-contracts",
+ "goat2-engine-api",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "goat2-engine-codex"
 version = "0.0.0"
 dependencies = [
@@ -693,6 +710,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -705,6 +723,7 @@ dependencies = [
  "futures-util",
  "goat2-contracts",
  "goat2-engine-api",
+ "goat2-engine-codex",
  "goat2-thread-store",
  "libc",
  "rand 0.9.5",
@@ -731,6 +750,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "tungstenite 0.28.0",
 ]
 
 [[package]]

@@ -187,19 +187,36 @@ fn execute() -> Result<(), String> {
             }
         }
         "run" => {
-            if value(&args, "--target")? != "v1" {
-                return Err("unknown target".into());
-            }
-            let root = value(&args, "--v1-root")?;
-            let runner = if args.iter().any(|a| a == "--runner") {
-                PathBuf::from(value(&args, "--runner")?)
-            } else {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh")
+            let target_name = value(&args, "--target")?;
+            let (runner, runner_args) = match target_name.as_str() {
+                "v1" => (
+                    if args.iter().any(|a| a == "--runner") {
+                        PathBuf::from(value(&args, "--runner")?)
+                    } else {
+                        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("v1-runner/run-v1.sh")
+                    },
+                    vec!["--v1-root".to_owned(), value(&args, "--v1-root")?],
+                ),
+                // A real goat2-host process with the fake codex (src/goat2_runner.rs).
+                "goat2" => (
+                    if args.iter().any(|a| a == "--runner") {
+                        PathBuf::from(value(&args, "--runner")?)
+                    } else {
+                        std::env::current_exe()
+                            .map_err(|e| e.to_string())?
+                            .with_file_name("goat2-parity-goat2-runner")
+                    },
+                    Vec::new(),
+                ),
+                _ => return Err("unknown target".into()),
             };
             // Check the runner before any scenario is skipped as pending, so a missing runner is
             // reported as such instead of being hidden behind pending/REQUIRED errors.
             if !runner.is_file() {
-                return Err(format!("v1 runner not installed: {}", runner.display()));
+                return Err(format!(
+                    "{target_name} runner not installed: {}",
+                    runner.display()
+                ));
             }
             let filtered = args.iter().any(|a| a == "--only" || a == "--scenarios");
             if filtered {
@@ -210,7 +227,8 @@ fn execute() -> Result<(), String> {
             } else {
                 scenarios_root()
             };
-            let required = if filtered {
+            // REQUIRED.json is the v1 acceptance manifest; GOAT 2 targets are still pending.
+            let required = if filtered || target_name != "v1" {
                 BTreeMap::new()
             } else {
                 required(&scenarios)?
@@ -221,9 +239,9 @@ fn execute() -> Result<(), String> {
                 None
             };
             let mut target = ProcessTarget {
-                name: "v1".into(),
+                name: target_name.clone(),
                 program: runner.clone(),
-                args: vec!["--v1-root".into(), root],
+                args: runner_args,
             };
             let mut failed = false;
             let mut selected = 0;
@@ -241,7 +259,7 @@ fn execute() -> Result<(), String> {
                 }
                 selected += 1;
                 let name = &scenario.scenario.name;
-                let support = scenario.scenario.targets.get("v1");
+                let support = scenario.scenario.targets.get(&target_name);
                 if support.is_none_or(|s| s.status != SupportStatus::Supported) {
                     println!(
                         "{name}: PENDING/UNSUPPORTED {:?}",
@@ -272,6 +290,11 @@ fn execute() -> Result<(), String> {
             }
             if selected == 0 {
                 return Err("no matching scenario".into());
+            }
+            // Without a REQUIRED manifest (GOAT 2), at least one scenario must have run and passed.
+            if target_name != "v1" && !filtered && passed.is_empty() {
+                eprintln!("no {target_name} scenario passed");
+                failed = true;
             }
             for message in missing_required(&scenarios, &required, &passed) {
                 eprintln!("{message}");

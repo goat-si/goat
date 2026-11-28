@@ -73,24 +73,35 @@ may emit the event.
 
 ## Coverage
 
-M = recorded scenario that must pass on v1; S = source-only, reviewed. Status is "planned" until the v1
-runner (wp3) reports it.
+M = recorded scenario that must pass on v1; S = source-only, reviewed. Status is what the unfiltered v1
+runner reports (`cargo run -p goat2-parity -- run --target v1`); GOAT 2 targets stay pending until the goat2
+process target runs.
 
 | Requirement | Coverage | Status |
 |---|---|---|
-| follow-up modes | followup_queued_in_order, live_steer_applied, interrupt_ack_then_terminal (M) | planned |
-| refusal at admission | steer_refused_at_admission (M) | planned |
-| declined / missed steer re-dispatch | steer_missed_becomes_followup (M); tagged decline (S, Cursor-only in v1) | planned |
-| Codex turn/steer RPC error | steer_rpc_error_codex (M) | planned |
+| follow-up modes | followup_queued_in_order, live_steer_applied, interrupt_ack_then_terminal (M) | v1 PASS |
+| refusal at admission | steer_refused_at_admission (M) | v1 PASS |
+| declined / missed steer re-dispatch | steer_missed_becomes_followup (M); tagged decline (S, Cursor-only in v1) | v1 PASS |
+| Codex turn/steer RPC error | steer_rpc_error_codex (S on v1, owner 2026-11-29; GOAT 2 rule unit-tested in goat2-engine-codex and goat2-host) | source-only |
 | Stop with children, no demotion | S | reviewed in wp1 |
-| child wake | child_wake_delegated (M) | planned |
-| restart settlement | restart_idle_resume, restart_active_run_settles (M) | planned |
-| thread.send / wait | thread_tools_send_wait (M) | planned |
-| thread.watch | thread_watch_wake (M on v1; GOAT 2 deferred) | planned |
-| thread.report_result | thread_report_result (M) | planned |
-| queue edit / promote / cancel | queue_edit_then_start, queue_promote_to_steer, queue_cancel_while_active (M) | planned |
+| child wake | child_wake_delegated (M, real v1 Codex recording 2026-11-29) | v1 PASS |
+| restart settlement | restart_idle_resume, restart_active_run_settles (M) | v1 PASS |
+| thread.send / wait | thread_tools_send_wait (M) | v1 PASS |
+| thread.watch | thread_watch_wake (S on v1, owner 2026-11-29; GOAT 2 deferred) | source-only |
+| thread.report_result | thread_report_result (M) | v1 PASS |
+| queue edit / promote / cancel | queue_edit_then_start, queue_promote_to_steer, queue_cancel_while_active (M) | v1 PASS |
 | queue reorder | S | reviewed in wp1 |
 | Claude stream-json subtypes | claude-stream-json.md (S, Part 2) | reviewed in wp1 |
+
+GOAT 2 target (`cargo run -p goat2-parity -- run --target goat2`, real `goat2-host` with lane B's Codex driver
+replaying the same v1 recordings through `goat2-parity-fake-codex`): simple_turn, followup_queued_in_order,
+interrupt_ack_then_terminal, live_steer_applied, steer_missed_becomes_followup, queue_edit_then_start,
+queue_cancel_while_active, queue_promote_to_steer, restart_idle_resume and restart_active_run_settles pass (the restarted host resumes the native
+thread in a new fake process, which replays the recording's next app-server session). restart_active_run_settles compares against GOAT 2's deliberate
+difference (owner Q3): a crash settles an engine-accepted run interrupted, where v1 records cancelled/server_restart. The four queue scenarios compare against the v1
+expectation without `queue.changed enqueued`, which the GOAT 2 log does not record. steer_refused_at_admission
+is a deliberate difference (owner 2026-11-29: GOAT 2 has no run-targeted steer; after Stop the next message
+starts a new turn). MCP and multi-thread scenarios are not driven by the GOAT 2 runner yet.
 
 ## Topic index
 

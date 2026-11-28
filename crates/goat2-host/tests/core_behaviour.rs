@@ -305,7 +305,8 @@ async fn refused_turn_start_fails_closed_and_holds_the_queue() {
 
 #[tokio::test]
 async fn interrupt_goes_first_and_collect_merges() {
-    let t = setup(manual()).await;
+    // A collect window long enough that both collect inputs land in it on a loaded machine.
+    let t = setup_with(manual(), |o| o.collect_window = Duration::from_secs(1)).await;
     let id = start_user_thread(&t, "int", Some("long job")).await;
     eventually("running", || running(&t, &id)).await;
     let queued = send(&t, &id, "int-f", "later", InputMode::Followup)
@@ -1717,6 +1718,7 @@ async fn an_engine_sign_in_need_becomes_a_signin_request() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: t.fake.active_turn(&id),
             url: Some(url.clone()),
             message: format!("Sign in to Codex at {url}"),
@@ -1771,6 +1773,7 @@ async fn a_sign_in_for_an_ended_turn_is_dropped_and_run_end_closes_the_current_o
     assert_ne!(first, second);
     let auth =
         |turn: &str, url: &str, message: &str| goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: Some(turn.to_owned()),
             url: Some(url.to_owned()),
             message: message.to_owned(),
@@ -1819,6 +1822,7 @@ async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
     t.fake.emit(
         &id,
         goat2_host::engine::EngineEvent::AuthRequired {
+            key: None,
             turn_id: None,
             url: Some("https://auth.example.invalid/login?state=SECRET-STATE".into()),
             message: "Not logged in".into(),
@@ -1862,6 +1866,7 @@ async fn a_sign_in_message_never_reaches_the_log() {
         t.fake.emit(
             &id,
             goat2_host::engine::EngineEvent::AuthRequired {
+                key: None,
                 turn_id: t.fake.active_turn(&id),
                 url: None,
                 message: message.into(),
@@ -1948,6 +1953,675 @@ async fn part2_fields_carry_what_the_host_knows() {
     );
 }
 
+#[tokio::test]
+async fn a_late_item_goes_to_its_origin_run_and_never_to_another() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late", Some("one")).await;
+    eventually("first turn", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.finish_turn(&id, "first answer");
+    eventually("first run finished", || count(&t, &id, "run.finished") == 1).await;
+    send(&t, &id, "late-two", "two", InputMode::Followup).await;
+    eventually("second turn", || running(&t, &id)).await;
+    let run2 = last_run(&t, &id).unwrap();
+    assert_ne!(run1, run2);
+    // While run 2 runs: an item for an unknown turn is dropped, the first turn's late items go
+    // to run 1 (a background subagent result and a late assistant message).
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    emit("no-such-turn", late_text(&id, "stray", "stray"));
+    emit(&first, subagent_item(&id, "sub-1", None));
+    emit(
+        &first,
+        late_text(&id, "late-text", "late answer from run 1"),
+    );
+    eventually("late items", || item_run(&t, &id, "late-text").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-1"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "late-text"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "stray"), None);
+    // Run 2 keeps its own answer.
+    t.fake.finish_turn(&id, "second answer");
+    eventually("second run finished", || {
+        count(&t, &id, "run.finished") == 2
+    })
+    .await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .filter_map(|e| match e {
+            LogEvent::RunFinished(f) => Some(f.run_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        finished,
+        vec![run1.clone(), run2.clone()],
+        "no run reopened or finished twice"
+    );
+    // While idle: still filed on run 1.
+    emit(&first, subagent_item(&id, "sub-2", None));
+    eventually("idle late item", || item_run(&t, &id, "sub-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-2"), Some(run1));
+    assert_eq!(count(&t, &id, "run.finished"), 2);
+}
+
+#[tokio::test]
+async fn a_running_background_subagent_keeps_the_engine_from_idle_stopping() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "bg", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(turn.clone()),
+            subagent_id: "bg-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while the subagent runs"
+    );
+    // The subagent finishes late: its item lands on the run, then the idle stop follows.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn,
+            item: Box::new(subagent_item(&id, "bg-1-item", Some("bg-1"))),
+            locator: None,
+        },
+    );
+    eventually("idle stop after the subagent", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-1-item").is_some());
+}
+
+async fn setup_with(script: FakeScript, tweak: impl FnOnce(&mut HostOptions)) -> T {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(script);
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let mut options = opts(&path, 1);
+    tweak(&mut options);
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(options, Arc::new(store), Arc::new(fake.clone()), stall).unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    T {
+        host,
+        fake,
+        _dir: Some(dir),
+    }
+}
+
+fn shut_down(t: &T, id: &ThreadId) -> bool {
+    t.fake
+        .calls()
+        .iter()
+        .any(|c| matches!(c, FakeCall::Shutdown { thread_id } if thread_id == id))
+}
+
+fn item_run(t: &T, id: &ThreadId, item_id: &str) -> Option<goat2_contracts::RunId> {
+    events(t, id).into_iter().find_map(|e| match e {
+        LogEvent::ItemCompleted(i) if i.item.id.as_str() == item_id => Some(i.run_id),
+        _ => None,
+    })
+}
+
+fn late_text(id: &ThreadId, item_id: &str, text: &str) -> goat2_contracts::TurnItem {
+    goat2_host::engine::fake::assistant_item(id, &item_id.into(), "late", text)
+}
+
+/// A finished engine-native subagent item (`subagent_id` defaults to the item id).
+fn subagent_item(
+    id: &ThreadId,
+    item_id: &str,
+    subagent_id: Option<&str>,
+) -> goat2_contracts::TurnItem {
+    let mut item = late_text(id, item_id, "");
+    item.body = goat2_contracts::TurnItemBody::Subagent {
+        subagent_id: subagent_id.unwrap_or(item_id).to_owned(),
+        origin: goat2_contracts::SubagentOrigin::ProviderNative,
+        driver: "claudeAgent".into(),
+        provider_instance_id: "claudeAgent".into(),
+        child_thread_id: None,
+        prompt: "look around".into(),
+        progress: None,
+        result: Some("found it".into()),
+    };
+    item
+}
+
+#[tokio::test]
+async fn a_steer_the_engine_cancels_is_requeued_as_a_followup() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-cancel", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "steer-cancel-more", "also this", InputMode::Steer).await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let accepted_before = count(&t, &id, "input.accepted");
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SteerUpdated {
+            turn_id: turn,
+            input_ids: vec![steered.as_str().into()],
+            status: goat2_host::engine::SteerStatus::Cancelled {
+                reason: "discarded".into(),
+            },
+        },
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered && q.mode == InputMode::Followup)
+    })
+    .await;
+    assert_eq!(
+        count(&t, &id, "input.accepted"),
+        accepted_before,
+        "no second message"
+    );
+    // The next turn carries it.
+    t.fake.finish_turn(&id, "done");
+    eventually("next turn with the input", || {
+        t.fake.calls().iter().any(|c| {
+            matches!(
+                c,
+                FakeCall::Turn { input_ids, .. } if input_ids.contains(&steered)
+            )
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_turn_with_a_live_subagent_outlives_the_turn_cap() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(first.clone()),
+            subagent_id: "long-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    let mut second = None;
+    // 65 more turns: past the 64 turns the host remembers.
+    for n in 1..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(&t, &id, &format!("cap-{n}"), "next", InputMode::Followup).await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 1 {
+            second = t.fake.active_turn(&id);
+        }
+    }
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    // Turn 2 had no live subagent, so it was forgotten: its late item is dropped. Turn 1's
+    // subagent was still running, so its result lands on run 1.
+    emit(&second.unwrap(), late_text(&id, "late-2", "too late"));
+    emit(&first, subagent_item(&id, "long-1-item", Some("long-1")));
+    eventually("subagent result", || {
+        item_run(&t, &id, "long-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "long-1-item"), Some(run1));
+    assert_eq!(item_run(&t, &id, "late-2"), None);
+}
+
+#[tokio::test]
+async fn a_subagent_without_a_turn_keeps_its_origin_through_the_turn_cap() {
+    // Reported without a turn while turn 1 runs: turn 1 is its origin.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-none", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-1", goat2_contracts::TurnItemStatus::Running),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(
+        &t,
+        &id,
+        &first,
+        subagent_item(&id, "anon-1-item", Some("anon-1")),
+    );
+    eventually("subagent result", || {
+        item_run(&t, &id, "anon-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "anon-1-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn a_subagent_of_unknown_origin_stops_eviction_until_it_ends() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-unknown", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    t.fake.finish_turn(&id, "ok");
+    eventually("idle", || count(&t, &id, "run.finished") == 1).await;
+    // No turn running: its origin is unknown, so no turn may be forgotten while it lives.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Running),
+    );
+    send(&t, &id, "cap-unknown-2", "turn 2", InputMode::Followup).await;
+    eventually("turn 2", || running(&t, &id)).await;
+    let (second, run2) = (t.fake.active_turn(&id).unwrap(), last_run(&t, &id).unwrap());
+    let mut third = None;
+    for n in 2..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(
+            &t,
+            &id,
+            &format!("cap-unknown-{}", n + 1),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 2 {
+            third = t.fake.active_turn(&id);
+        }
+    }
+    // 65 turns later turn 2 is still known.
+    emit_item(&t, &id, &second, late_text(&id, "late-2", "still known"));
+    eventually("turn 2 item", || item_run(&t, &id, "late-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-2"), Some(run2));
+    // Once it ends and its finished item is recorded, the next turn trims the record back under
+    // the cap: turn 3 is forgotten.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Completed),
+    );
+    emit_item(
+        &t,
+        &id,
+        &second,
+        subagent_item(&id, "anon-2-item", Some("anon-2")),
+    );
+    eventually("anon-2 item", || item_run(&t, &id, "anon-2-item").is_some()).await;
+    more_turns(&t, &id, 65, 1).await;
+    emit_item(
+        &t,
+        &id,
+        &third.unwrap(),
+        late_text(&id, "late-3", "forgotten"),
+    );
+    // Barrier: an item of the running turn, handled after the one above.
+    let now = t.fake.active_turn(&id).unwrap();
+    emit_item(&t, &id, &now, late_text(&id, "barrier", "current"));
+    eventually("barrier", || item_run(&t, &id, "barrier").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-3"), None);
+}
+
+/// Finish the running turn and start `n` more; `done` runs have finished before.
+async fn more_turns(t: &T, id: &ThreadId, done: usize, n: usize) {
+    for k in 1..=n {
+        t.fake.finish_turn(id, "ok");
+        eventually("run finished", || count(t, id, "run.finished") == done + k).await;
+        send(
+            t,
+            id,
+            &format!("more-{}-{}", id.as_str(), done + k),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(t, id)).await;
+    }
+}
+
+fn subagent_update(
+    turn_id: Option<String>,
+    subagent_id: &str,
+    status: goat2_contracts::TurnItemStatus,
+) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SubagentUpdate {
+        turn_id,
+        subagent_id: subagent_id.into(),
+        status,
+        title: None,
+        progress: None,
+    }
+}
+
+fn emit_item(t: &T, id: &ThreadId, turn: &str, item: goat2_contracts::TurnItem) {
+    t.fake.emit(
+        id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn.to_owned(),
+            item: Box::new(item),
+            locator: None,
+        },
+    );
+}
+
+#[tokio::test]
+async fn an_ended_subagent_keeps_its_origin_until_its_item_arrives() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "ended-origin", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    // It reports its end; its finished item only comes after 65 more turns.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(&t, &id, &first, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("subagent result", || item_run(&t, &id, "bg-item").is_some()).await;
+    assert_eq!(item_run(&t, &id, "bg-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn an_ended_subagent_holds_the_idle_stop_until_its_item_arrives() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "ended-idle", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while its item is on the way"
+    );
+    emit_item(&t, &id, &turn, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-item").is_some());
+}
+
+#[tokio::test]
+async fn an_ended_subagent_whose_item_never_comes_stops_holding_after_the_grace() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "ended-grace", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(Some(turn), "bg", goat2_contracts::TurnItemStatus::Completed),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_failed_approval_answer_never_returns_the_engine_text() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "approval-fail", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-SECRET-1".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    let approval = || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .find(|r| r.kind == RequestKind::Approval)
+            .map(|r| r.request_id.clone())
+    };
+    eventually("approval open", || approval().is_some()).await;
+    t.fake.fail_answers(true);
+    let refused = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "approval-fail-1".into(),
+            thread_id: id.clone(),
+            request_id: approval().unwrap(),
+            outcome: RequestOutcome::Accept,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message, "the engine did not take the answer");
+}
+
+#[tokio::test]
+async fn a_steer_settled_after_its_turn_ended_is_ignored() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "late-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    t.fake.finish_turn(&id, "ok");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    let delivered_before = count(&t, &id, "input.delivered");
+    t.fake
+        .emit(&id, steer_cancelled(&turn, vec![steered.as_str()]));
+    // Barrier: a later event of the same session is handled after the cancel.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "barrier", goat2_contracts::TurnItemStatus::Running),
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        count(&t, &id, "input.delivered"),
+        delivered_before,
+        "nothing written"
+    );
+    assert!(
+        t.host.store().fold(&id).unwrap().queued_inputs.is_empty(),
+        "not requeued"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_requeues_only_inputs_this_turn_accepted_as_steers() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "stray-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "stray-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    // A stray id and a duplicate next to the real one: the real one is requeued once.
+    t.fake.emit(
+        &id,
+        steer_cancelled(
+            &turn,
+            vec!["in_not_a_steer", steered.as_str(), steered.as_str()],
+        ),
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered)
+    })
+    .await;
+    assert_eq!(t.host.store().fold(&id).unwrap().queued_inputs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_live_and_an_ended_subagent_still_let_the_idle_stop_happen() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "mixed", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let running_ = goat2_contracts::TurnItemStatus::Running;
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "live", running_));
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "ended", running_));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    // One ends (its item never comes) while the other still runs; an idle check passes in that
+    // state and does not re-arm. Then the other's item arrives without an end update.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "ended",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!shut_down(&t, &id));
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "live-item", Some("live")),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_subagent_first_heard_of_at_its_end_holds_until_its_item() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "first-end", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "quick",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!shut_down(&t, &id), "held while its item is on the way");
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "quick-item", Some("quick")),
+    );
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+}
+
+fn steered_input(t: &T) -> String {
+    t.fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine")
+}
+
+fn steer_cancelled(turn: &str, ids: Vec<&str>) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SteerUpdated {
+        turn_id: turn.to_owned(),
+        input_ids: ids.into_iter().map(Into::into).collect(),
+        status: goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    }
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
@@ -1986,4 +2660,852 @@ fn data_contains(t: &T, needle: &str) -> bool {
         })
     }
     walk(t._dir.as_ref().unwrap().path(), needle.as_bytes())
+}
+
+#[tokio::test]
+async fn usage_is_live_and_only_finished_snapshot_is_durable() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "usage", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let (mut rx, _) = t.host.watch_thread(&id);
+    let usage = |n| serde_json::from_value(serde_json::json!({"usedTokens": n})).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: Some("stale".into()),
+            usage: usage(31_415_926),
+        },
+    );
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::TokenUsage {
+            turn_id: None,
+            usage: usage(27_182_818),
+        },
+    );
+    let live = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let goat2_host::api::ThreadLive::Usage { usage, updated_at } =
+                rx.recv().await.unwrap()
+            {
+                break (usage, updated_at);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(live.0.used_tokens, 27_182_818);
+    assert!(chrono::DateTime::parse_from_rfc3339(&live.1).is_ok());
+    t.fake.finish_turn(&id, "done");
+    eventually("finished", || count(&t, &id, "run.finished") == 1).await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .find_map(|e| match e {
+            LogEvent::RunFinished(e) => Some(e),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished.token_usage.unwrap().used_tokens, 27_182_818);
+    assert_eq!(
+        t.host
+            .store()
+            .card(&id)
+            .unwrap()
+            .context_usage
+            .unwrap()
+            .used_tokens,
+        27_182_818
+    );
+    assert!(!data_contains(&t, "thread_usage"));
+    assert!(!data_contains(&t, "31415926"));
+}
+
+#[tokio::test]
+async fn keyed_signin_answers_engine_and_declines_at_run_end() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+        (RequestOutcome::Cancel, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("SECRET-KEY".into()),
+                turn_id: t.fake.active_turn(&id),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("signin", || !signins(&t, &id).is_empty()).await;
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "SECRET-KEY" && *outcome == expected)));
+        assert!(!data_contains(&t, "SECRET-KEY"));
+    }
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-end", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-END".into()),
+            turn_id: t.fake.active_turn(&id),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-END")));
+    assert!(!data_contains(&t, "KEY-END"));
+}
+
+#[tokio::test]
+async fn a_repeated_keyed_signin_declines_the_replaced_key_and_errors_never_show_a_key() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-repeat", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-FIRST-7731"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.emit(&id, auth("KEY-SECOND-7732"));
+    eventually("first key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-FIRST-7731"))
+    })
+    .await;
+    assert_eq!(signins(&t, &id).len(), 1, "one request per scope");
+    // The engine fails the answer with an error naming the key: the reply carries no key.
+    t.fake.fail_answers(true);
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    let reply = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-fail".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await;
+    let shown = format!("{reply:?}");
+    assert!(reply.is_err(), "{shown}");
+    assert!(!shown.contains("KEY-SECOND-7732"), "{shown}");
+    assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Accept, .. } if key == "KEY-SECOND-7732")));
+    assert!(!data_contains(&t, "KEY-FIRST-7731"));
+    assert!(!data_contains(&t, "KEY-SECOND-7732"));
+}
+
+#[tokio::test]
+async fn a_late_keyed_signin_is_declined_and_a_failed_decline_is_retried() {
+    // A keyed sign-in naming a turn that already ended is declined, not left waiting.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-late", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let ended = t.fake.active_turn(&id).unwrap();
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-LATE-4401".into()),
+            turn_id: Some(ended),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("late key declined", || {
+        t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome: RequestOutcome::Decline, .. } if key == "KEY-LATE-4401"))
+    })
+    .await;
+    assert!(signins(&t, &id).is_empty(), "no request for an ended turn");
+
+    // A decline that fails while a newer key replaces the old one is retried at run end.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    t.fake.emit(&id, auth("KEY-OLD-4402"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-NEW-4403"));
+    let declines = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: RequestOutcome::Decline, .. } if k == key))
+            .count()
+    };
+    eventually("first decline attempted", || declines("KEY-OLD-4402") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("old key retried", || declines("KEY-OLD-4402") == 2).await;
+    assert_eq!(
+        declines("KEY-NEW-4403"),
+        1,
+        "the current key is declined at run end"
+    );
+    assert!(!data_contains(&t, "KEY-OLD-4402"));
+}
+
+#[tokio::test]
+async fn a_key_answered_after_a_failed_decline_is_never_declined_later() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-aba", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: t.fake.active_turn(&id),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str, outcome: RequestOutcome| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, outcome: o, .. } if k == key && *o == outcome))
+            .count()
+    };
+    // A, then B while declines fail (A waits for a retry), then A again.
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("signin", || !signins(&t, &id).is_empty()).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    eventually("A decline failed", || {
+        answers("KEY-A-5501", RequestOutcome::Decline) == 1
+    })
+    .await;
+    t.fake.emit(&id, auth("KEY-B-5502"));
+    t.fake.emit(&id, auth("KEY-A-5501"));
+    eventually("B decline attempted", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 1
+    })
+    .await;
+    t.fake.fail_answers(false);
+    // The person accepts A; the run end must not decline it afterwards.
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-a".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answers("KEY-A-5501", RequestOutcome::Accept), 1);
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B retried", || {
+        answers("KEY-B-5502", RequestOutcome::Decline) >= 2
+    })
+    .await;
+    assert_eq!(
+        answers("KEY-A-5501", RequestOutcome::Decline),
+        1,
+        "A was only declined while it was replaced"
+    );
+    let b_retries = answers("KEY-B-5502", RequestOutcome::Decline);
+    assert_eq!(b_retries, 2, "B is queued once and retried once");
+}
+
+#[tokio::test]
+async fn one_engine_key_has_one_signin_and_one_answer() {
+    for (requested, expected) in [
+        (RequestOutcome::Answered, RequestOutcome::Accept),
+        (RequestOutcome::Decline, RequestOutcome::Decline),
+    ] {
+        let t = setup(manual()).await;
+        let id = start_user_thread(&t, "keyed-shared", Some("hello")).await;
+        eventually("running", || running(&t, &id)).await;
+        let answers = || {
+            t.fake
+                .calls()
+                .iter()
+                .filter(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-SHARED-6601"))
+                .count()
+        };
+        let turn = t.fake.active_turn(&id).unwrap();
+        // The engine raises the same key at session level and for the running turn.
+        for turn_id in [None, Some(turn.clone())] {
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-SHARED-6601".into()),
+                    turn_id,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+        }
+        // A probe key on a turn that never ran is declined after both, settling the order.
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-PROBE-6602".into()),
+                turn_id: Some("turn-never".into()),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6602"))
+        })
+        .await;
+        assert_eq!(signins(&t, &id).len(), 1, "one key, one sign-in request");
+        // The person answers it: exactly one engine answer, with the person's outcome.
+        let request_id = signins(&t, &id)[0].request_id.clone();
+        t.host
+            .command(ClientFrame::ResolveRequest {
+                req_id: "r".into(),
+                client_request_id: "resolve-shared".into(),
+                thread_id: id.clone(),
+                request_id,
+                outcome: requested,
+                text: None,
+                answers: None,
+                option_id: None,
+            })
+            .await
+            .unwrap();
+        assert!(t.fake.calls().iter().any(|c| matches!(c, FakeCall::Answer { key, outcome, .. } if key == "KEY-SHARED-6601" && *outcome == expected)));
+        // Neither the run end nor a late repeat answers that key again.
+        t.fake.finish_turn(&id, "done");
+        eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::AuthRequired {
+                key: Some("KEY-PROBE-6603".into()),
+                turn_id: Some("turn-never".into()),
+                url: None,
+                message: "signin".into(),
+            },
+        );
+        eventually("second probe declined", || {
+            t.fake
+                .calls()
+                .iter()
+                .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-PROBE-6603"))
+        })
+        .await;
+        assert_eq!(answers(), 1, "the shared key is answered once");
+    }
+}
+
+#[tokio::test]
+async fn a_settled_signin_key_is_never_answered_again() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-settled", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let auth = |key: &str, turn_id: Option<String>| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id,
+        url: None,
+        message: "signin".into(),
+    };
+    let answered = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    let probe = |n: &'static str| async move {
+        eventually("probe", || answered(n) == 1).await;
+    };
+    // The person accepts K.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    let request_id = signins(&t, &id)[0].request_id.clone();
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "resolve-k".into(),
+            thread_id: id.clone(),
+            request_id,
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(answered("KEY-K-7701"), 1);
+    // K again for the live turn, at session level, and for a turn that ended: all ignored.
+    t.fake.emit(&id, auth("KEY-K-7701", Some(turn.clone())));
+    t.fake.emit(&id, auth("KEY-K-7701", None));
+    t.fake
+        .emit(&id, auth("KEY-K-7701", Some("turn-gone".into())));
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7702", Some("turn-gone".into())));
+    probe("KEY-PROBE-7702").await;
+    assert_eq!(answered("KEY-K-7701"), 1, "K is answered once");
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "no new request for a settled key"
+    );
+
+    // L: the first decline fails, a later one succeeds; the run end does not answer it again.
+    t.fake.fail_answers(true);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("failed decline", || answered("KEY-L-7703") == 1).await;
+    t.fake.fail_answers(false);
+    t.fake
+        .emit(&id, auth("KEY-L-7703", Some("turn-gone".into())));
+    eventually("successful decline", || answered("KEY-L-7703") == 2).await;
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake
+        .emit(&id, auth("KEY-PROBE-7704", Some("turn-gone".into())));
+    probe("KEY-PROBE-7704").await;
+    assert_eq!(
+        answered("KEY-L-7703"),
+        2,
+        "no retry after a successful decline"
+    );
+}
+
+#[tokio::test]
+async fn a_completed_steer_is_not_requeued_by_a_later_cancel() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-completed", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(
+        &t,
+        &id,
+        "steer-completed-more",
+        "also this",
+        InputMode::Steer,
+    )
+    .await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let delivered = |t: &T| count(t, &id, "input.delivered");
+    let before = delivered(&t);
+    for status in [
+        goat2_host::engine::SteerStatus::Completed,
+        goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    ] {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::SteerUpdated {
+                turn_id: turn.clone(),
+                input_ids: vec![steered.as_str().into()],
+                status,
+            },
+        );
+    }
+    // The turn ends after both events were handled; the read steer never comes back.
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(
+        delivered(&t),
+        before,
+        "no second input.delivered for a read steer"
+    );
+    assert!(
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered),
+        "the read steer is not queued again"
+    );
+}
+
+#[tokio::test]
+async fn an_engine_closed_keyed_signin_closes_and_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn.clone(),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-C-8801".into(),
+        },
+    );
+    eventually("closed", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+    // A later repeat of the closed key and the run end never answer it.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn,
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(signins(&t, &id).len(), 1, "no new request for a closed key");
+    assert!(
+        !t.fake
+            .calls()
+            .iter()
+            .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-C-8801")),
+        "the engine is never answered for a key it closed"
+    );
+}
+
+#[tokio::test]
+async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: turn.clone(),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    // A is replaced by B while declines fail: A waits for a retry.
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-8902"));
+    eventually("A decline failed", || answers("KEY-A-8901") == 1).await;
+    t.fake.fail_answers(false);
+    // The engine closes A itself; a repeat of A and the run end never answer it again.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-A-8901".into(),
+        },
+    );
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B declined at run end", || answers("KEY-B-8902") == 1).await;
+    assert_eq!(
+        answers("KEY-A-8901"),
+        1,
+        "A is not retried after the engine closed it"
+    );
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "a closed key opens no new request"
+    );
+}
+
+/// A store whose appends can be made to fail, to check that a failed log write fences the thread.
+struct FlakyStore {
+    inner: LaneAStore,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl goat2_host::store::ThreadStore for FlakyStore {
+    fn index_epoch(&self) -> goat2_contracts::Epoch {
+        self.inner.index_epoch()
+    }
+    fn create(
+        &self,
+        id: &ThreadId,
+        created: goat2_contracts::ThreadCreated,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        self.inner.create(id, created)
+    }
+    fn append(
+        &self,
+        id: &ThreadId,
+        events: Vec<LogEvent>,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
+        }
+        self.inner.append(id, events)
+    }
+    fn card(&self, id: &ThreadId) -> Option<goat2_contracts::ThreadCard> {
+        self.inner.card(id)
+    }
+    fn fold(&self, id: &ThreadId) -> Option<goat2_contracts::Fold> {
+        self.inner.fold(id)
+    }
+    fn cards(&self) -> Vec<goat2_contracts::ThreadCard> {
+        self.inner.cards()
+    }
+    fn cards_after(
+        &self,
+        after: Option<&goat2_contracts::CardCursor>,
+    ) -> goat2_host::store::CardsAfter {
+        self.inner.cards_after(after)
+    }
+    fn delete(&self, id: &ThreadId) -> goat2_host::store::StoreResult<()> {
+        self.inner.delete(id)
+    }
+    fn thread_epoch(&self, id: &ThreadId) -> Option<goat2_contracts::Epoch> {
+        self.inner.thread_epoch(id)
+    }
+    fn last_seq(&self, id: &ThreadId) -> Option<u64> {
+        self.inner.last_seq(id)
+    }
+    fn read_after(
+        &self,
+        id: &ThreadId,
+        after: u64,
+    ) -> goat2_host::store::StoreResult<Vec<goat2_contracts::LogLine>> {
+        self.inner.read_after(id, after)
+    }
+    fn read_page(
+        &self,
+        id: &ThreadId,
+        before: u64,
+        limit: usize,
+    ) -> goat2_host::store::StoreResult<(Vec<goat2_contracts::LogLine>, bool)> {
+        self.inner.read_page(id, before, limit)
+    }
+    fn latest_checkpoint_seq(&self, id: &ThreadId) -> goat2_host::store::StoreResult<Option<u64>> {
+        self.inner.latest_checkpoint_seq(id)
+    }
+    fn flush(&self) -> goat2_host::store::StoreResult<()> {
+        self.inner.flush()
+    }
+}
+
+#[tokio::test]
+async fn a_failed_log_write_fences_the_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    // The engine asks for approval, but the request cannot be written: nobody could see it,
+    // so the engine must not keep waiting. The thread stops its engine.
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    // Writes work again, but the fenced thread starts no run until the host restarts.
+    fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    let turns = || {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Turn { thread_id, .. } if thread_id == &id))
+            .count()
+    };
+    let before = turns();
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "after-fence".into(),
+            thread_id: id.clone(),
+            text: "more".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(turns(), before, "a fenced thread starts no run");
+}
+
+#[tokio::test]
+async fn a_session_signin_left_by_a_restart_is_closed() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = start_user_thread(&t, "stale-signin", Some("go")).await;
+            eventually("running", || running(&t, &id)).await;
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-STALE-9101".into()),
+                    turn_id: None,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+            eventually("session signin", || signins(&t, &id).len() == 1).await;
+            id
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    // Any message wakes the thread's actor; its start closes the stale sign-in.
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "wake".into(),
+            thread_id: id.clone(),
+            text: "hello again".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    eventually("stale sign-in closed", || {
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .any(|r| r.kind == RequestKind::Signin)
+    })
+    .await;
+    drop(keep);
+}
+
+#[tokio::test]
+async fn a_fenced_thread_drops_its_unfinished_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced-stream", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ContentDelta {
+            turn_id: turn.clone(),
+            item_id: "think-1".into(),
+            stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+            text: "half a thought".into(),
+        },
+    );
+    eventually("streaming", || !t.host.watch_thread(&id).1.is_empty()).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: turn,
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    eventually("no unfinished stream for a later subscriber", || {
+        t.host.watch_thread(&id).1.is_empty()
+    })
+    .await;
 }

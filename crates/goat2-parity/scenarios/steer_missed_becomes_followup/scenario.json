@@ -1,14 +1,15 @@
 {
   "v": 1,
   "name": "steer_missed_becomes_followup",
-  "summary": "steer missed becomes followup",
+  "summary": "a steer that misses its turn (the target run already completed) is kept as a new turn for the same message; the effect-time race (missedBeforeSubmit) is source-only",
   "spec": [
-    "docs/parity/README.md"
+    "docs/parity/follow-up-modes.md"
   ],
   "v1Refs": [
     "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/codex_transcript.ndjson:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/input.ts:1",
-    "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/codex_output.ts:20"
+    "apps/server/src/orchestration-v2/goat/DispatchModeAdjustment.ts:14-39",
+    "apps/server/src/orchestration-v2/Orchestrator.ts:5339",
+    "apps/server/src/orchestration-v2/EffectWorker.ts:310-360"
   ],
   "streams": {
     "codex": {
@@ -28,23 +29,108 @@
       "stream": "codex"
     }
   },
-  "steps": [],
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with exactly: first fixture turn complete",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "idle",
+      "thread": "t1",
+      "until": "idle"
+    },
+    {
+      "do": "send",
+      "id": "send2",
+      "thread": "t1",
+      "input": "i2",
+      "text": "Respond with exactly: second fixture turn complete",
+      "mode": "steer",
+      "run": "r1"
+    }
+  ],
   "expect": {
-    "complete": false,
-    "exhaustive": [],
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "queue.changed",
+      "run.started",
+      "steer.applied",
+      "run.finished",
+      "child.started",
+      "child.reported",
+      "parent.woken",
+      "tool.result",
+      "host.restarted"
+    ],
     "threads": {
-      "t1": []
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with exactly: first fixture turn complete"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "done"
+        },
+        {
+          "id": "e4",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i2",
+          "from": "user",
+          "mode": "steer",
+          "text": "Respond with exactly: second fixture turn complete"
+        },
+        {
+          "id": "e5",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r2",
+          "inputs": [
+            "i2"
+          ]
+        },
+        {
+          "id": "e6",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r2",
+          "status": "done"
+        }
+      ]
     },
     "happensBefore": []
   },
   "targets": {
     "v1": {
-      "status": "pending",
-      "reason": "awaiting wp3 driver evidence"
+      "status": "supported"
     },
     "goat2": {
-      "status": "pending",
-      "reason": "no host yet"
+      "status": "supported"
     }
   }
 }

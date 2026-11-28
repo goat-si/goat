@@ -160,6 +160,7 @@ mod tests {
                 run_id: RunId::from("run-1"),
                 outcome: RunOutcome::Completed,
                 reason: None,
+                token_usage: None,
             }),
         )
     }
@@ -409,5 +410,46 @@ mod part2_tests {
             credential_owner: None,
         };
         assert!(serde_json::to_value(&state).is_err());
+    }
+}
+
+/// Positive safe wire integer, optional.
+pub mod positive_safe_u64_opt {
+    use serde::{Deserializer, Serializer, de, ser};
+    pub fn serialize<S: Serializer>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error> {
+        if *value == Some(0) {
+            return Err(<S::Error as ser::Error>::custom("must be positive"));
+        }
+        super::safe_u64_opt::serialize(value, serializer)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<u64>, D::Error> {
+        let value = super::safe_u64_opt::deserialize(deserializer)?;
+        if value == Some(0) {
+            return Err(<D::Error as de::Error>::custom("must be positive"));
+        }
+        Ok(value)
+    }
+}
+pub mod currency {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+    fn valid(v: &str) -> bool {
+        !v.is_empty()
+            && v.chars().count() <= 32
+            && v.trim_matches(super::is_ecmascript_whitespace) == v
+    }
+    pub fn serialize<S: Serializer>(v: &str, s: S) -> Result<S::Ok, S::Error> {
+        if !valid(v) {
+            return Err(<S::Error as ser::Error>::custom("invalid currency"));
+        }
+        s.serialize_str(v)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        let v = String::deserialize(d)?;
+        if !valid(&v) {
+            return Err(<D::Error as de::Error>::custom("invalid currency"));
+        }
+        Ok(v)
     }
 }

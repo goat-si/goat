@@ -43,10 +43,16 @@ pub enum ThreadLive {
     Text {
         item_id: ItemId,
         offset: u64,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// The item finished (its `item.completed` line follows or preceded); drop its buffer.
     TextDone { item_id: ItemId },
+    /// A live usage snapshot, never stored as a frame.
+    Usage {
+        usage: Box<goat2_contracts::ThreadTokenUsageSnapshot>,
+        updated_at: String,
+    },
     /// The thread's log was replaced or removed.
     Reset { epoch: Epoch, reason: ResetReason },
 }
@@ -55,6 +61,7 @@ pub enum ThreadLive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamingItem {
     pub item_id: ItemId,
+    pub stream_kind: goat2_contracts::ContentStreamKind,
     pub text: String,
 }
 

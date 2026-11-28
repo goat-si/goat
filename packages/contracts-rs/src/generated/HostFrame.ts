@@ -4,6 +4,7 @@ import type { BotProfile } from "./BotProfile.ts";
 import type { CardCursor } from "./CardCursor.ts";
 import type { CommandError } from "./CommandError.ts";
 import type { CommandValue } from "./CommandValue.ts";
+import type { ContentStreamKind } from "./ContentStreamKind.ts";
 import type { Epoch } from "./Epoch.ts";
 import type { ItemId } from "./ItemId.ts";
 import type { LogLine } from "./LogLine.ts";
@@ -12,8 +13,13 @@ import type { ServerProviderEntry } from "./ServerProviderEntry.ts";
 import type { ThreadCard } from "./ThreadCard.ts";
 import type { ThreadCursor } from "./ThreadCursor.ts";
 import type { ThreadId } from "./ThreadId.ts";
+import type { ThreadTokenUsageSnapshot } from "./ThreadTokenUsageSnapshot.ts";
 
 /**
  * Frames the host sends.
  */
-export type HostFrame = { "type": "providers", subId: string, providers: Array<ServerProviderEntry>, } | { "type": "cards_reset", subId: string, reason: ResetReason, epoch: Epoch, } | { "type": "card_changed", subId: string, card: ThreadCard, } | { "type": "card_removed", subId: string, threadId: ThreadId, cardSeq: number, } | { "type": "cards_caught_up", subId: string, cursor: CardCursor, } | { "type": "thread_reset", subId: string, threadId: ThreadId, reason: ResetReason, epoch: Epoch, } | { "type": "thread_event", subId: string, threadId: ThreadId, line: LogLine, } | { "type": "thread_caught_up", subId: string, threadId: ThreadId, cursor: ThreadCursor, } | { "type": "text_append", subId: string, threadId: ThreadId, itemId: ItemId, offset: number, text: string, } | { "type": "page", reqId: string, threadId: ThreadId, lines: Array<LogLine>, hasMore: boolean, } | { "type": "error", subId?: string, reqId?: string, code: string, message: string, } | { "type": "ping", at: string, } | { "type": "command_result", reqId: string, ok: boolean, value?: CommandValue, error?: CommandError, } | { "type": "bot_changed", subId: string, bot: BotProfile, } | { "type": "bot_removed", subId: string, botId: BotId, };
+export type HostFrame = { "type": "providers", subId: string, providers: Array<ServerProviderEntry>, } | { "type": "cards_reset", subId: string, reason: ResetReason, epoch: Epoch, } | { "type": "card_changed", subId: string, card: ThreadCard, } | { "type": "card_removed", subId: string, threadId: ThreadId, cardSeq: number, } | { "type": "cards_caught_up", subId: string, cursor: CardCursor, } | { "type": "thread_reset", subId: string, threadId: ThreadId, reason: ResetReason, epoch: Epoch, } | { "type": "thread_event", subId: string, threadId: ThreadId, line: LogLine, } | { "type": "thread_usage", subId: string, threadId: ThreadId, usage: ThreadTokenUsageSnapshot, updatedAt: string, } | { "type": "thread_caught_up", subId: string, threadId: ThreadId, cursor: ThreadCursor, } | { "type": "text_append", subId: string, threadId: ThreadId, itemId: ItemId, offset: number,
+/**
+ * Omitted for assistant_text, which is the default.
+ */
+streamKind?: ContentStreamKind, text: string, } | { "type": "page", reqId: string, threadId: ThreadId, lines: Array<LogLine>, hasMore: boolean, } | { "type": "error", subId?: string, reqId?: string, code: string, message: string, } | { "type": "ping", at: string, } | { "type": "command_result", reqId: string, ok: boolean, value?: CommandValue, error?: CommandError, } | { "type": "bot_changed", subId: string, bot: BotProfile, } | { "type": "bot_removed", subId: string, botId: BotId, };
