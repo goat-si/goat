@@ -258,7 +258,7 @@ function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string
       items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={btn(e.task, () => onOpenTask(e.childThreadId), { "data-child-row": e.childThreadId })} />);
     }
   }
-  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} item={thread.requestItems[r.requestId]} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
+  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} item={thread.requestItems[r.requestId]} onLoadDetails={thread.hasOlder ? () => client.readOlder(bot.threadId!) : undefined} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
   for (const o of outbox) {
     const status = o.status === "unconfirmed" ? "Not confirmed" : o.status === "failed" ? `Not sent · ${o.error ?? ""}` : snap.connection === "open" ? "Sent" : `Sent · ${bot.name} starts when the host connects`;
     items.push(
@@ -291,7 +291,7 @@ function UserBubble({ text }: { text: string }) {
   return <P.SentMessage text={text} face={null} status={null} actions={null} />;
 }
 
-export function RequestCard({ threadId, request, item, onHide }: { threadId: string; request: RequestOpened; item?: TurnItem | undefined; onHide: () => void }) {
+export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: { threadId: string; request: RequestOpened; item?: TurnItem | undefined; onHide: () => void; onLoadDetails?: (() => void) | undefined }) {
   const client = useClient();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -321,7 +321,9 @@ export function RequestCard({ threadId, request, item, onHide }: { threadId: str
     const offered = item.options?.length ? item.options : [{ decision: "accept" as const, label: "Approve" }, { decision: "decline" as const, label: "Decline" }];
     buttons = offered.map((o, i) => action(o.decision, o.label, i === 0, { outcome: o.decision }, o.warning));
   } else if (request.kind === "question" && item?.type === "user_input_request") {
-    const missing = item.questions.filter((q) => q.required !== false && !(answers[q.id]?.length) && !custom[q.id]?.trim());
+    // The text box shows custom ?? initialAnswer; the same value is validated and sent, unchanged.
+    const typedOf = (q: (typeof item.questions)[number]) => custom[q.id] ?? q.initialAnswer ?? "";
+    const missing = item.questions.filter((q) => q.required !== false && !(answers[q.id]?.length) && typedOf(q).trim() === "");
     body = <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {item.questions.map((q) => (
         <div key={q.id} data-question={q.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -330,14 +332,18 @@ export function RequestCard({ threadId, request, item, onHide }: { threadId: str
             {q.options.map((o) => {
               const value = o.value ?? o.label;
               const on = answers[q.id]?.includes(value) ?? false;
-              return <span key={value} {...(btn(o.label, () => setAnswers((a) => {
-                const cur = a[q.id] ?? [];
-                return { ...a, [q.id]: q.multiSelect ? (on ? cur.filter((x) => x !== value) : [...cur, value]) : (on ? [] : [value]) };
-              }), { "aria-pressed": on, title: o.description }) as object)}
+              return <span key={value} {...(btn(o.label, () => {
+                setAnswers((a) => {
+                  const cur = a[q.id] ?? [];
+                  return { ...a, [q.id]: q.multiSelect ? (on ? cur.filter((x) => x !== value) : [...cur, value]) : (on ? [] : [value]) };
+                });
+                // Single choice: picking an option replaces a typed answer, so what is sent is what is shown.
+                if (!q.multiSelect && !on) setCustom((c) => ({ ...c, [q.id]: "" }));
+              }, { "aria-pressed": on, title: o.description }) as object)}
                 style={{ padding: "4px 10px", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: on ? "#FFFFFF" : "#0D0D0D", background: on ? "#0D0D0D" : "#FFFFFF", boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }}>{o.label}</span>;
             })}
           </div>
-          {(q.allowCustomAnswer || q.options.length === 0) && <input aria-label={`Answer: ${q.header}`} value={custom[q.id] ?? q.initialAnswer ?? ""} onChange={(e) => setCustom((c) => ({ ...c, [q.id]: e.target.value }))}
+          {(q.allowCustomAnswer || q.options.length === 0) && <input aria-label={`Answer: ${q.header}`} value={typedOf(q)} onChange={(e) => { const v = e.target.value; setCustom((c) => ({ ...c, [q.id]: v })); if (!q.multiSelect && v !== "") setAnswers((a) => ({ ...a, [q.id]: [] })); }}
             style={{ all: "unset", padding: "6px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />}
         </div>
       ))}
@@ -345,8 +351,8 @@ export function RequestCard({ threadId, request, item, onHide }: { threadId: str
     const payload: Record<string, string | string[]> = {};
     for (const q of item.questions) {
       const picked = answers[q.id] ?? [];
-      const typed = custom[q.id]?.trim();
-      const all = typed ? [...picked, typed] : picked;
+      const typed = typedOf(q);
+      const all = typed.trim() !== "" ? [...picked, typed] : picked;
       if (all.length) payload[q.id] = q.multiSelect ? all : all[0]!;
     }
     buttons = [action("answered", "Answer", true, { outcome: "answered", answers: payload }, missing.length ? "Answer the required questions first" : undefined, missing.length > 0), notNow];
@@ -354,8 +360,8 @@ export function RequestCard({ threadId, request, item, onHide }: { threadId: str
     buttons = [action("resend", "Resend", true, { outcome: "resend" }, "Send the message again"), action("dropped", "Drop", false, { outcome: "dropped" })];
   } else if (request.kind === "approval" || request.kind === "question") {
     // Fail closed: without the engine's waiting item we do not know the offered choices.
-    body = <>{body}{text("Waiting for the details of this request from the host.")}</>;
-    buttons = [notNow];
+    body = <>{body}{text(onLoadDetails ? "The details are in an earlier part of this thread." : "Waiting for the details of this request from the host.")}</>;
+    buttons = onLoadDetails ? [<P.DecisionSecondary key="load" label="Load details" button={btn("Load details", onLoadDetails, { "data-option": "load" })} />, notNow] : [notNow];
   } else {
     body = body ?? "Signing in from here is not built yet.";
     buttons = [notNow, <Planned key="p" id="settings-accounts" style={{ alignSelf: "center" }} />];

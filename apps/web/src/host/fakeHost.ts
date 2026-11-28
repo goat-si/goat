@@ -167,7 +167,8 @@ export class FakeHost implements Transport {
           const missing = waiting.questions.filter((q) => q.required !== false && frame.answers?.[q.id] === undefined);
           if (frame.outcome !== "answered" || missing.length) return this.fail("invalid_request", "Answer the required questions.");
         }
-        this.append(t, { type: "request.resolved", requestId: frame.requestId, outcome: frame.outcome, ...(frame.optionId ? { optionId: frame.optionId } : {}), ...(frame.text ? { text: frame.text } : {}) });
+        this.append(t, { type: "request.resolved", requestId: frame.requestId, outcome: frame.outcome, ...(frame.optionId ? { optionId: frame.optionId } : {}), ...(frame.text ? { text: frame.text } : {}), ...(frame.answers ? { answers: frame.answers } : {}) });
+        if (frame.answers && typeof window !== "undefined") (window as unknown as { __goat2FakeAnswers?: unknown }).__goat2FakeAnswers = frame.answers; // tests read it
         const stillOpen = this.openRequestIds(t).size > 0;
         this.touch(t, { status: stillOpen ? "needs_you" : this.activeRun(t) ? "running" : "idle", needsYou: stillOpen ? t.card.needsYou : null });
         return this.ok({ threadId: t.card.id, requestId: frame.requestId });

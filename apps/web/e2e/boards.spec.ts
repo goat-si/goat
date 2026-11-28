@@ -201,3 +201,14 @@ test("thread view: structured question answers", async ({ page }) => {
   await page.locator("[data-option=answered]").click();
   await expect(page.getByText("Which columns go into the export?")).toHaveCount(0);
 });
+
+test("question answers survive resolution exactly (single-select vs custom text)", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.locator("[data-thread-row=t-csv]").click();
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Customer", exact: true }).click();
+  await page.getByLabel("Answer: File name").fill("  report q4.csv");
+  await page.locator("[data-option=answered]").click();
+  await expect(page.getByText("Which columns go into the export?")).toHaveCount(0);
+  const answers = await page.evaluate(() => (window as unknown as { __goat2FakeAnswers?: unknown }).__goat2FakeAnswers);
+  expect(answers).toEqual({ columns: ["Customer"], name: "  report q4.csv" });
+});
