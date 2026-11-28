@@ -13,7 +13,7 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | `crates/goat2-host` | Rust (bin `goat2-host`) | The host: mailbox/lane, caps, follow-ups, child wake, restart settlement, MCP (`rmcp`), WebSocket API | E | stub |
 | `packages/contracts-rs` | TS (generated) | TS types + JSON Schema from goat2-contracts. Never hand-edit | C | generated (`a2c6b7c`) |
 | `apps/web` | TS/React | UI: Paper look 1:1 (bot home, thread view), talks only to the host WebSocket; generated parts `src/paper/parts.tsx`, Planned shells `src/planned/` | F | real: bot home slice `f880c2d` (2R-1, FF-1, U8-1, 12P-1, 1KL4-1); thread mode next |
-| `apps/desktop` | TS/Electron | Window shell; spawns and supervises `goat2-host`; packages GOAT 2 (Dev) | G | real (`5d9368c`) |
+| `apps/desktop` | TS/Electron | Window shell; spawns and supervises `goat2-host`; packages GOAT 2 (Dev) | G | real (`1212962`): v1 desktop lift (recovery, window, menu, protocol, single instance, Info.plist, osx-sign ad-hoc + hardened runtime) |
 | ~~`apps/server`~~ | - | removed `5d9368c` | - | gone |
 | `packages/contracts` | TS | v1-lifted provider/model/bot types used by the UI | F | real, keep until UI only needs contracts-rs |
 | `packages/provider-icons` | TS | Real provider marks from v1 + `ProviderChip` | F | real |
@@ -21,6 +21,6 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | `packages/bot-face` | TS | Face poses + motion tokens | F | real |
 | `design/paper/part1/` | - | Paper exports (JSX + jpg + manifest) the UI follows | owner | generated |
 | `scripts/paper-parts.py` | Py | Paper export → `apps/web/src/paper/parts.tsx` | F | real |
-| `scripts/build-dev-app.sh` | sh | Build + install GOAT 2 (Dev), only from `goat2` | G | real |
+| `scripts/build-dev-app.sh` | sh | Build + install GOAT 2 (Dev), only from `goat2`, gate: `pnpm -r typecheck` + `cargo test --workspace --locked` | G | real (`1212962`) |
 | `docs/` | md | DECISIONS, PAPER, DESIGN, MOTION, PROVENANCE, lanes, parity (D) | owner + lanes | real |
 | `structure/` | md | This SSOT | owner | real |
