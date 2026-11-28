@@ -3103,3 +3103,63 @@ async fn a_settled_signin_key_is_never_answered_again() {
         "no retry after a successful decline"
     );
 }
+
+#[tokio::test]
+async fn a_completed_steer_is_not_requeued_by_a_later_cancel() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-completed", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(
+        &t,
+        &id,
+        "steer-completed-more",
+        "also this",
+        InputMode::Steer,
+    )
+    .await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let delivered = |t: &T| count(t, &id, "input.delivered");
+    let before = delivered(&t);
+    for status in [
+        goat2_host::engine::SteerStatus::Completed,
+        goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    ] {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::SteerUpdated {
+                turn_id: turn.clone(),
+                input_ids: vec![steered.as_str().into()],
+                status,
+            },
+        );
+    }
+    // The turn ends after both events were handled; the read steer never comes back.
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(
+        delivered(&t),
+        before,
+        "no second input.delivered for a read steer"
+    );
+    assert!(
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered),
+        "the read steer is not queued again"
+    );
+}

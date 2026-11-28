@@ -1068,7 +1068,14 @@ impl Actor {
                 input_ids,
                 status,
             } => match status {
-                crate::engine::SteerStatus::Completed => {}
+                crate::engine::SteerStatus::Completed => {
+                    // The engine read these steers: a later cancel for them is not honoured.
+                    if let Phase::Running(run) = &mut self.phase
+                        && run.turn_id == turn_id
+                    {
+                        run.steered.retain(|s| !input_ids.contains(s));
+                    }
+                }
                 crate::engine::SteerStatus::Cancelled { reason } => {
                     self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
                 }
