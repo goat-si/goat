@@ -10,5 +10,5 @@ publish = false
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-ts-rs = { version = "12", features = ["serde-json-impl"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "no-serde-warnings"] }
 schemars = "1.2"

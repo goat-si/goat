@@ -1,0 +1,916 @@
+{
+  "$defs": {
+    "BlobRef": {
+      "description": "Where a large body or attachment lives inside the thread folder.",
+      "properties": {
+        "path": {
+          "description": "Path relative to the thread folder, e.g. `blobs/<itemId>.txt`.",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "description": "Full size in bytes.",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "BotFace": {
+      "description": "A bot's face, drawn by `packages/bot-face`.",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "goat": {
+          "description": "The GOAT mark instead of a generated face.",
+          "type": "boolean"
+        },
+        "shape": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "color",
+        "goat"
+      ],
+      "type": "object"
+    },
+    "BotId": {
+      "description": "A bot. Each bot owns one `bot` thread.",
+      "type": "string"
+    },
+    "CardCursor": {
+      "description": "Position in the card index.",
+      "properties": {
+        "cardSeq": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        }
+      },
+      "required": [
+        "epoch",
+        "cardSeq"
+      ],
+      "type": "object"
+    },
+    "ChatAttachment": {
+      "description": "v1 `ChatImageAttachment` / `ChatFileAttachment`, plus where the bytes live.",
+      "properties": {
+        "blob": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BlobRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "sizeBytes": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": {
+          "$ref": "#/$defs/ChatAttachmentType"
+        }
+      },
+      "required": [
+        "type",
+        "id",
+        "name",
+        "mimeType",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "ChatAttachmentType": {
+      "description": "v1 `ChatAttachment` kinds Part 1 accepts.",
+      "enum": [
+        "image",
+        "file"
+      ],
+      "type": "string"
+    },
+    "EngineChoice": {
+      "description": "Engine choice without a working folder (bots, new threads).",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "model",
+        "runtimeMode"
+      ],
+      "type": "object"
+    },
+    "EngineDriver": {
+      "description": "Engine drivers. Part 1 ships Codex only.",
+      "enum": [
+        "codex"
+      ],
+      "type": "string"
+    },
+    "Epoch": {
+      "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
+      "type": "string"
+    },
+    "FollowUpMode": {
+      "description": "How a message sent while a run is active is handled by default.",
+      "oneOf": [
+        {
+          "const": "steer",
+          "description": "Mix into the current run at the next tool/model boundary (human and worker threads).",
+          "type": "string"
+        },
+        {
+          "const": "followup",
+          "description": "Start a new run after the current one, one by one (bot threads).",
+          "type": "string"
+        },
+        {
+          "const": "collect",
+          "description": "Merge inputs that arrive within [crate::limits::COLLECT_WINDOW_MS] into the next run.",
+          "type": "string"
+        }
+      ]
+    },
+    "InputId": {
+      "description": "An input accepted into a thread's mailbox.",
+      "type": "string"
+    },
+    "InputMode": {
+      "description": "How an input is admitted while a run may be active.",
+      "oneOf": [
+        {
+          "enum": [
+            "steer",
+            "followup",
+            "collect"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "interrupt",
+          "description": "Only from the explicit \"stop and send\" button.",
+          "type": "string"
+        }
+      ]
+    },
+    "ItemId": {
+      "description": "A finished item inside a run (TurnItem id).",
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "RequestOutcome": {
+      "description": "How a request ended.",
+      "oneOf": [
+        {
+          "enum": [
+            "approved",
+            "approved_for_session",
+            "declined",
+            "answered",
+            "cancelled"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "decided",
+          "description": "`decision` request: the person picked `optionId`.",
+          "type": "string"
+        },
+        {
+          "const": "resend",
+          "description": "`resend` request: send the unknown run again.",
+          "type": "string"
+        },
+        {
+          "const": "dropped",
+          "description": "`resend` request: drop the unknown run.",
+          "type": "string"
+        }
+      ]
+    },
+    "StartMode": {
+      "description": "`start_thread.mode`: whether the starter waits for the thread's result.",
+      "enum": [
+        "async",
+        "wait"
+      ],
+      "type": "string"
+    },
+    "ThreadCursor": {
+      "description": "Position in one thread's `goat.jsonl`.",
+      "properties": {
+        "epoch": {
+          "$ref": "#/$defs/Epoch"
+        },
+        "seq": {
+          "description": "At most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "epoch",
+        "seq"
+      ],
+      "type": "object"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    },
+    "ThreadKind": {
+      "description": "Who created the thread.",
+      "oneOf": [
+        {
+          "const": "bot",
+          "description": "One per bot, forever.",
+          "type": "string"
+        },
+        {
+          "const": "worker",
+          "description": "Started by a parent thread through MCP `thread.start`.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "Started by a person.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Frames a client sends: subscriptions, then commands. Every command carries `reqId` (matched by\n`command_result`) and `clientRequestId` (idempotency: the host applies one id once and replays\nits result).",
+  "oneOf": [
+    {
+      "description": "Start `subscribeCards`. No cursor means \"from the start\".",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CardCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subscribe_cards",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Start `subscribeThread`. No cursor means \"from the latest checkpoint\".",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "subscribe_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "unsubscribe",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Older lines for scroll-back: up to `limit` lines with `seq < before`.",
+      "properties": {
+        "before": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "limit": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "read_page",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "threadId",
+        "before",
+        "limit"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "The client's text offset did not match; resend this item's text from offset 0.",
+      "properties": {
+        "itemId": {
+          "$ref": "#/$defs/ItemId"
+        },
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "resync_item",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId",
+        "itemId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "type": {
+          "const": "pong",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "at"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Put an input in a thread's mailbox. `mode` is the sender's request; `interrupt` only from\nthe explicit \"stop and send\" button.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/$defs/ChatAttachment"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/InputMode"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "send_input",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "text",
+        "mode"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Create a thread, optionally with its first input.",
+      "properties": {
+        "botId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineChoice"
+        },
+        "kind": {
+          "$ref": "#/$defs/ThreadKind"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StartMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ThreadId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "const": "start_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "kind",
+        "engine"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Stop the thread's current run (the explicit Stop button).",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "stop_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Release a queue held after a stop.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "resume_queue",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Answer an open request. For kind `resend` the outcome is `resend` or `dropped`.",
+      "properties": {
+        "answers": {
+          "additionalProperties": true,
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "optionId": {
+          "description": "Kind `decision`: the chosen option id (with outcome `decided`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/RequestOutcome"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "resolve_request",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "requestId",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "archive_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "archived"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "title": {
+          "type": "string"
+        },
+        "type": {
+          "const": "rename_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "title"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Change engine settings or follow-up mode; written as `thread.changed`, applies from the\nnext run.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "followUpMode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FollowUpMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "change_thread",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Replace the text of a queued input (`input.changed {text}`).",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "edit_queued",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "inputId",
+        "text"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Remove a queued input (`input.changed {cancelled: true}`).",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "cancel_queued",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "inputId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Set the queue order; `inputIds` lists every queued input in the new order.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "inputIds": {
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "reorder_queued",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "inputIds"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Steer a queued input into the running turn (`input.changed {mode: steer}`).",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "inputId": {
+          "$ref": "#/$defs/InputId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "promote_to_steer",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "inputId"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Create a member bot and its `bot` thread.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineChoice"
+        },
+        "face": {
+          "$ref": "#/$defs/BotFace"
+        },
+        "name": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "create_bot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "name",
+        "purpose",
+        "face",
+        "engine"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "ClientFrame"
+}

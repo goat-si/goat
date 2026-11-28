@@ -4,6 +4,14 @@
 /// the log is never migrated.
 pub const LOG_FORMAT_VERSION: u32 = 1;
 
+/// Format version of `card.json` (`CardFile.v`).
+pub const CARD_FILE_FORMAT_VERSION: u32 = 1;
+
+/// u64 counters on the wire (seq, cardSeq, generation, sizes, offsets, durations, token counts)
+/// stay at or below this so JavaScript numbers are exact. Generated JSON Schemas carry it as
+/// `maximum` on every `uint64`.
+pub const MAX_SAFE_WIRE_INTEGER: u64 = (1 << 53) - 1;
+
 /// `ThreadCard.title`, in characters (Unicode scalar values).
 pub const CARD_TITLE_MAX_CHARS: usize = 200;
 /// `ThreadCard.needsYou.summary` and `request.opened.summary`, in characters.

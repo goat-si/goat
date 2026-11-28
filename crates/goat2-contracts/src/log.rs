@@ -40,7 +40,7 @@ impl LogHeader {
 pub struct LogLine {
     /// Line format version, [LOG_FORMAT_VERSION] when written by this build.
     pub v: u32,
-    /// Per-thread sequence, starting at 1.
+    /// Per-thread sequence, starting at 1, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
     pub seq: u64,
     /// RFC 3339 UTC timestamp.
     pub at: String,
@@ -59,7 +59,7 @@ impl LogLine {
     }
 }
 
-/// The 14 log events.
+/// The 15 log events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(tag = "type")]
 pub enum LogEvent {
@@ -69,6 +69,8 @@ pub enum LogEvent {
     ThreadChanged(ThreadChanged),
     #[serde(rename = "input.accepted")]
     InputAccepted(InputAccepted),
+    #[serde(rename = "input.changed")]
+    InputChanged(InputChanged),
     #[serde(rename = "input.delivered")]
     InputDelivered(InputDelivered),
     #[serde(rename = "run.started")]
@@ -95,10 +97,11 @@ pub enum LogEvent {
 
 impl LogEvent {
     /// Every wire `type` tag, in declaration order.
-    pub const TYPE_TAGS: [&'static str; 14] = [
+    pub const TYPE_TAGS: [&'static str; 15] = [
         "thread.created",
         "thread.changed",
         "input.accepted",
+        "input.changed",
         "input.delivered",
         "run.started",
         "run.accepted",
@@ -118,6 +121,7 @@ impl LogEvent {
             Self::ThreadCreated(_) => "thread.created",
             Self::ThreadChanged(_) => "thread.changed",
             Self::InputAccepted(_) => "input.accepted",
+            Self::InputChanged(_) => "input.changed",
             Self::InputDelivered(_) => "input.delivered",
             Self::RunStarted(_) => "run.started",
             Self::RunAccepted(_) => "run.accepted",
@@ -224,6 +228,29 @@ pub struct InputAccepted {
     pub client_request_id: Option<String>,
 }
 
+/// `input.changed`: a person edited an input that is still queued (`edit_queued`,
+/// `cancel_queued`, `reorder_queued`, `promote_to_steer`). Only the changed fields are present.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InputChanged {
+    pub input_id: InputId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub text: Option<String>,
+    /// `promote_to_steer` writes `mode: steer`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mode: Option<InputMode>,
+    /// `cancel_queued`: the input leaves the queue and is never delivered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cancelled: Option<bool>,
+    /// `reorder_queued`: 0-based index in the queue after the change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub position: Option<u32>,
+}
+
 /// How an input was handed to the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -320,6 +347,25 @@ pub struct RequestOpened {
     pub kind: RequestKind,
     /// At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.
     pub summary: String,
+    /// Kind `decision`: the choices offered (v1 `goat_decision_request`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub options: Option<Vec<DecisionOption>>,
+    /// Kind `decision`: the recommended option id. Silence never approves it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub recommended: Option<String>,
+}
+
+/// One choice of a `decision` request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DecisionOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub consequence: Option<String>,
 }
 
 /// How a request ended.
@@ -330,6 +376,8 @@ pub enum RequestOutcome {
     ApprovedForSession,
     Declined,
     Answered,
+    /// `decision` request: the person picked `optionId`.
+    Decided,
     Cancelled,
     /// `resend` request: send the unknown run again.
     Resend,
@@ -343,6 +391,10 @@ pub enum RequestOutcome {
 pub struct RequestResolved {
     pub request_id: RequestId,
     pub outcome: RequestOutcome,
+    /// `decision` request: the chosen option id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub option_id: Option<String>,
     /// Free-text answer or note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -427,21 +479,50 @@ pub struct UserNotified {
     pub text: String,
 }
 
-/// Fold state beyond the card: what a reader needs to continue folding from a checkpoint
-/// without reading earlier lines.
+/// Fold state beyond the card: what a reader (or the store after a crash) needs to continue
+/// folding from a checkpoint without reading earlier lines.
+///
+/// Fold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the
+/// queue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active
+/// run's hold. At `run.finished`, run inputs still queued are delivered if
+/// `activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`
+/// outcome opens request `resend:<runId>` (kind `resend`) holding them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Fold {
     /// The run between `run.started` and `run.finished`, if any.
     pub active_run_id: Option<RunId>,
+    /// Inputs carried by the active run's `run.started`.
+    pub active_run_input_ids: Vec<InputId>,
+    /// True once `run.accepted`, an `item.completed` or `request.opened` for the active run, or
+    /// `input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer
+    /// deliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.
+    pub active_run_reached_engine: bool,
     /// Inputs accepted but not yet delivered, in order.
     pub queued_input_ids: Vec<InputId>,
+    /// Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
+    pub held_inputs: Vec<HeldInputs>,
     /// Requests still open (including `resend`), so the inbox renders without earlier lines.
     pub open_requests: Vec<RequestOpened>,
+    /// Children started and not yet reported; `card.children.running` is its length.
+    pub running_child_ids: Vec<ThreadId>,
+    /// Outcome of the last finished run, for the `failed` status after later events.
+    pub last_run_outcome: Option<RunOutcome>,
     pub counters: FoldCounters,
 }
 
-/// Running totals kept by the fold.
+/// Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the
+/// front of `queuedInputIds`; `dropped` discards them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeldInputs {
+    /// `resend:<runId>`.
+    pub request_id: RequestId,
+    pub run_id: RunId,
+    pub input_ids: Vec<InputId>,
+}
+
+/// Running totals kept by the fold. Each at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FoldCounters {

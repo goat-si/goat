@@ -1,0 +1,105 @@
+{
+  "$defs": {
+    "BotFace": {
+      "description": "A bot's face, drawn by `packages/bot-face`.",
+      "properties": {
+        "color": {
+          "type": "string"
+        },
+        "goat": {
+          "description": "The GOAT mark instead of a generated face.",
+          "type": "boolean"
+        },
+        "shape": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "color",
+        "goat"
+      ],
+      "type": "object"
+    },
+    "BotId": {
+      "description": "A bot. Each bot owns one `bot` thread.",
+      "type": "string"
+    },
+    "BotRole": {
+      "description": "`main` is the GOAT bot; every other bot is a `member`.",
+      "enum": [
+        "main",
+        "member"
+      ],
+      "type": "string"
+    },
+    "EngineChoice": {
+      "description": "Engine choice without a working folder (bots, new threads).",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "model",
+        "runtimeMode"
+      ],
+      "type": "object"
+    },
+    "EngineDriver": {
+      "description": "Engine drivers. Part 1 ships Codex only.",
+      "enum": [
+        "codex"
+      ],
+      "type": "string"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`bots/<botId>.json` and the `bot_changed` payload.",
+  "properties": {
+    "botId": {
+      "$ref": "#/$defs/BotId"
+    },
+    "engine": {
+      "$ref": "#/$defs/EngineChoice"
+    },
+    "face": {
+      "$ref": "#/$defs/BotFace"
+    },
+    "name": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "role": {
+      "$ref": "#/$defs/BotRole"
+    },
+    "threadId": {
+      "$ref": "#/$defs/ThreadId",
+      "description": "The bot's own `bot` thread."
+    }
+  },
+  "required": [
+    "botId",
+    "name",
+    "purpose",
+    "face",
+    "role",
+    "threadId",
+    "engine"
+  ],
+  "title": "BotProfile",
+  "type": "object"
+}

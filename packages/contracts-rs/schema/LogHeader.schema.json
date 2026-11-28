@@ -1,0 +1,26 @@
+{
+  "$defs": {
+    "Epoch": {
+      "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "First line of `goat.jsonl`: `{\"v\":1,\"epoch\":\"<uuid>\"}`.",
+  "properties": {
+    "epoch": {
+      "$ref": "#/$defs/Epoch"
+    },
+    "v": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "epoch"
+  ],
+  "title": "LogHeader",
+  "type": "object"
+}

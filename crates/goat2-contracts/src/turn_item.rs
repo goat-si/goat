@@ -306,9 +306,15 @@ pub struct ProviderFailure {
     pub message: String,
     pub code: Option<String>,
     pub retryable: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// v1 `optional(NullOr(IsoDateTime))`: absent, `null` and a value are distinct.
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_util::present_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub reset_at: Option<String>,
+    #[schemars(with = "Option<String>")]
+    pub reset_at: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub log: Option<String>,
@@ -471,7 +477,12 @@ pub enum TurnItemBody {
     DynamicTool {
         tool_name: Option<String>,
         input: serde_json::Value,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Absent when there is no output; an explicit `null` output is kept as `null`.
+        #[serde(
+            default,
+            deserialize_with = "crate::serde_util::present_value",
+            skip_serializing_if = "Option::is_none"
+        )]
         #[ts(optional)]
         output: Option<serde_json::Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

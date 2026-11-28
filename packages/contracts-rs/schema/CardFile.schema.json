@@ -1,0 +1,587 @@
+{
+  "$defs": {
+    "BotId": {
+      "description": "A bot. Each bot owns one `bot` thread.",
+      "type": "string"
+    },
+    "ChildCounts": {
+      "description": "Child counts for a parent card.",
+      "properties": {
+        "running": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "running",
+        "total"
+      ],
+      "type": "object"
+    },
+    "DecisionOption": {
+      "description": "One choice of a `decision` request.",
+      "properties": {
+        "consequence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "EngineConfig": {
+      "description": "Engine settings for a thread.",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtimeMode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "model",
+        "runtimeMode",
+        "cwd"
+      ],
+      "type": "object"
+    },
+    "EngineDriver": {
+      "description": "Engine drivers. Part 1 ships Codex only.",
+      "enum": [
+        "codex"
+      ],
+      "type": "string"
+    },
+    "EngineRef": {
+      "description": "Last seen engine session pointer (Codex threadId). Not the thread's identity.",
+      "properties": {
+        "driver": {
+          "$ref": "#/$defs/EngineDriver"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "driver",
+        "id"
+      ],
+      "type": "object"
+    },
+    "Epoch": {
+      "description": "Generation of a `goat.jsonl` file or of the card index. A UUID string.",
+      "type": "string"
+    },
+    "Fold": {
+      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.",
+      "properties": {
+        "activeRunId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run between `run.started` and `run.finished`, if any."
+        },
+        "activeRunInputIds": {
+          "description": "Inputs carried by the active run's `run.started`.",
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "activeRunReachedEngine": {
+          "description": "True once `run.accepted`, an `item.completed` or `request.opened` for the active run, or\n`input.delivered {as: turn, outcome: accepted}` for one of its inputs is folded (steer\ndeliveries do not count). Restart settlement: true -> `interrupted`, false -> `unknown`.",
+          "type": "boolean"
+        },
+        "counters": {
+          "$ref": "#/$defs/FoldCounters"
+        },
+        "heldInputs": {
+          "description": "Inputs whose delivery is ambiguous, held by a resend request (one hold per run).",
+          "items": {
+            "$ref": "#/$defs/HeldInputs"
+          },
+          "type": "array"
+        },
+        "lastRunOutcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Outcome of the last finished run, for the `failed` status after later events."
+        },
+        "openRequests": {
+          "description": "Requests still open (including `resend`), so the inbox renders without earlier lines.",
+          "items": {
+            "$ref": "#/$defs/RequestOpened"
+          },
+          "type": "array"
+        },
+        "queuedInputIds": {
+          "description": "Inputs accepted but not yet delivered, in order.",
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "runningChildIds": {
+          "description": "Children started and not yet reported; `card.children.running` is its length.",
+          "items": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "activeRunInputIds",
+        "activeRunReachedEngine",
+        "queuedInputIds",
+        "heldInputs",
+        "openRequests",
+        "runningChildIds",
+        "counters"
+      ],
+      "type": "object"
+    },
+    "FoldCounters": {
+      "description": "Running totals kept by the fold. Each at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+      "properties": {
+        "inputs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "items": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "inputs",
+        "runs",
+        "items"
+      ],
+      "type": "object"
+    },
+    "FollowUpMode": {
+      "description": "How a message sent while a run is active is handled by default.",
+      "oneOf": [
+        {
+          "const": "steer",
+          "description": "Mix into the current run at the next tool/model boundary (human and worker threads).",
+          "type": "string"
+        },
+        {
+          "const": "followup",
+          "description": "Start a new run after the current one, one by one (bot threads).",
+          "type": "string"
+        },
+        {
+          "const": "collect",
+          "description": "Merge inputs that arrive within [crate::limits::COLLECT_WINDOW_MS] into the next run.",
+          "type": "string"
+        }
+      ]
+    },
+    "HeldInputs": {
+      "description": "Inputs held by a `resend` request. `request.resolved` outcome `resend` returns them to the\nfront of `queuedInputIds`; `dropped` discards them.",
+      "properties": {
+        "inputIds": {
+          "items": {
+            "$ref": "#/$defs/InputId"
+          },
+          "type": "array"
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId",
+          "description": "`resend:<runId>`."
+        },
+        "runId": {
+          "$ref": "#/$defs/RunId"
+        }
+      },
+      "required": [
+        "requestId",
+        "runId",
+        "inputIds"
+      ],
+      "type": "object"
+    },
+    "InputId": {
+      "description": "An input accepted into a thread's mailbox.",
+      "type": "string"
+    },
+    "ItemId": {
+      "description": "A finished item inside a run (TurnItem id).",
+      "type": "string"
+    },
+    "NeedsYou": {
+      "description": "The open human request summarised on the card.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "summary": {
+          "description": "At most [NEEDS_YOU_SUMMARY_MAX_CHARS] characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ParentRef": {
+      "description": "Parent link, written on the child (`parent: {threadId, byItemId}`).",
+      "properties": {
+        "byItemId": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The parent's tool-call item that started this child."
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": [
+        "threadId",
+        "byItemId"
+      ],
+      "type": "object"
+    },
+    "ProjectId": {
+      "description": "A project the thread belongs to (card index column).",
+      "type": "string"
+    },
+    "RequestId": {
+      "description": "A human-in-the-loop request (approval, question, sign-in).",
+      "type": "string"
+    },
+    "RequestKind": {
+      "description": "What kind of human step a request needs.",
+      "oneOf": [
+        {
+          "enum": [
+            "approval",
+            "question",
+            "signin"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "resend",
+          "description": "A run settled as `unknown` waits for a person to choose resend or drop.",
+          "type": "string"
+        },
+        {
+          "const": "decision",
+          "description": "A choice among options (v1 `goat_decision_request`). Silence never approves.",
+          "type": "string"
+        }
+      ]
+    },
+    "RequestOpened": {
+      "description": "`request.opened`: a person is needed.",
+      "properties": {
+        "itemId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The approval/question item, when the request came from the engine."
+        },
+        "kind": {
+          "$ref": "#/$defs/RequestKind"
+        },
+        "options": {
+          "description": "Kind `decision`: the choices offered (v1 `goat_decision_request`).",
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "recommended": {
+          "description": "Kind `decision`: the recommended option id. Silence never approves it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "runId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "description": "At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "kind",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "RunId": {
+      "description": "A run: one batch of inputs sent to the engine until the answer ends.",
+      "type": "string"
+    },
+    "RunOutcome": {
+      "description": "How a run ended.",
+      "oneOf": [
+        {
+          "enum": [
+            "done",
+            "failed",
+            "interrupted"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "Sent but not known to have reached the engine. Never re-sent automatically.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThreadCard": {
+      "description": "One row per thread. Every text field is bounded.",
+      "properties": {
+        "appliedSeq": {
+          "description": "Last `goat.jsonl` seq folded into this card, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "archived": {
+          "description": "Set by `thread.changed {archived}`. Archived cards stay in the index.",
+          "type": "boolean"
+        },
+        "botId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cardSeq": {
+          "description": "Card index global sequence, the `subscribeCards` cursor, at most\n[crate::limits::MAX_SAFE_WIRE_INTEGER].",
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "children": {
+          "$ref": "#/$defs/ChildCounts"
+        },
+        "engine": {
+          "$ref": "#/$defs/EngineConfig"
+        },
+        "engineRef": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EngineRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "epoch": {
+          "$ref": "#/$defs/Epoch",
+          "description": "Generation of this thread's `goat.jsonl`."
+        },
+        "followUpMode": {
+          "$ref": "#/$defs/FollowUpMode"
+        },
+        "id": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "kind": {
+          "$ref": "#/$defs/ThreadKind"
+        },
+        "lastExcerpt": {
+          "description": "Start of the last answer, at most [CARD_EXCERPT_MAX_CHARS] characters.",
+          "type": "string"
+        },
+        "needsYou": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NeedsYou"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParentRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projectId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Card index column for lookups by project."
+        },
+        "status": {
+          "$ref": "#/$defs/ThreadStatus"
+        },
+        "title": {
+          "description": "At most [CARD_TITLE_MAX_CHARS] characters.",
+          "type": "string"
+        },
+        "updatedAt": {
+          "description": "RFC 3339 UTC timestamp.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "engine",
+        "status",
+        "lastExcerpt",
+        "children",
+        "followUpMode",
+        "updatedAt",
+        "epoch",
+        "appliedSeq",
+        "cardSeq"
+      ],
+      "type": "object"
+    },
+    "ThreadId": {
+      "description": "A GOAT thread. Also the folder name under `~/.goat2/threads/`.",
+      "type": "string"
+    },
+    "ThreadKind": {
+      "description": "Who created the thread.",
+      "oneOf": [
+        {
+          "const": "bot",
+          "description": "One per bot, forever.",
+          "type": "string"
+        },
+        {
+          "const": "worker",
+          "description": "Started by a parent thread through MCP `thread.start`.",
+          "type": "string"
+        },
+        {
+          "const": "user",
+          "description": "Started by a person.",
+          "type": "string"
+        }
+      ]
+    },
+    "ThreadStatus": {
+      "description": "Card status shown in lists and the inbox.",
+      "enum": [
+        "idle",
+        "queued",
+        "running",
+        "needs_you",
+        "failed"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`threads/<threadId>/card.json`: `{\"v\":1,\"card\":ThreadCard,\"fold\":Fold}`, replaced atomically.",
+  "properties": {
+    "card": {
+      "$ref": "#/$defs/ThreadCard"
+    },
+    "fold": {
+      "$ref": "#/$defs/Fold"
+    },
+    "v": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "v",
+    "card",
+    "fold"
+  ],
+  "title": "CardFile",
+  "type": "object"
+}

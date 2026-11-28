@@ -6,6 +6,7 @@ use ts_rs::TS;
 
 use crate::ids::{BotId, Epoch, ItemId, ProjectId, ThreadId};
 use crate::limits::{CARD_EXCERPT_MAX_CHARS, CARD_TITLE_MAX_CHARS, NEEDS_YOU_SUMMARY_MAX_CHARS};
+use crate::log::Fold;
 
 /// Who created the thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, JsonSchema)]
@@ -73,6 +74,8 @@ pub enum RequestKind {
     Signin,
     /// A run settled as `unknown` waits for a person to choose resend or drop.
     Resend,
+    /// A choice among options (v1 `goat_decision_request`). Silence never approves.
+    Decision,
 }
 
 /// The open human request summarised on the card.
@@ -131,10 +134,30 @@ pub struct ThreadCard {
     pub updated_at: String,
     /// Generation of this thread's `goat.jsonl`.
     pub epoch: Epoch,
-    /// Last `goat.jsonl` seq folded into this card.
+    /// Last `goat.jsonl` seq folded into this card, at most [crate::limits::MAX_SAFE_WIRE_INTEGER].
     pub applied_seq: u64,
-    /// Card index global sequence, the `subscribeCards` cursor.
+    /// Card index global sequence, the `subscribeCards` cursor, at most
+    /// [crate::limits::MAX_SAFE_WIRE_INTEGER].
     pub card_seq: u64,
+}
+
+/// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CardFile {
+    pub v: u32,
+    pub card: ThreadCard,
+    pub fold: Fold,
+}
+
+impl CardFile {
+    pub fn new(card: ThreadCard, fold: Fold) -> Self {
+        Self {
+            v: crate::limits::CARD_FILE_FORMAT_VERSION,
+            card,
+            fold,
+        }
+    }
 }
 
 fn is_false(value: &bool) -> bool {

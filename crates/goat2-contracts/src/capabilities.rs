@@ -103,8 +103,8 @@ pub struct ContextCapabilities {
     pub can_consume_handoff_summaries: bool,
     pub supports_delta_handoff: bool,
     pub supports_full_thread_handoff: bool,
-    /// v1 `NullOr(PositiveInt)`.
-    pub max_recommended_handoff_chars: Option<u32>,
+    /// v1 `NullOr(PositiveInt)`: zero is rejected.
+    pub max_recommended_handoff_chars: Option<std::num::NonZeroU32>,
 }
 
 /// v1 `OrchestrationV2CloudSourceRestriction`.
