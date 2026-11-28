@@ -1,14 +1,14 @@
 import * as Schema from "effect/Schema";
 
-import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { GitRefName, NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { OrchestrationV2ShellThreadStatus } from "./orchestrationV2.ts";
 import { OrchestratorMcpHost } from "./orchestratorMcp.ts";
 
 /** Uses the managed worktree folder; handoff detaches the provider, ending this turn and resuming there next run. */
 export const WorktreeMcpHandoffInput = Schema.Struct({
-  branch: TrimmedNonEmptyString,
+  branch: GitRefName,
   baseRef: Schema.optional(
-    TrimmedNonEmptyString.annotate({
+    GitRefName.annotate({
       description: "Default: checked-out branch.",
     }),
   ),
@@ -67,8 +67,8 @@ export type WorktreeMcpContinuationStatus = typeof WorktreeMcpContinuationStatus
 
 export const WorktreeMcpHandoffResult = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
-  branch: TrimmedNonEmptyString,
-  baseRef: TrimmedNonEmptyString,
+  branch: GitRefName,
+  baseRef: GitRefName,
   startedFromOrigin: Schema.Boolean,
   setupScript: WorktreeMcpSetupScriptStatus,
   continuation: WorktreeMcpContinuationStatus,
@@ -79,7 +79,7 @@ export type WorktreeMcpHandoffResult = typeof WorktreeMcpHandoffResult.Type;
 export const WorktreeMcpStatusResult = Schema.Struct({
   attached: Schema.Boolean,
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  branch: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(GitRefName),
   projectWorkspaceRoot: TrimmedNonEmptyString,
   defaultStartFromOrigin: Schema.Boolean.annotate({
     description: "`startFromOrigin` default for `goat_worktree_handoff`.",

@@ -1,5 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NetService from "@goat/shared/Net";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { assert, it } from "@effect/vitest";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,12 +13,58 @@ import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "../serverRuntimeState.ts";
+import { Command } from "effect/cli";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as TestConsole from "effect/testing/TestConsole";
 
 import * as BootService from "../cloud/bootService.ts";
-import { runDoctor } from "./doctor.ts";
+import { doctorCommand, runDoctor } from "./doctor.ts";
 import { DatabaseMaintenance } from "../persistence/DatabaseMaintenance.ts";
+
+it.effect("doctor --dry-run leaves the data directory and uploads alone", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-doctor-dry-run-" });
+    const stateDir = path.join(baseDir, "userdata");
+    const attachmentsDir = path.join(stateDir, "attachments");
+    const upload = path.join(attachmentsDir, "upload.part");
+    yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+    yield* fs.writeFileString(upload, "partial upload");
+    yield* fs.utimes(upload, 0, 0);
+    yield* TestClock.setTime(2 * 60 * 60 * 1_000);
+    yield* SqlClient.SqlClient.pipe(
+      Effect.flatMap((sql) => sql`CREATE TABLE fixture (id INTEGER)`),
+      Effect.provide(NodeSqliteClient.layer({ filename: path.join(stateDir, "statev2.sqlite") })),
+    );
+
+    yield* Command.runWith(doctorCommand, { version: "0.0.0" })([
+      "--base-dir",
+      baseDir,
+      "--fix",
+      "--dry-run",
+    ]).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              GOAT_PORT: "3773",
+              GOAT_TRACE_FILE: path.join(baseDir, "trace", "trace.ndjson"),
+            },
+          }),
+        ),
+      ),
+    );
+
+    assert.isTrue(yield* fs.exists(upload));
+    assert.deepEqual(yield* fs.readDirectory(baseDir), ["userdata"]);
+    assert.deepEqual((yield* fs.readDirectory(stateDir)).toSorted(), [
+      "attachments",
+      "statev2.sqlite",
+    ]);
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer))),
+);
 
 it.effect(
   "--fix reclaims space with the service paused and keeps the V1 database, and --dry-run changes nothing",

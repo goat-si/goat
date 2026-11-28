@@ -37,6 +37,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { makeDeviceHubOperations } from "./DeviceHubOperations.ts";
+import { deviceHubNodeArgs } from "./deviceHubNodeArgs.ts";
 import {
   agentDeviceStateDir,
   type DeviceToolPaths,
@@ -112,13 +113,6 @@ const platformReason = Effect.fn("LocalDeviceHost.platformReason")(function* (
   const sdk = yield* androidSdk;
   if (!sdk.root)
     return "Android SDK Platform-Tools were not found. Install them with Android Studio or set ANDROID_HOME to your SDK directory.";
-  if (!sdk.emulator)
-    return `Android Emulator is missing from ${sdk.root}. Install it in Android Studio's SDK Manager.`;
-  if (!sdk.avdmanager) {
-    if (sdk.legacyAvdmanager)
-      return `The Android SDK command-line tools in ${sdk.root} appear to be an older, unsupported version. Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager under SDK Tools.`;
-    return `Android SDK Command-line Tools (latest) are missing from ${sdk.root}. Install them in Android Studio's SDK Manager.`;
-  }
   return null;
 });
 
@@ -430,7 +424,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
           ChildProcess.make(
             nodePath,
             [
-              hubTool.entryPath,
+              ...deviceHubNodeArgs(hubTool.entryPath, hostPlatform),
               "--port",
               String(port),
               "--host",
@@ -563,19 +557,25 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       token: file.token,
       entryPath: agentTool.entryPath,
     });
-    if (existing._tag === "Some") {
-      const alive = yield* HttpClient.withScope(httpClient)
-        .get(`http://127.0.0.1:${existing.value.httpPort}/health`)
+    const daemonAnswersHealth = (httpPort: number) =>
+      HttpClient.withScope(httpClient)
+        .get(`http://127.0.0.1:${httpPort}/health`)
         .pipe(
-          Effect.timeout(Duration.seconds(2)),
           Effect.flatMap((response) =>
             response.arrayBuffer.pipe(Effect.as(response.status === 200)),
           ),
+          Effect.timeout(Duration.seconds(2)),
           Effect.scoped,
           Effect.orElseSucceed(() => false),
         );
-      if (alive) return toEndpoint(existing.value);
-      yield* fs.remove(daemonFilePath(), { force: true }).pipe(Effect.ignore);
+    if (existing._tag === "Some") {
+      const alive = yield* daemonAnswersHealth(existing.value.httpPort);
+      const samePin =
+        existing.value.version === undefined || existing.value.version === AGENT_DEVICE_VERSION;
+      if (alive && samePin) return toEndpoint(existing.value);
+      // A live daemon from another pin may speak another RPC protocol. Keep its registration so
+      // the pinned CLI retires it, which that CLI does only while the daemon holds no work.
+      if (!alive) yield* fs.remove(daemonFilePath(), { force: true }).pipe(Effect.ignore);
     }
     // No `daemon start` exists; `devices` is the cheapest command that starts and awaits it.
     const runResult = yield* runner
@@ -587,9 +587,16 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
         timeoutBehavior: "timedOutResult",
       })
       .pipe(Effect.result);
-    // Discovery may fail after startup; accept a published endpoint or preserve the CLI failure.
+    // A failed run can stop the previous daemon and leave its file. Keep that registration
+    // only while it still answers; a successful run has published the endpoint it reached.
     const started = yield* readDaemonFile().pipe(Effect.option);
-    if (started._tag === "Some") return toEndpoint(started.value);
+    if (started._tag === "Some") {
+      const runSucceeded =
+        runResult._tag === "Success" && !runResult.success.timedOut && runResult.success.code === 0;
+      if (runSucceeded || (yield* daemonAnswersHealth(started.value.httpPort))) {
+        return toEndpoint(started.value);
+      }
+    }
     if (runResult._tag === "Failure") {
       return yield* new DeviceHost.DeviceHostError({
         hostId,
@@ -914,6 +921,7 @@ export const make = Effect.fn("LocalDeviceHost.make")(function* () {
       run,
       platformAvailable: (platform) =>
         platformAvailability(platform).pipe(Effect.map((availability) => availability.available)),
+      avdsAvailable: currentSdk.pipe(Effect.map((sdk) => sdk.emulator)),
     }),
     nodePath: running.hub.nodePath,
     run,

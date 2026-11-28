@@ -24,6 +24,7 @@ import { makeGitLabListReads } from "./gitLabListReads.ts";
 import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
 import {
   GitLabMergeRequestReadError,
+  GitLabMutationRefusedError,
   GitLabViewerUnavailableError,
   GitLabDiffCursorError,
   GitLabDiffCommitError,
@@ -389,6 +390,8 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+      /** The head the caller reviewed; an approval refuses any other. */
+      readonly expectedHeadSha?: string;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly replyToDiscussion: (input: {
@@ -1593,11 +1596,23 @@ export const make = Effect.gen(function* () {
     submitReview: Effect.fn("GitLabPullRequestCli.submitReview")(function* (input) {
       const project = projectPath(input.repository);
       const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
+      let prefetchedRefs: Effect.Success<ReturnType<typeof getDiffRefs>> | undefined;
+      if (input.comments.length > 0 && input.expectedHeadSha !== undefined) {
+        prefetchedRefs = yield* getDiffRefs(input);
+        if (prefetchedRefs.headSha !== input.expectedHeadSha) {
+          return yield* new GitLabMutationRefusedError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "submitReview",
+            reasons: [`the head is now ${prefetchedRefs.headSha}, not ${input.expectedHeadSha}`],
+          });
+        }
+      }
       if (input.verdict === "request-changes") {
         yield* requestChanges(input);
       }
       if (input.comments.length > 0) {
-        const refs = yield* getDiffRefs(input);
+        const refs = prefetchedRefs ?? (yield* getDiffRefs(input));
         // Line codes only steer GitLab's highlight of a range, so an unreadable diff falls back
         // to codes without the other side's counter rather than blocking the review.
         const patch = yield* gitLabPatchCovering(
@@ -1652,6 +1667,11 @@ export const make = Effect.gen(function* () {
           host: input.host,
           path: `${mergeRequest}/approve`,
           method: "POST",
+          // GitLab answers 409 when `sha` is no longer the merge request's head.
+          ...(input.expectedHeadSha === undefined
+            ? {}
+            : // @effect-diagnostics-next-line preferSchemaOverJson:off
+              { stdin: JSON.stringify({ sha: input.expectedHeadSha }) }),
         });
       }
     }),

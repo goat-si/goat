@@ -71,8 +71,12 @@ export const SETTINGS_ACCESS = {
   blockedBrowserHosts: person("It controls which browser hosts agents may use; a person decides."),
   projectAgentBrowserAccessOverrides: person(GRANTS_AGENTS),
   defaultAutoPull: agent,
-  defaultProjectScripts: agent,
-  projectScriptOverrides: agent,
+  defaultProjectScripts: person(
+    "Saved project scripts run shell commands on this machine and require task operation authority; a person configures them.",
+  ),
+  projectScriptOverrides: person(
+    "Saved project scripts run shell commands on this machine and require task operation authority; a person configures them.",
+  ),
   projectAutoPullOverrides: agent,
   defaultModelSelection: path("provider.update"),
   defaultRuntimeMode: person(

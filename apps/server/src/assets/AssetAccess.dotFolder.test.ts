@@ -25,7 +25,7 @@ it.effect("validates canonical sibling assets for previews in dot-prefixed folde
         target: path.join(reportsDirectory, ".cache", "hidden.css"),
         allowed: false,
       },
-      { name: "shared.css", target: path.join(root, "shared.css"), allowed: true },
+      { name: "shared.css", target: path.join(root, "shared.css"), allowed: false },
     ];
     for (const { name, target } of dependencies) {
       yield* fs.writeFileString(target, "fixture");

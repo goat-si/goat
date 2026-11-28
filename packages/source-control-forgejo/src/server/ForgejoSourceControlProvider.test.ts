@@ -1,3 +1,5 @@
+import { SpawnExecutableResolution } from "@goat/shared/shell";
+import { userFacingSourceControlDetail } from "@goat/source-control-core/server/SourceControlProvider";
 import {
   requiredChecksPullRequest,
   requiredChecksStatuses,
@@ -24,6 +26,8 @@ import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceC
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
 import * as ForgejoSourceControlProvider from "./ForgejoSourceControlProvider.ts";
+
+const onPath = async (command: string) => `/usr/bin/${command}`;
 
 const processOutput = TestSourceControlHost.processOutput;
 
@@ -239,6 +243,15 @@ it.effect("follows the Forgejo repository's delete-branch-after-merge setting", 
         `repository setting ${JSON.stringify(setting)}`,
       );
     }
+    const { provider, writes } = forgejoMergeProvider(
+      Effect.succeed(JSON.stringify({ full_name: "reviewer/project" })),
+    );
+    yield* (yield* provider).runAction({ ...forgejoMergeInput, headSha: "0a1b2c3d4" });
+    assert.deepStrictEqual(writes[0]?.body, {
+      Do: "squash",
+      delete_branch_after_merge: false,
+      head_commit_id: "0a1b2c3d4",
+    });
   }),
 );
 
@@ -1775,7 +1788,49 @@ it.effect(
             ),
           ),
           Effect.provideService(HostProcess.HomeDirectory, "/home/maria"),
+          Effect.provideService(SpawnExecutableResolution, onPath),
         );
       }
     }),
+);
+
+it.effect("exposes fixed not-found details only for repository lookup", () =>
+  Effect.gen(function* () {
+    const provider = yield* ForgejoSourceControlProvider.make;
+    const error = yield* Effect.flip(
+      provider.getRepositoryCloneUrls({ cwd: "/repo", repository: "vouch" }),
+    );
+    assert.strictEqual(
+      userFacingSourceControlDetail(error.cause),
+      "Repository me/vouch was not found. Check the owner and name and try again.",
+    );
+    const forbiddenError = yield* Effect.flip(
+      provider.getRepositoryCloneUrls({ cwd: "/repo", repository: "me/private" }),
+    );
+    assert.strictEqual(userFacingSourceControlDetail(forbiddenError.cause), undefined);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(FileSystem.FileSystem, FileSystem.makeNoop({})),
+        TestSourceControlHost.layer({ process: {} }),
+        Layer.mock(ForgejoCli.ForgejoCli)({
+          resolveRepository: (input) =>
+            Effect.succeed({
+              login: "work",
+              repository: input.repository === "me/private" ? "me/private" : "me/vouch",
+              baseUrl: "https://forgejo.test",
+            }),
+          api: (input) =>
+            Effect.fail(
+              new ForgejoCli.ForgejoCliError({
+                command: "fj",
+                cwd: "/repo",
+                reason: input.path.includes("private") ? "forbidden" : "not-found",
+                detail: "raw upstream response must not be shown",
+              }),
+            ),
+        }),
+      ),
+    ),
+  ),
 );

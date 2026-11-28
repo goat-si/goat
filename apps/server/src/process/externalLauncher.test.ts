@@ -475,14 +475,16 @@ for (const { layout, pathNames, fallbackNames, expected } of [
   );
 }
 
-// Linux editor discovery also probes fixed system directories; tests point them at a temp
-// directory so an editor installed on the host cannot satisfy the lookup.
+// Editor discovery also probes fixed system directories (Linux bin folders, macOS /Applications);
+// tests point them at a temp directory so an editor installed on the host cannot satisfy the lookup.
 const withSystemBin = (path: Path.Path, systemBin: string): Path.Path => ({
   ...path,
   join: (...parts) =>
     path.join(
       ...parts.map((part) =>
-        ["/usr/local/bin", "/usr/bin", "/snap/bin"].includes(part) ? systemBin : part,
+        ["/Applications", "/usr/local/bin", "/usr/bin", "/snap/bin"].includes(part)
+          ? systemBin
+          : part,
       ),
     ),
 });

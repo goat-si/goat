@@ -309,6 +309,7 @@ import {
   queuedStartFailureKind,
   stopTerminationKind as classifyStopTerminationKind,
 } from "./runTerminationCause.ts";
+import { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { ProviderSessionManagerV2 } from "./ProviderSessionManager.ts";
 import { ProviderSwitchServiceV2 } from "./ProviderSwitchService.ts";
 import {
@@ -624,6 +625,7 @@ export class OrchestratorV2 extends Context.Service<OrchestratorV2, Orchestrator
 
 export { isSeparateTurnCommand } from "./SeparateTurnCommand.ts";
 
+export const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE =
   "GOAT could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.";
 
@@ -5438,6 +5440,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         delivery.generation !== requestedCompletion.generation ||
         delivery.messageId !== command.messageId ||
         (projection.messages.some((candidate) => candidate.id === command.messageId) &&
+          command.steerFollowUpOfRunId === undefined &&
           !isUndeliveredMailboxSteer(projection, command.messageId))
       ) {
         return yield* new OrchestratorDispatchError({
@@ -5512,6 +5515,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     const commandNotice = noticeKind === "command" && command.creationSource === "server";
     if (
       !freshContext &&
+      command.steerFollowUpOfRunId === undefined &&
       (delegatedCompletion !== undefined
         ? delegatedCompletion.taskIds.every(
             (id) =>
@@ -9566,7 +9570,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       yield* emitEvent({
         ...base,
         type: "turn-item.updated",
-        payload: RunExecutionService.makeInterruptResultTurnItem({
+        payload: makeInterruptResultTurnItem({
           idAllocator,
           run,
           rootNode,
@@ -12141,6 +12145,22 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             commandId: command.commandId,
             commandType: command.type,
             cause: `Thread ${command.threadId} changed before automatic settlement.`,
+          });
+        }
+        // The completion reaction starts or holds the queue just after a run ends; settling
+        // first would cancel an automatic wake it was about to start.
+        const { runs } = yield* loadProjectionForCommand(command, ["runs"]);
+        const endedAt = latestExecutedRun(runs)?.completedAt;
+        if (
+          endedAt != null &&
+          runs.some((run) => run.status === "queued") &&
+          Math.abs(DateTime.toEpochMillis(yield* DateTime.now) - DateTime.toEpochMillis(endedAt)) <
+            QUEUED_TURN_START_GRACE_MS
+        ) {
+          return yield* new OrchestratorDispatchError({
+            commandId: command.commandId,
+            commandType: command.type,
+            cause: `Thread ${command.threadId} has a queued run that may still start.`,
           });
         }
         yield* dispatchThreadMutation(

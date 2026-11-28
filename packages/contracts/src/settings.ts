@@ -1862,8 +1862,10 @@ export function requiredScopesForProjectMutation(
     return [AuthOrchestrationOperateScope];
   }
   return [
-    AuthOrchestrationOperateScope,
-    ...requiredScopesForServerSettingsPatch({ defaultProjectScripts: mutation.scripts }),
+    ...new Set([
+      AuthOrchestrationOperateScope,
+      ...requiredScopesForServerSettingsPatch({ defaultProjectScripts: mutation.scripts }),
+    ]),
   ];
 }
 

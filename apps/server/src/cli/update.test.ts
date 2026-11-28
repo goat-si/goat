@@ -187,6 +187,27 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
       assert.equal(absent, undefined);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("resolves an empty POSIX PATH entry from the working directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped();
+      const launcher = path.join(root, "goat");
+      yield* fs.writeFileString(launcher, "", { mode: 0o755 });
+      const lookup = (value: string, platform: NodeJS.Platform) =>
+        resolveLauncherPath.pipe(
+          Effect.provideService(HostProcess.InvokedAs, "goat"),
+          Effect.provideService(HostProcess.Environment, { PATH: value }),
+          Effect.provideService(HostProcess.WorkingDirectory, root),
+          Effect.provideService(HostProcess.Platform, platform),
+        );
+      assert.equal(yield* lookup(":/missing", "linux"), launcher);
+      assert.equal(yield* lookup("/missing:", "linux"), launcher);
+      assert.isUndefined(yield* lookup("", "linux"));
+      assert.isUndefined(yield* lookup(";/missing", "win32"));
+    }).pipe(Effect.scoped),
+  );
 });
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));

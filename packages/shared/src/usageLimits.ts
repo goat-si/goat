@@ -540,6 +540,18 @@ function poolMember(account: LimitAccount, reported: ServerProviderUsageWindow, 
   };
 }
 
+/** Neumaier compensated summation. */
+function compensatedSum(values: readonly number[]): number {
+  let sum = 0;
+  let correction = 0;
+  for (const value of values) {
+    const next = sum + value;
+    correction += Math.abs(sum) >= Math.abs(value) ? sum - next + value : value - next + sum;
+    sum = next;
+  }
+  return sum + correction;
+}
+
 function poolWindows(accounts: readonly LimitAccount[], now: number): readonly LimitPoolWindow[] {
   // Every account is shown; only aggregated ones set the pooled percentage, pace and refills.
   const shown = new Map<string, LimitPoolMember[]>();
@@ -566,8 +578,10 @@ function poolWindows(accounts: readonly LimitAccount[], now: number): readonly L
     const id = members[0]!.account.driver === "codex" ? key : first.id;
     // One unknown plan makes the pool incomparable by plan, so every member then counts once.
     const { totalWeight, weightOf } = poolWeights(members, first.kind);
+    // Sum in value order so reset order cannot change the rounded result.
     const usedPercent =
-      members.reduce((sum, m) => sum + m.window.usedPercent * weightOf(m), 0) / totalWeight;
+      compensatedSum(members.map((m) => m.window.usedPercent * weightOf(m)).sort((a, b) => a - b)) /
+      totalWeight;
     // Judge pace only for windows with reset clocks; others add spend without elapsed time.
     const timed = members.flatMap((m) => {
       const share = elapsedShare(m.window, now);

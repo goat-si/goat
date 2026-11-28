@@ -113,7 +113,6 @@ import {
   terminalTerminationCause,
   terminalRunNoticeEvents,
 } from "./runTerminationCause.ts";
-export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";

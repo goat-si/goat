@@ -52,7 +52,8 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries idle", (it)
 
       for (let run = 0; run < 3; run++) {
         yield* TestClock.adjust("6 minutes");
-        yield* workspaceEntries.refresh(cwd);
+        yield* workspaceEntries.refresh(cwd, "passive");
+        yield* workspaceEntries.refresh(cwd, "passive");
       }
 
       expect({ rescans, destroyed }).toEqual({ rescans: 2, destroyed: 1 });

@@ -4320,6 +4320,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
         projectId: ProjectId.make("project:mcp-stop"),
         runtimeMode: "full-access",
         interactionMode: "default",
+        deletedAt: null,
       },
       runs: live
         ? [
@@ -4347,6 +4348,7 @@ describe("OrchestratorMcpService thread interrupt", () => {
         projectId: ProjectId.make("project:mcp-stop"),
         runtimeMode: "full-access",
         interactionMode: "default",
+        deletedAt: null,
       },
       runs: [{ id: RunId.make("run:mcp-stop-child"), status: "running", ordinal: 1 }],
       subagents: [],

@@ -133,6 +133,10 @@ describe("resolvePathLinkTarget", () => {
       String.raw`\\server\share\project\.\src\index.ts:12`,
     ],
     ["src/index.ts:12", "/home/jane/project", "/home/jane/project/src/index.ts:12"],
+    ["./reports/draft.md:2", "/home/jane/project", "/home/jane/project/reports/draft.md:2"],
+    ["./note.txt", "/tmp/photos\\", "/tmp/photos\\/note.txt"],
+    ["./note.txt", "/tmp/C:\\files", "/tmp/C:\\files/note.txt"],
+    ["~\\note.txt", "/tmp/C:\\files", "/tmp/C:\\files/~\\note.txt"],
   ])("resolves %s using the connected environment cwd %s", (path, cwd, expected) => {
     expect(resolvePathLinkTarget(path, cwd)).toBe(expected);
   });

@@ -74,8 +74,24 @@ it.effect("isolates withheld reads by path and revision, and refuses them on oth
     const projects = [
       project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
     ];
+    const firstHead = "a".repeat(40);
+    const nextHead = "b".repeat(40);
     const answers: string[] = [];
     const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+      getChangeRequestActivity: () =>
+        Effect.succeed({
+          comments: [],
+          commentCount: 0,
+          commentsTruncated: false,
+          reviewThreads: [],
+          commits: [
+            {
+              oid: firstHead,
+              messageHeadline: "Change",
+              committedDate: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        }),
       getDiff: (input) =>
         Effect.sync(() => {
           const patch =
@@ -93,8 +109,6 @@ it.effect("isolates withheld reads by path and revision, and refuses them on oth
       ],
     });
     const path = { ...ref, path: "large.js" };
-    const firstHead = "a".repeat(40);
-    const nextHead = "b".repeat(40);
     assert.strictEqual((yield* service.diff(ref)).patch, "page");
     assert.strictEqual(
       (yield* service.diff({ ...path, revision: { baseSha: firstHead, headSha: firstHead } }))

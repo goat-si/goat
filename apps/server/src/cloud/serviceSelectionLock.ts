@@ -43,7 +43,12 @@ function processStartIdentity(pid: number): Promise<string | undefined> {
 let ownStartIdentity: Promise<string | undefined> | undefined;
 
 /** Serialize durable selection and unit writes, never manager stop/start commands. */
-export async function acquireServiceSelectionLock(selectionPath: string): Promise<() => void> {
+export async function acquireServiceSelectionLock(
+  selectionPath: string,
+  options?: { readonly waitForRetry?: () => Promise<void> },
+): Promise<() => void> {
+  const waitForRetry =
+    options?.waitForRetry ?? (() => new Promise<void>((resolve) => setTimeout(resolve, 50)));
   const directory = NodePath.dirname(selectionPath);
   NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const lock = selectionPath + ".selection-lock";
@@ -51,11 +56,17 @@ export async function acquireServiceSelectionLock(selectionPath: string): Promis
   const owner = `${process.pid}.${bootEpochSeconds()}.${NodeCrypto.randomUUID()}${identity === undefined ? "" : `.${identity}`}`;
   const candidate = `${lock}.${owner}`;
   const deadline = Date.now() + 30_000;
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone launcher has no Effect runtime.
+  const windows = NodeOS.platform() === "win32";
   const removeEmptyLock = () => {
     try {
       NodeFS.rmdirSync(lock);
     } catch (error) {
-      if (!["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? ""))
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (
+        !["ENOENT", "ENOTEMPTY", "EEXIST"].includes(code) &&
+        !(windows && ["EBUSY", "EPERM", "EACCES"].includes(code))
+      )
         throw error;
     }
   };
@@ -71,15 +82,18 @@ export async function acquireServiceSelectionLock(selectionPath: string): Promis
           removeEmptyLock();
         };
       } catch (error) {
-        if (!["EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? ""))
+        const code = (error as NodeJS.ErrnoException).code ?? "";
+        if (
+          !["EEXIST", "ENOTEMPTY"].includes(code) &&
+          !(windows && ["EPERM", "EACCES"].includes(code))
+        )
           throw error;
       }
-      let owners: string[];
+      let owners: string[] = [];
       try {
         owners = NodeFS.readdirSync(lock);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
       const [previous] = owners;
       if (owners.length === 1 && previous !== undefined) {
@@ -118,7 +132,7 @@ export async function acquireServiceSelectionLock(selectionPath: string): Promis
         throw new Error(
           `Service selection is locked at ${lock}. Retry when the other operation finishes.`,
         );
-      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      await waitForRetry();
     }
   } finally {
     NodeFS.rmSync(candidate, { recursive: true, force: true });

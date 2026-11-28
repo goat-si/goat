@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
-import { isWholeWordRange, mapContentMatchRanges } from "./workspaceContentMatchRanges.ts";
+import { isWholeWordRange } from "./workspaceContentMatchRanges.ts";
 import { makeIgnoreFileDecider } from "./workspaceIgnoreFiles.ts";
 
 const MAX_GREP_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -46,17 +46,21 @@ function* grepRecords(stdout: string, fieldCount: number) {
 function locateRegexMatches(
   line: string,
   matches: RegexLineMatches | undefined,
-): Array<readonly [number, number]> {
+): Array<{ start: number; end: number }> {
   if (!matches) return [];
   const bytes = Buffer.from(line);
-  const ranges: Array<readonly [number, number]> = [];
-  let start = matches.column - 1;
+  const toStringIndex = (offset: number) => bytes.subarray(0, offset).toString().length;
+  const ranges: Array<{ start: number; end: number }> = [];
+  const firstStart = toStringIndex(matches.column - 1);
   for (const text of matches.texts) {
-    const match = Buffer.from(text);
-    const previous = ranges.at(-1);
-    if (previous) start = bytes.indexOf(match, previous[1]);
-    if (start < 0 || start + match.length > bytes.length) break;
-    ranges.push([start, start + match.length]);
+    const start = line.indexOf(text, ranges.at(-1)?.end ?? firstStart);
+    if (start >= 0) ranges.push({ start, end: start + text.length });
+    else if (!ranges.length)
+      ranges.push({
+        start: firstStart,
+        end: toStringIndex(matches.column - 1 + Buffer.byteLength(text)),
+      });
+    else break;
   }
   return ranges;
 }
@@ -80,6 +84,8 @@ const runGitGrep = Effect.fn("WorkspaceSearchIndex.gitGrep")(function* (
         "grep.column=false",
         "-c",
         "grep.fullName=false",
+        "-c",
+        "submodule.recurse=false",
         "--literal-pathspecs",
         "grep",
         "--untracked",
@@ -200,20 +206,25 @@ const searchGitPaths = Effect.fn("WorkspaceSearchIndex.searchGitPaths")(function
       rangesCutOff = true;
       break;
     }
-    const lineContent = (rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine).slice(
-      0,
-      CONTENT_LINE_MAX_LENGTH,
-    );
-    const matchRanges = (
+    const fullLine = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const lineContent = fullLine.slice(0, CONTENT_LINE_MAX_LENGTH);
+    const ranges = (
       literal
-        ? Array.from(lineContent.matchAll(literal), (match) => ({
+        ? Array.from((input.wholeWord ? fullLine : lineContent).matchAll(literal), (match) => ({
             start: match.index,
             end: match.index + match[0].length,
           }))
-        : mapContentMatchRanges(lineContent, locateRegexMatches(lineContent, regexLine))
-    ).filter((range) => !input.wholeWord || isWholeWordRange(lineContent, range));
-    if (input.wholeWord && matchRanges.length === 0) continue;
-    matches.push({ path: relativePath, lineNumber: line, lineContent, matchRanges });
+        : locateRegexMatches(rawLine, regexLine).flatMap(({ start, end }) =>
+            start < fullLine.length ? [{ start, end: Math.min(end, fullLine.length) }] : [],
+          )
+    ).filter((range) => !input.wholeWord || isWholeWordRange(fullLine, range));
+    if (input.wholeWord && ranges.length === 0) continue;
+    matches.push({
+      path: relativePath,
+      lineNumber: line,
+      lineContent,
+      matchRanges: ranges.filter((range) => range.end <= lineContent.length),
+    });
     if (matches.length > input.limit) break;
   }
   return {

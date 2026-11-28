@@ -69,8 +69,8 @@ import {
   ReviewLedgerEntryInput,
 } from "./reviewLedger.ts";
 export * from "./reviewLedger.ts";
-
 import {
+  GitRefName,
   CheckpointId,
   CheckpointRef,
   CheckpointScopeId,
@@ -426,7 +426,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  branch: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
@@ -1988,7 +1988,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
-  branch: Schema.NullOr(TrimmedNonEmptyString),
+  branch: Schema.NullOr(GitRefName),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
@@ -2896,7 +2896,7 @@ export const OrchestrationV2Command = Schema.Union([
     modelSelection: ModelSelection,
     runtimeMode: RuntimeMode,
     interactionMode: ProviderInteractionMode,
-    branch: Schema.NullOr(TrimmedNonEmptyString),
+    branch: Schema.NullOr(GitRefName),
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
     importedNativeThread: Schema.optional(
       Schema.Struct({
@@ -3035,10 +3035,10 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     title: Schema.optional(TrimmedNonEmptyString),
     regenerateTitle: Schema.optional(Schema.Boolean),
-    branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    branch: Schema.optional(Schema.NullOr(GitRefName)),
     worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     expectedWorktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-    expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    expectedBranch: Schema.optional(Schema.NullOr(GitRefName)),
     /** A message queued in the same commit, so a workspace change cannot settle the thread first. Server-issued. */
     continuation: Schema.optional(Schema.Struct({ messageId: MessageId, text: Schema.String })),
     /** Reject unless no message or run has landed on this thread. */
@@ -3094,7 +3094,7 @@ export const OrchestrationV2Command = Schema.Union([
     snapshotSequence: NonNegativeInt,
     expected: Schema.Struct({
       workspaceRoot: TrimmedNonEmptyString,
-      branch: Schema.NullOr(TrimmedNonEmptyString),
+      branch: Schema.NullOr(GitRefName),
       worktreePath: Schema.NullOr(TrimmedNonEmptyString),
       linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
       branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),

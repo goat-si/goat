@@ -49,7 +49,6 @@ import * as Stream from "effect/Stream";
 
 import { openAssetClaims, sealAssetClaims } from "./assetClaimsSeal.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -69,6 +68,7 @@ import {
   resolveCanonicalWorkspaceFile,
   resolveCanonicalWorkspaceFileForRequest,
 } from "./workspaceAssetFile.ts";
+import { resolveCanonicalFile } from "./resolveCanonicalFile.ts";
 import { isPreviewDependencyPath } from "./previewAssetExtensions.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
@@ -99,6 +99,7 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("workspace-file"),
     workspaceRoot: Schema.String,
     baseRelativePath: Schema.String,
+    entryFileName: Schema.optionalKey(Schema.String),
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -249,19 +250,6 @@ const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(functio
   return png
     ? ({ kind: "bytes", bytes: png, mimeType: "image/png" } satisfies ResolvedAsset)
     : null;
-});
-
-const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(function* (
-  filePath: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const canonicalFile = yield* optionOnNotFound(fileSystem.realPath(filePath));
-  if (Option.isNone(canonicalFile)) return null;
-
-  const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
-  if (Option.isNone(info) || info.value.type !== "File") return null;
-  const isServerInternalPath = yield* makeIsServerInternalPath;
-  return (yield* isServerInternalPath(canonicalFile.value)) ? null : canonicalFile.value;
 });
 
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
@@ -461,6 +449,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
             kind: "workspace-file" as const,
             workspaceRoot: canonicalWorkspaceRoot,
             baseRelativePath: path.dirname(resolved.relativePath),
+            entryFileName: path.basename(resolved.relativePath),
             expiresAt: input.expiresAt,
           },
       fileName: path.basename(resolved.relativePath),
@@ -644,7 +633,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             ? { mimeType: videoMimeType }
             : inlineAudioMimeType !== null
               ? { mimeType: inlineAudioMimeType }
-              : input.resource.mimeType !== undefined
+              : isGenericFile && input.resource.mimeType !== undefined
                 ? { mimeType: input.resource.mimeType }
                 : {}),
         ...(input.resource.renderIntent === "mcp-app" && inlinePreviewMimeType === "text/html"
@@ -982,6 +971,7 @@ const resolveClaims = Effect.fn("AssetAccess.resolveClaims")(function* (
     workspaceRoot: claims.workspaceRoot,
     relativePath: joinedRelativePath,
     previewBaseRelativePath: claims.baseRelativePath,
+    previewEntry: decodedPath === claims.entryFileName,
   });
 });
 

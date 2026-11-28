@@ -1,3 +1,11 @@
+import { pinnedReviewHead } from "./pinnedReviewHead.ts";
+import { guardDiffFileContents, withListedCommit } from "./withListedCommit.ts";
+import {
+  addressedProjectOf,
+  observeRead,
+  ownProjectShells,
+  type WorkspaceProjects,
+} from "./addressedProject.ts";
 import { missingProjectError } from "./pullRequestMissingProject.ts";
 import { supersedesReading, type PullRequestReading } from "./pullRequestReading.ts";
 import { canCacheDiff, decodeDiffCacheKey, diffCacheEvictions } from "./pullRequestDiffCache.ts";
@@ -137,7 +145,6 @@ import {
 import { noteRefinedHost, unreadListResult, withListResult } from "./pullRequestListFallback.ts";
 import { withOverviewThreads } from "./pullRequestActivityFields.ts";
 import { VERDICT_LABELS } from "./pullRequestReviewVerdictLabels.ts";
-
 export interface PullRequestMergeEvent extends PullRequestRef {
   readonly mergedAt: string;
 }
@@ -173,7 +180,6 @@ const FILES_VIEWED_CACHE_CAPACITY = 128;
 const VIEWER_CACHE_CAPACITY = 32;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
-
 const routingCredential = Context.Reference<{
   readonly credentialFingerprint: string;
   readonly viewer: string;
@@ -271,6 +277,9 @@ export class PullRequestService extends Context.Service<
     readonly changes: (input: PullRequestRef) => Stream.Stream<void>;
     /** Whether the provider has an event feed, so a capped number of feeds goes where one exists. */
     readonly followsChanges: (input: PullRequestRef) => Effect.Effect<boolean>;
+    readonly addressedProject: (
+      projectId: ProjectId,
+    ) => Effect.Effect<OrchestrationProjectShell | undefined, PullRequestError>;
     readonly threadComments: (
       input: PullRequestThreadCommentsInput,
     ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestError>;
@@ -327,10 +336,8 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<void>;
   }
 >()("goat/pullRequest/PullRequestService") {}
-
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 const LABEL_CHANGE_REFUSAL = "You need triage access on this repository to change its labels.";
-
 export interface SupportedProject {
   readonly cursorKey: string;
   readonly project: OrchestrationProjectShell;
@@ -342,16 +349,6 @@ export interface SupportedProject {
   readonly repositoryKey: string | null;
   /** The upstream a fork was made from, listed only when asked for. */
   readonly upstream: boolean;
-}
-
-interface WorkspaceProjects {
-  readonly supported: ReadonlyArray<SupportedProject>;
-  readonly unimplemented: ReadonlyMap<
-    string,
-    { readonly kind: SourceControlProviderKind; readonly projectCount: number }
-  >;
-  readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
-  readonly refinedProjectIdsByHost: ReadonlyMap<string, ReadonlyArray<ProjectId>>;
 }
 
 // Inherited by fibers forked inside the scope, so it is closed, not just dropped, when the scope ends.
@@ -367,7 +364,6 @@ interface RepositoryBatch {
   readonly truncated: boolean;
   readonly nextCursor: string | null;
 }
-
 const LIST_CURSOR_PATTERN =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,9})\|(\d{1,9}(?:,\d{1,9})*)?(?:\|([\w.:~+-]{1,128}))?$/;
 
@@ -382,13 +378,6 @@ function parseListCursor(raw: string): ListCursor | null {
     ...(match[4] === undefined ? {} : { resumeAfter: match[4] }),
   };
 }
-
-// Capture before the provider read so a slow response keeps its original freshness through caches.
-const observeRead = Effect.fnUntraced(function* <A, E, R>(read: Effect.Effect<A, E, R>) {
-  const observedAt = yield* Clock.currentTimeMillis;
-  return { value: yield* read, observedAt };
-});
-
 export const make = Effect.gen(function* () {
   const mergedPullRequests = yield* PubSub.sliding<PullRequestMergeEvent>(64);
   const stateChanges = yield* PubSub.sliding<ThreadPullRequestKey>(64);
@@ -637,7 +626,13 @@ export const make = Effect.gen(function* () {
             upstream,
           });
         }
-        return { supported, unimplemented, viewerRoots, refinedProjectIdsByHost };
+        return {
+          projects: ownProjectShells(repositories),
+          supported,
+          unimplemented,
+          viewerRoots,
+          refinedProjectIdsByHost,
+        };
       }),
     );
 
@@ -712,7 +707,7 @@ export const make = Effect.gen(function* () {
               return Effect.gen(function* () {
                 const publicHost = sourceControlDefinitions.findByPublicHost(host);
                 const api = publicHost === undefined ? null : registry.get(publicHost.kind);
-                if (api?.readsPublicHostWithoutCheckout) {
+                if (publicHost !== undefined && api?.readsPublicHostWithoutCheckout) {
                   const selected = yield* projects.getShell(ref.projectId).pipe(
                     Effect.mapError(
                       (cause) =>
@@ -769,6 +764,11 @@ export const make = Effect.gen(function* () {
       repository: project.repository,
     };
   });
+
+  const addressedProject: PullRequestService["Service"]["addressedProject"] = (projectId) =>
+    listWorkspaceProjects({ projectId }).pipe(
+      Effect.map((workspace) => addressedProjectOf(workspace, projectId)),
+    );
 
   // Access can change after page load; recheck every write.
   const viewerPermissionsOf = (
@@ -2046,18 +2046,23 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository to comment on a line of a change request.",
               );
             }
-            return project.api
-              .submitReview({
-                cwd: project.project.workspaceRoot,
-                repository: project.repository,
-                host: project.host,
-                number: input.number,
-                verdict: input.verdict,
-                body: input.body,
-                comments: input.comments,
-                ...(input.revision === undefined ? {} : { revision: input.revision }),
-              })
-              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+            return pinnedReviewHead(project, input, toPullRequestError("submitReview")).pipe(
+              Effect.flatMap((expectedHeadSha) =>
+                project.api
+                  .submitReview({
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                    verdict: input.verdict,
+                    body: input.body,
+                    comments: input.comments,
+                    ...(expectedHeadSha === undefined ? {} : { expectedHeadSha }),
+                    ...(input.revision === undefined ? {} : { revision: input.revision }),
+                  })
+                  .pipe(Effect.mapError(toPullRequestError("submitReview"))),
+              ),
+            );
           }),
         );
       }),
@@ -3177,13 +3182,15 @@ export const make = Effect.gen(function* () {
     );
     return { key, read };
   };
-  const diff: PullRequestService["Service"]["diff"] = (input) => {
-    // The host must revalidate both live PR refs before every aggregate file read.
-    if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
-    const { key, read } = readDiff(input);
-    const result = read.pipe(Effect.map((observation) => observation.value));
-    return input.path === undefined ? staleDiff.serve(key, result) : result;
-  };
+  const diff: PullRequestService["Service"]["diff"] = (input) =>
+    withListedCommit("diff", input, activity).pipe(
+      Effect.flatMap((input) => {
+        if (input.path !== undefined && input.commit === undefined) return diffUncached(input);
+        const { key, read } = readDiff(input);
+        const result = read.pipe(Effect.map((observation) => observation.value));
+        return input.path === undefined ? staleDiff.serve(key, result) : result;
+      }),
+    );
 
   const filesViewedCache = yield* Cache.makeWith(
     (key: string) => {
@@ -3394,8 +3401,16 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const ref = yield* canonicalRef(input);
     yield* readCache.invalidate(refScope(ref));
+    // A refusal (e.g. a merge conflict) means readers hold stale state, so refresh them too.
     const { repository, summary } = yield* runAction(input).pipe(
       Effect.ensuring(readCache.invalidate(refScope(ref))),
+      Effect.tapError(() =>
+        Effect.suspend(() => {
+          bumpRefEpoch(ref);
+          listingsEpoch = ++epochCounter;
+          return SubscriptionRef.set(pullRequestRefreshes, listingsEpoch);
+        }),
+      ),
     );
     bumpRefEpoch({ ...ref, repository });
     listingsEpoch = ++epochCounter;
@@ -3630,21 +3645,11 @@ export const make = Effect.gen(function* () {
         );
     return walk(undefined);
   };
-  // PR read access does not grant arbitrary repository reads with the project credential; restrict to changed files.
-  const diffFileContents: PullRequestService["Service"]["diffFileContents"] = (input) =>
-    changesFile(input).pipe(
-      Effect.flatMap((changed) =>
-        changed
-          ? readDiffFileContents(input)
-          : Effect.fail(
-              new PullRequestOperationError({
-                operation: "diffFileContents",
-                detail: "This file is not part of the change request.",
-                reason: "not-found",
-              }),
-            ),
-      ),
-    );
+  const diffFileContents = guardDiffFileContents(
+    changesFile,
+    readDiffFileContents,
+    credentialCached(activity),
+  );
 
   const revisions = (ref: SubscriptionRef.SubscriptionRef<number>) =>
     SubscriptionRef.changes(ref).pipe(Stream.filter((revision) => revision > 0));
@@ -3688,6 +3693,7 @@ export const make = Effect.gen(function* () {
     activity: credentialCached(activity),
     changes,
     followsChanges,
+    addressedProject,
     preview: credentialCached(preview),
     threadComments,
     diff: credentialCached(diff),
@@ -3712,5 +3718,4 @@ export const make = Effect.gen(function* () {
     invalidate,
   });
 });
-
 export const layer = Layer.effect(PullRequestService, make);

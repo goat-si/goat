@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { GitRefName, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
@@ -19,7 +19,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   /** Read only this comparison. Omitted for legacy clients requesting both original views. */
   scope: Schema.optionalKey(ReviewDiffPreviewSourceKind),
-  baseRef: Schema.optional(TrimmedNonEmptyString),
+  baseRef: Schema.optional(GitRefName),
   mergeBase: Schema.optionalKey(ReviewMergeBase),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
   metadataOnly: Schema.optionalKey(Schema.Boolean),
@@ -65,8 +65,8 @@ export const ReviewDiffPreviewSource = Schema.Struct({
   id: TrimmedNonEmptyString,
   kind: ReviewDiffPreviewSourceKind,
   title: TrimmedNonEmptyString,
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  baseRef: Schema.NullOr(GitRefName),
+  headRef: Schema.NullOr(GitRefName),
   mergeBase: Schema.optionalKey(ReviewMergeBase),
   diff: Schema.String,
   diffHash: TrimmedNonEmptyString,
@@ -80,8 +80,8 @@ export const ReviewDiffFileContentsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   sourceKind: ReviewDiffPreviewSourceKind,
   changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
-  baseRef: Schema.NullOr(TrimmedNonEmptyString),
-  headRef: Schema.NullOr(TrimmedNonEmptyString),
+  baseRef: Schema.NullOr(GitRefName),
+  headRef: Schema.NullOr(GitRefName),
   oldPath: TrimmedNonEmptyString,
   newPath: TrimmedNonEmptyString,
 });

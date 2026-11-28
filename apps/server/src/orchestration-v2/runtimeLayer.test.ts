@@ -1,3 +1,4 @@
+import { assertQueuedWatchWake } from "./testkit/QueuedWatchWakeAssertion.ts";
 import { assertMergeBackClosedParent } from "./testkit/MergeBackClosedParentAssertion.ts";
 import { assertPinSettled } from "./testkit/PinSettledAssertion.ts";
 import { assertMergeBackFreshMessage } from "./testkit/MergeBackFreshAssertion.ts";
@@ -50,7 +51,6 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
-
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -67,7 +67,6 @@ import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as PullRequestWatchReactor from "./PullRequestWatchReactor.ts";
 import { PULL_REQUEST_WATCH_WAKE_LIMIT } from "./pullRequestWatch.ts";
-
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -79,7 +78,6 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "../project/ScratchThreadPromotion.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
-
 import {
   antigravityInstanceId,
   driver,
@@ -3551,6 +3549,9 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("automatic settlement refuses a held wake only within the queued-turn grace", () =>
+    assertQueuedWatchWake(modelSelection),
+  );
   it.effect("archiving ends watches, and an archived thread cannot start one", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

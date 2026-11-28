@@ -1,8 +1,10 @@
+import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
-import { describe, expect, it } from "vite-plus/test";
+import { assert, describe, expect, it } from "vite-plus/test";
 
 import { detectComposerTrigger, serializeComposerFileLink } from "./composerTrigger.ts";
+import { resolveMarkdownFileLinkTarget } from "./markdownLinks.ts";
 
 interface MarkdownNode {
   readonly type: string;
@@ -15,7 +17,7 @@ function parsedLinkLabel(markdown: string): string | undefined {
     node.value ?? (node.children ?? []).map(textOf).join("");
   const find = (node: MarkdownNode): MarkdownNode | undefined =>
     node.type === "link" ? node : node.children?.map(find).find(Boolean);
-  const link = find(unified().use(remarkParse).parse(markdown) as MarkdownNode);
+  const link = find(unified().use(remarkParse).use(remarkGfm).parse(markdown) as MarkdownNode);
   return link && textOf(link);
 }
 
@@ -135,10 +137,26 @@ describe("detectComposerTrigger", () => {
 });
 
 describe("serializeComposerFileLink", () => {
+  it.each(["reports:final.md", "file:notes.md"])("disambiguates the colon filename %s", (path) => {
+    const link = serializeComposerFileLink(path);
+    expect(link).toBe(`[${path}](./${path})`);
+    expect(resolveMarkdownFileLinkTarget(`./${path}`, "/workspace")).toBe(`/workspace/${path}`);
+  });
+
   it("encodes markdown-sensitive destination characters", () => {
     expect(serializeComposerFileLink("docs/My File (draft).md")).toBe(
       "[My File (draft).md](docs/My%20File%20%28draft%29.md)",
     );
+  });
+
+  it("preserves literal HTML entities in the file label and destination", () => {
+    const path = "docs/R&copy;.md";
+    const paragraph = unified().use(remarkParse).parse(serializeComposerFileLink(path)).children[0];
+    assert(paragraph?.type === "paragraph");
+    const link = paragraph.children[0];
+    assert(link?.type === "link");
+    expect(link.children).toMatchObject([{ type: "text", value: "R&copy;.md" }]);
+    expect(resolveMarkdownFileLinkTarget(link.url, "/workspace")).toBe(`/workspace/${path}`);
   });
 
   it("supports windows paths", () => {
@@ -150,6 +168,9 @@ describe("serializeComposerFileLink", () => {
   it.each([
     ["pkg/__init__.py", "__init__.py"],
     ["notes/*draft*.md", "*draft*.md"],
+    ["notes/[TODO].md", "[TODO].md"],
+    ["notes/~~draft~~.md", "~~draft~~.md"],
+    ["notes/&#91;TODO&#93;.md", "&#91;TODO&#93;.md"],
   ])("renders the mention of %j with its file name as the label", (path, basename) => {
     expect(parsedLinkLabel(serializeComposerFileLink(path))).toBe(basename);
   });

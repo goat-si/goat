@@ -10,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import { vi } from "vite-plus/test";
 import { idleThreadProjection, liveThreadShell } from "./mcp/McpToolAccess.testkit.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
@@ -218,4 +219,59 @@ it.effect("negotiates compact visits for both persisted replay and the live tail
       { kind: "event", sequence: afterArchive.sequence, event: afterArchive.event },
     ]);
   }).pipe(Effect.provide(ReplayTestLayer)),
+);
+
+it.effect("thread resume replays a deleted thread's deletion and nothing recorded before it", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const now = "2026-10-13T00:00:00.000Z";
+    const threadId = ThreadId.make("thread:deleted-resume");
+    const insert = (version: number, type: string, payload: object) => sql`
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      ) VALUES (
+        ${`deleted-resume:${version}`}, 'thread', ${threadId}, ${version}, ${type},
+        ${now}, 'server', ${JSON.stringify(payload)}, '{}', 2
+      )
+    `;
+    const detached = { providerSessionId: "session:deleted-resume", detachedAt: now };
+    yield* insert(0, "provider-session.detached", detached);
+    yield* insert(1, "provider-session.detached", detached);
+    yield* insert(2, "thread.deleted", {
+      createdBy: "user",
+      creationSource: "web",
+      id: threadId,
+      projectId: "project:deleted-resume",
+      title: "Deleted",
+      providerInstanceId: "codex",
+      modelSelection: { instanceId: "codex", model: "default" },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      activeProviderThreadId: null,
+      lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+      deletedAt: now,
+      settledOverride: null,
+      settledAt: null,
+      lastVisitedAt: null,
+    });
+
+    const items = yield* subscribeOrchestrationV2Thread({ threadId, afterSequence: 0 }).pipe(
+      Effect.flatMap(Stream.runCollect),
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        ensureLegacyTranscript: () => Effect.void,
+        streamStoredEventsFrom: () => Stream.empty,
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+    );
+    assert.deepEqual(
+      Array.from(items).map((item) => item.kind === "event" && item.event.type),
+      ["thread.deleted"],
+    );
+  }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );

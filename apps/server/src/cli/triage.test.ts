@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
+import * as NodeStream from "node:stream";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
@@ -25,7 +26,7 @@ import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
 } from "../serverRuntimeState.ts";
-import { describeServerProcess } from "./triage.ts";
+import { describeServerProcess, matchAgentAnswer, pickAgent } from "./triage.ts";
 
 it.effect("reports the version the running server recorded, not the CLI's", () =>
   Effect.gen(function* () {
@@ -134,6 +135,49 @@ it.live.each([
     }),
 );
 
+it.effect.each([
+  { label: "Ctrl+C", key: "\x03" },
+  { label: "Ctrl+D", key: "\x04" },
+  { label: "an invalid choice and Ctrl+C", key: "9\r\x03" },
+  { label: "an invalid choice and Ctrl+D", key: "9\r\x04" },
+])("returns undefined when the agent picker is cancelled with $label", ({ key }) =>
+  Effect.gen(function* () {
+    const input = new NodeStream.PassThrough();
+    const output = Object.assign(new NodeStream.PassThrough(), { isTTY: true });
+    output.once("data", () => input.write(key));
+    const picked = yield* pickAgent(
+      [
+        { id: "claude", label: "Claude Code" },
+        { id: "codex", label: "Codex" },
+      ],
+      input,
+      output,
+    );
+    assert.isUndefined(picked);
+  }),
+);
+
+it.effect.each([
+  { label: "no answer", lines: [], picked: undefined },
+  { label: "an invalid answer", lines: ["99\n"], picked: undefined },
+  { label: "an invalid answer and then a valid one", lines: ["9\n", "2\n"], picked: "codex" },
+])("the agent picker returns $picked when input ends after $label", ({ lines, picked }) =>
+  Effect.gen(function* () {
+    const input = NodeStream.Readable.from(lines.map((line) => Promise.resolve(line)));
+
+    const agent = yield* pickAgent(
+      [
+        { id: "claude", label: "Claude Code" },
+        { id: "codex", label: "Codex" },
+      ],
+      input,
+      new NodeStream.PassThrough(),
+    );
+
+    assert.strictEqual(agent?.id, picked);
+  }),
+);
+
 it.live(
   "requires an explicit choice when Codex and Antigravity are installed without a terminal",
   () =>
@@ -216,3 +260,15 @@ it.live("a failed agent launch points at the prompt it could not run", () =>
     ),
   ),
 );
+
+it.each([
+  ["2", "codex"],
+  [" 1 ", "claude"],
+  ["CLAUDE", "claude"],
+  ["1.5", undefined],
+  ["1x", undefined],
+  ["2codex", undefined],
+  ["3", undefined],
+])("matches picker answer %s", (answer, expected) => {
+  expect(matchAgentAnswer([{ id: "claude" }, { id: "codex" }], answer)?.id).toBe(expected);
+});

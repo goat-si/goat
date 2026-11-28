@@ -19,6 +19,7 @@ import * as DateTime from "effect/DateTime";
 import * as FileSystem from "effect/FileSystem";
 import * as ServerConfig from "./config.ts";
 import {
+  acquireThemePublishLock,
   MAX_THEME_FILE_BYTES,
   MAX_THEME_FILES,
   readPublishedThemes,
@@ -155,6 +156,22 @@ export const layer = Layer.effect(
               if (!themes.some((theme) => theme.id === id))
                 return yield* invalid("Theme is not published.");
             }
+            const whileLocked =
+              serialized === undefined
+                ? (effect: Effect.Effect<void, ThemePublicationError>) => effect
+                : yield* acquireThemePublishLock(environmentThemesDir, id).pipe(
+                    Effect.provideService(FileSystem.FileSystem, fs),
+                    Effect.mapError((cause) =>
+                      invalid("Theme directory is busy or unavailable.", cause),
+                    ),
+                  );
+            const publishedBefore =
+              serialized === undefined
+                ? []
+                : yield* readPublishedThemes(environmentThemesDir).pipe(
+                    Effect.provideService(FileSystem.FileSystem, fs),
+                    Effect.mapError((cause) => invalid("Cannot read themes.", cause)),
+                  );
             let rollback: (() => void) | undefined;
             const stage =
               serialized === undefined
@@ -252,6 +269,9 @@ export const layer = Layer.effect(
                         ),
                         Effect.flatMap((themes) =>
                           themes.some((theme) => theme.id === id) &&
+                          publishedBefore.every((previous) =>
+                            themes.some((theme) => theme.id === previous.id),
+                          ) &&
                           readThemeFileGuarded(
                             NodePath.join(environmentThemesDir, `${id}.json`),
                             MAX_THEME_FILE_BYTES,
@@ -284,10 +304,12 @@ export const layer = Layer.effect(
               .pipe(Effect.result);
             if (result._tag === "Failure") {
               if (rollback !== undefined) {
-                yield* Effect.try({
-                  try: rollback,
-                  catch: (cause) => invalid("Theme rollback failed.", cause),
-                });
+                yield* whileLocked(
+                  Effect.try({
+                    try: rollback,
+                    catch: (cause) => invalid("Theme rollback failed.", cause),
+                  }),
+                );
               }
               if (result.failure.settingsPath === "theme:agent-disabled")
                 return yield* new ThemePublicationError({
@@ -304,7 +326,7 @@ export const layer = Layer.effect(
                 cause: result.failure,
               });
             }
-          }),
+          }).pipe(Effect.scoped),
         ),
       );
     });

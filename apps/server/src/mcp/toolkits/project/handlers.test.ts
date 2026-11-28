@@ -626,7 +626,7 @@ it.effect("starts a project from just a title when workspaceRoot is omitted", ()
           Effect.provide(withLaunchService(layerDependencies)),
         );
 
-    const result = yield* handle({ title: "Pinball Stats" });
+    const result = yield* handle({ title: "Pinball Stats", defaultModelSelection: null });
     expect(result.at(-1)?.result).toMatchObject({
       id: createdProjectId,
       workspaceRoot: "/projects/pinball-stats",

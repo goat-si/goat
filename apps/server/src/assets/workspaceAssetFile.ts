@@ -12,6 +12,7 @@ interface WorkspaceFilePath {
   readonly workspaceRoot: string;
   readonly relativePath: string;
   readonly previewBaseRelativePath?: string;
+  readonly previewEntry?: boolean;
 }
 
 export const optionOnNotFound = <A, R>(
@@ -53,8 +54,9 @@ const inspectCanonicalWorkspaceFile = Effect.fn("AssetAccess.resolveCanonicalWor
       const belowBase = Option.isSome(canonicalBase)
         ? path.relative(canonicalBase.value, canonicalFile.value)
         : "..";
-      const dependency =
-        belowBase.startsWith("..") || path.isAbsolute(belowBase) ? relative : belowBase;
+      const outsideBase = belowBase.startsWith("..") || path.isAbsolute(belowBase);
+      if (outsideBase && !input.previewEntry) return null;
+      const dependency = outsideBase ? relative : belowBase;
       if (!isPreviewDependencyPath(dependency, path)) return null;
     }
 

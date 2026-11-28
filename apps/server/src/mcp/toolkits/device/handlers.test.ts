@@ -38,6 +38,14 @@ describe("device tool helpers", () => {
       expect(yield* resolveHostId(hosts, "one")).toBe("one");
       const error = yield* Effect.flip(resolveHostId(hosts, "MINI"));
       expect(error.reason).toContain("Mini (one), mini (two)");
+      const prefix = "a".repeat(63);
+      const selector = "b".repeat(127);
+      const truncated = yield* Effect.flip(
+        resolveHostId([{ ...hosts[0]!, label: `${prefix}😀` }], `${selector}😀`),
+      );
+      expect(truncated.reason.isWellFormed()).toBe(true);
+      expect(truncated.reason).toContain(prefix);
+      expect(truncated.reason).toContain(selector);
     }),
   );
 

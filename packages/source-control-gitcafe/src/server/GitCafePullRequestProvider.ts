@@ -19,7 +19,6 @@ import {
   type ProviderRepositoryRef,
   type PullRequestProviderApi,
 } from "@goat/source-control-core/server/PullRequestProvider";
-
 import * as GitCafeApi from "./GitCafeApi.ts";
 import * as GitCafeHosts from "./gitCafeHosts.ts";
 import * as Json from "./gitCafePullRequestJson.ts";
@@ -30,6 +29,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
+  expectedHeadMergeMethods: ["merge", "squash", "rebase"],
   // Branch updates restack every layer above the target.
   updateMethods: ["rebase"],
   search: true,
@@ -765,7 +765,7 @@ export const make = Effect.gen(function* () {
         body: {
           requestId: yield* randomUuidV4,
           expectedVersion: pull.version,
-          headOid: pull.headOid,
+          headOid: input.headSha ?? pull.headOid,
           baseOid,
           strategy: input.mergeMethod ?? "merge",
         },
@@ -1196,7 +1196,7 @@ export const make = Effect.gen(function* () {
           body: {
             verdict: input.verdict === "request-changes" ? "request_changes" : input.verdict,
             ...(input.body.length === 0 ? {} : { body: input.body }),
-            commitOid: pull.headOid,
+            commitOid: input.expectedHeadSha ?? pull.headOid,
             expectedVersion: pull.version,
             requestId: yield* randomUuidV4,
           },

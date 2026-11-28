@@ -693,15 +693,14 @@ function shortestSpan(places: ReadonlyArray<ReadonlyArray<number>>): {
  * Snippets vary per query, so they skip the field cache.
  */
 export function findSearchTokenRanges(text: string, query: string): SearchRange[] {
-  const tokens = new Map(
-    messageSearchTokens(query)
-      .long.map(
-        (token) =>
-          [foldSearchQuery(token), Array.from(token).length < MESSAGE_WORD_START_LENGTH] as const,
-      )
-      // Some tokens fold to nothing ("´´´"), which would match everywhere.
-      .filter(([token]) => token.length > 0),
-  );
+  const tokens = new Map<string, boolean>();
+  for (const token of messageSearchTokens(query).long) {
+    const short = Array.from(token).length < MESSAGE_WORD_START_LENGTH;
+    const word = foldSearchQuery(token);
+    for (const key of [word, word.replace(/(?<=i)\u0307/g, "")]) {
+      if (key.length > 0) tokens.set(key, short && (tokens.get(key) ?? true));
+    }
+  }
   if (tokens.size === 0) return [];
   const field = foldSearchField(text);
   const ranges: SearchRange[] = [];

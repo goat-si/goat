@@ -1,3 +1,4 @@
+import { hostPreviewMimeTypeFromExtension } from "@goat/shared/filePreview";
 import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeControl from "./runtimeControl.ts";
 import packageJson from "../package.json" with { type: "json" };
@@ -39,6 +40,7 @@ import {
   HttpServerRequest,
   HttpServerRespondable,
 } from "effect/http";
+import * as HttpIncomingMessage from "effect/http/HttpIncomingMessage";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import { OtlpTracer, OtlpSerialization } from "effect/observability";
 
@@ -83,10 +85,15 @@ const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
-const isSafeInlineMediaMimeType = (mimeType: string): boolean =>
-  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && /^(?:audio|video)\//i.test(mimeType);
-const isSafeInlineDocumentMimeType = (mimeType: string): boolean =>
-  mimeType.toLowerCase() === "application/pdf" || mimeType.toLowerCase() === "text/html";
+const XML_DOCUMENT_MIME_TYPE_PATTERN = /(?:\/xml(?:$|-)|\+xml$)/i;
+const inlineAssetMimeType = (filePath: string, claimed: string | undefined): string => {
+  const claimedType = claimed?.split(";", 1)[0]?.trim().toLowerCase();
+  if (claimedType !== undefined && DOWNLOAD_MIME_TYPE_PATTERN.test(claimedType)) return claimedType;
+  return (
+    hostPreviewMimeTypeFromExtension(/\.[^./\\]+$/.exec(filePath)?.[0] ?? "") ??
+    Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream")
+  );
+};
 
 export function downloadContentDisposition(fileName?: string): string {
   if (fileName === undefined) {
@@ -113,39 +120,28 @@ export function assetResponseHeaders(
     readonly mimeType?: string;
   },
 ): Record<string, string> {
-  const lowerPath = filePath.toLowerCase();
-  const inlineMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
+  const base = { "Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff" };
+  if (options?.download)
+    return {
+      ...base,
+      "Content-Disposition": downloadContentDisposition(options.fileName),
+      "Content-Security-Policy": "default-src 'none'; sandbox",
+      "Content-Type":
+        options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
+          ? options.mimeType
+          : "application/octet-stream",
+    };
+  const mimeType = inlineAssetMimeType(filePath, options?.mimeType);
+  if (mimeType === "text/html")
+    return {
+      ...base,
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY,
+    };
   return {
-    "Cache-Control": "private, max-age=3600",
-    "X-Content-Type-Options": "nosniff",
-    ...(options?.download
-      ? {
-          "Content-Disposition": downloadContentDisposition(options.fileName),
-          "Content-Security-Policy": "default-src 'none'; sandbox",
-          "Content-Type":
-            options.mimeType !== undefined && isSafeDownloadMimeType(options.mimeType)
-              ? options.mimeType
-              : "application/octet-stream",
-        }
-      : inlineMimeType !== undefined && isSafeInlineMediaMimeType(inlineMimeType)
-        ? { "Content-Type": inlineMimeType }
-        : inlineMimeType !== undefined && isSafeInlineDocumentMimeType(inlineMimeType)
-          ? {
-              "Content-Type":
-                inlineMimeType.toLowerCase() === "text/html"
-                  ? "text/html; charset=utf-8"
-                  : "application/pdf",
-              ...(inlineMimeType.toLowerCase() === "text/html"
-                ? { "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY }
-                : {}),
-            }
-          : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
-            ? {
-                "Content-Type": "text/html; charset=utf-8",
-                "Content-Security-Policy": HTML_CONTENT_SECURITY_POLICY,
-              }
-            : {}),
-    ...(!options?.download && lowerPath.endsWith(".svg")
+    ...base,
+    "Content-Type": mimeType,
+    ...(XML_DOCUMENT_MIME_TYPE_PATTERN.test(mimeType)
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),
   };
@@ -345,6 +341,12 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
   });
   return isMedia ? HttpServerResponse.setHeaders(response, headers) : response;
 });
+
+// The default body limit for API routes. Routes that take more set their own limit.
+export const API_MAX_BODY_BYTES = 1024 * 1024;
+export const layerApiBodyLimit = HttpRouter.middleware(
+  Effect.provideService(HttpIncomingMessage.MaxBodySize, ByteSize.bytes(API_MAX_BODY_BYTES)),
+).layer;
 
 export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compression(), {
   global: true,

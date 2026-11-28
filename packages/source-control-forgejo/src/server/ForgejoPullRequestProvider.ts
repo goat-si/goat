@@ -45,6 +45,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase", "fast-forward"],
+  expectedHeadMergeMethods: ["merge", "squash", "rebase", "fast-forward"],
   updateMethods: ["merge", "rebase"],
   search: false,
   reactions: true,
@@ -551,6 +552,7 @@ export const make = Effect.gen(function* () {
                     ? "fast-forward-only"
                     : (input.mergeMethod ?? "merge"),
                 delete_branch_after_merge: deleteBranch,
+                ...(input.headSha === undefined ? {} : { head_commit_id: input.headSha }),
               },
             }).pipe(
               Effect.catchTags({
@@ -621,7 +623,7 @@ export const make = Effect.gen(function* () {
                 ? "REQUEST_CHANGES"
                 : "COMMENT",
           body: input.body,
-          commit_id: pr.head.sha,
+          commit_id: input.expectedHeadSha ?? pr.head.sha,
           comments: input.comments.map((comment) => {
             const position = comment.position;
             const old =

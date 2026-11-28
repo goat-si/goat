@@ -35,6 +35,7 @@ export const watchHeadDirectory = (
         if (closed) return;
         headChanged ||=
           filename === "HEAD" ||
+          filename === "index" ||
           filename === null ||
           (event === "rename" && filename === "HEAD.lock");
         checkDirectory ||= event === "rename" || filename === null;

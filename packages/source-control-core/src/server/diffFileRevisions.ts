@@ -164,14 +164,17 @@ export function truncateLongDiffLines(patch: string, maxLineLength: number): str
     const next = patch.indexOf("\n", start);
     const end = next === -1 ? patch.length : next + 1;
     if (patch.startsWith("@@", start)) inHunk = true;
-    const lineEnd = next === -1 ? end : next;
+    const lineEnd =
+      next !== -1 && patch.charAt(next - 1) === "\r" ? next - 1 : next === -1 ? end : next;
     const boundary = start + maxLineLength + 1;
     const prior = patch.charCodeAt(boundary - 1);
     const limit = prior >= 0xd800 && prior <= 0xdbff ? boundary - 1 : boundary;
     const canCut = inHunk && " +-".includes(patch.charAt(start));
     const line =
       canCut && lineEnd > limit
-        ? patch.slice(start, limit) + cutLineNote(lineEnd - limit) + (next === -1 ? "" : "\n")
+        ? patch.slice(start, limit) +
+          cutLineNote(lineEnd - limit) +
+          (next === -1 ? "" : patch.slice(lineEnd, end))
         : patch.slice(start, end);
     size += line.length;
     if (size > maxPatchLength || lines.length >= maxRows) return null;

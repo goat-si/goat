@@ -1,3 +1,4 @@
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- the stop intent and process records use a temporary directory.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -246,6 +247,7 @@ const stopServer = (intent: "relaunch" | "quit" | "none") =>
         continueThreadsAfterServerUpdate: false,
       });
       const dependencies = Layer.mergeAll(
+        Layer.mock(BackgroundPolicy.BackgroundPolicy)({ shouldRunHostWork: Effect.succeed(true) }),
         environment,
         DesktopStopIntentReader.layer(intentPath, process.pid).pipe(
           Layer.provide(NodeFileSystem.layer),

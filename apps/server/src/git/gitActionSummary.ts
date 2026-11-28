@@ -16,7 +16,10 @@ function truncateText(
   if (!value) return undefined;
   if (value.length <= maxLength) return value;
   if (maxLength <= 3) return "...".slice(0, maxLength);
-  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  return `${value
+    .slice(0, Math.max(0, maxLength - 3))
+    .replace(/[\uD800-\uDBFF]$/u, "")
+    .trimEnd()}...`;
 }
 
 function withDescription(title: string, description: string | undefined) {

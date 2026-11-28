@@ -15,7 +15,7 @@ export function at(offsetMs: number): DateTime.Utc {
 }
 
 export type SettlementShell = OrchestrationV2ThreadShell &
-  Pick<ProjectionStore.ProjectionSettlementCandidate, "latestUserAuthoredMessageAt">;
+  Pick<ProjectionStore.ProjectionSettlementCandidate, "latestResumingMessageAt">;
 
 export function shell(overrides: Partial<SettlementShell> = {}): SettlementShell {
   return {
@@ -54,7 +54,7 @@ export function shell(overrides: Partial<SettlementShell> = {}): SettlementShell
     latestRunStartedAt: null,
     latestRunCompletedAt: null,
     latestUserMessageAt: null,
-    latestUserAuthoredMessageAt: overrides.latestUserMessageAt ?? null,
+    latestResumingMessageAt: overrides.latestUserMessageAt ?? null,
     createdAt: at(-30 * DAY_MS),
     updatedAt: at(-10 * DAY_MS),
     archivedAt: null,

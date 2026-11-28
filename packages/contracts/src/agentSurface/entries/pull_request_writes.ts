@@ -79,7 +79,7 @@ export const pullRequestWriteEntries = {
   "pull_request.review_submit": write(
     "review_submit",
     "Submit a pull request review",
-    "Submit a verdict, body and inline comments. clientRequestId is required. GitLab may post only part of a review; reconcile with pull_request.activity and report unconfirmed outcomes.",
+    "Submit a verdict, body and inline comments. Approval requires expectedHeadSha from the headSha you reviewed and refuses a moved head. clientRequestId is required. GitLab may post only part of a review; reconcile with pull_request.activity and report unconfirmed outcomes.",
     "pull_request.activity",
     {
       keyRequired: true,

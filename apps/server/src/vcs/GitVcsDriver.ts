@@ -652,7 +652,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       16_384,
     );
     if (stdout === null) return null;
-    const lines = stdout.replace(/\r?\n$/u, "").split(/\r?\n/u);
+    const lines = stdout.replace(/\n$/, "").split("\n");
     if (lines[0]?.trim() !== "true") return null;
     // A newline inside a path breaks the line framing; ask for each path on its own.
     const rootPath = lines[1];
@@ -668,16 +668,16 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       ]).pipe(Effect.orElseSucceed(() => null));
       return {
         kind: "git" as const,
-        rootPath: root.stdout.trim(),
-        metadataPath: gitCommonDir?.stdout.trim() || null,
+        rootPath: root.stdout.replace(/\n$/, ""),
+        metadataPath: gitCommonDir?.stdout.replace(/\n$/, "") || null,
         freshness: yield* nowFreshness(),
       };
     }
 
     return {
       kind: "git" as const,
-      rootPath: rootPath.trim(),
-      metadataPath: metadataPath.trim() || null,
+      rootPath,
+      metadataPath: metadataPath || null,
       freshness: yield* nowFreshness(),
     };
   });
@@ -778,7 +778,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     }
 
     const ignoredPaths = new Set<string>();
-    const chunks = chunkPathsForGitCheckIgnore(relativePaths);
+    // ./ avoids leading : pathspec magic; check-ignore rejects --literal-pathspecs.
+    const chunks = chunkPathsForGitCheckIgnore(
+      relativePaths.map((relativePath) => `./${relativePath}`),
+    );
 
     for (const chunk of chunks) {
       const result = yield* gitCommand(
@@ -806,7 +809,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       }
 
       for (const ignoredPath of splitNullSeparatedGitStdoutPaths(result)) {
-        ignoredPaths.add(ignoredPath);
+        ignoredPaths.add(ignoredPath.slice(2));
       }
     }
 
@@ -984,12 +987,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             cwd: input.cwd,
             args: ["rev-parse", "--path-format=absolute", "--git-path", "index"],
           });
-          const { mtime } = yield* fileSystem.stat(indexPath.stdout.trim());
+          const { mtime } = yield* fileSystem.stat(indexPath.stdout.replace(/\n$/, ""));
           if (Option.isNone(mtime)) return false;
           // Stay below the source timestamp even if Date rounded up, preserving Git's racy check.
           const indexTime = Math.floor((mtime.value.getTime() - 1) / 1000);
           if (indexTime <= 0) return false;
-          yield* fileSystem.copyFile(indexPath.stdout.trim(), tempIndexPath);
+          yield* fileSystem.copyFile(indexPath.stdout.replace(/\n$/, ""), tempIndexPath);
           // Retain stat data only where the copied index already matches HEAD.
           yield* execute({
             operation,

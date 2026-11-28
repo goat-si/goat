@@ -167,7 +167,7 @@ it("passes the Windows removal directory literally with delayed expansion disabl
   const spawn = vi.mocked(NodeChildProcess.spawn);
   spawn.mockClear();
   const runtimeDir = "C:\\GOAT home %COMSPEC% !COMSPEC! & data\\runtime\\goat";
-  spawnWindowsRemoval("fake-cmd.exe", runtimeDir, () => {});
+  spawnWindowsRemoval({ ComSpec: "fake-cmd.exe", SystemRoot: "C:\\Windows" }, runtimeDir, () => {});
   expect(spawn).toHaveBeenCalledWith(
     "fake-cmd.exe",
     [
@@ -175,10 +175,14 @@ it("passes the Windows removal directory literally with delayed expansion disabl
       "/v:off",
       "/s",
       "/c",
-      '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
+      '""%GOAT_UNINSTALL_PING%" -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
     ],
     expect.objectContaining({
-      env: expect.objectContaining({ GOAT_UNINSTALL_RUNTIME: runtimeDir }),
+      cwd: "C:\\Windows\\System32",
+      env: expect.objectContaining({
+        GOAT_UNINSTALL_PING: "C:\\Windows\\System32\\ping.exe",
+        GOAT_UNINSTALL_RUNTIME: runtimeDir,
+      }),
       windowsVerbatimArguments: true,
     }),
   );

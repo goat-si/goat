@@ -28,7 +28,7 @@ export const RelayObservability = Effect.gen(function* () {
     name: relayResourceNameForStage("goat-relay-traces", stage),
     kind: "otel:traces:v1",
     description: "GOAT relay Worker HTTP request spans.",
-    retentionDays: 30,
+    retentionDays: 28,
     useRetentionPeriod: true,
   });
 

@@ -140,6 +140,9 @@ describe("cloneUrlForProtocol", () => {
       expect(cloneUrlForProtocol(scp, "https")).toBe(https);
       expect(cloneUrlForProtocol(`ssh://git@host.example/team/${encoded}`, "https")).toBe(https);
     }
+    expect(cloneUrlForProtocol("ssh://git@host.example/team/repo%20name#1?.git", "https")).toBe(
+      "https://host.example/team/repo%20name%231%3F.git",
+    );
   });
 
   it("keeps the URL as is for its own protocol and drops HTTPS credentials on switch", () => {
@@ -216,5 +219,11 @@ describe("cloneUrlRepositoryPath", () => {
       "gitlab.com/group/sub/repo",
     );
     expect(cloneUrlRepositoryPath("C:/repos/project.git")).toBeNull();
+    expect(cloneUrlRepositoryPath("git@forge.example:team#1/spec#2026.git")).toBe(
+      "forge.example/team#1/spec#2026",
+    );
+    expect(cloneUrlRepositoryPath("https://forge.example/team/spec.git#readme")).toBe(
+      "forge.example/team/spec",
+    );
   });
 });

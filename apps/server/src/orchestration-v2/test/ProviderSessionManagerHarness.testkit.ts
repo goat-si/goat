@@ -86,6 +86,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterTurnStartError>;
     readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
     readonly resumeTurn?: Effect.Effect<void>;
+    readonly compactThread?: Effect.Effect<void>;
     readonly interruptTurn?: Effect.Effect<void>;
     readonly beforeUnload?: Effect.Effect<void>;
     readonly unloads?: Queue.Queue<string>;
@@ -212,6 +213,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           startTurn: (turnInput) =>
             options.onTurnInput?.(turnInput) ?? options.startTurn ?? Effect.void,
           ...(options.resumeTurn === undefined ? {} : { resumeTurn: () => options.resumeTurn! }),
+          ...(options.compactThread === undefined
+            ? {}
+            : { compactThread: () => options.compactThread! }),
           steerTurn: () => Effect.void,
           interruptTurn: () =>
             Ref.update(state, (current) => ({
@@ -287,6 +291,7 @@ export function layerTest(input: {
   ) => Effect.Effect<void, ProviderAdapter.ProviderAdapterTurnStartError>;
   readonly startTurn?: Effect.Effect<void, ProviderAdapter.ProviderAdapterProtocolError>;
   readonly resumeTurn?: Effect.Effect<void>;
+  readonly compactThread?: Effect.Effect<void>;
   readonly interruptTurn?: Effect.Effect<void>;
   readonly beforeUnload?: Effect.Effect<void>;
   readonly unloads?: Queue.Queue<string>;
@@ -368,6 +373,7 @@ export function layerTest(input: {
       ...(input.onTurnInput === undefined ? {} : { onTurnInput: input.onTurnInput }),
       ...(input.startTurn === undefined ? {} : { startTurn: input.startTurn }),
       ...(input.resumeTurn === undefined ? {} : { resumeTurn: input.resumeTurn }),
+      ...(input.compactThread === undefined ? {} : { compactThread: input.compactThread }),
       ...(input.interruptTurn === undefined ? {} : { interruptTurn: input.interruptTurn }),
       ...(input.beforeUnload === undefined ? {} : { beforeUnload: input.beforeUnload }),
       ...(input.unloads === undefined ? {} : { unloads: input.unloads }),

@@ -545,7 +545,7 @@ it.effect("bounds skipped detail count and strings while counting every skip", (
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
-it.effect("does not certify new native history after a partial import retry", () =>
+it.effect("certifies continued native history after a partial import retry", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -564,17 +564,18 @@ it.effect("does not certify new native history after a partial import retry", ()
       { role: "user", text: "Continue outside GOAT", createdAt: timestamp },
       { role: "assistant", text: "Native continuation", createdAt: timestamp },
     );
-    // The thread holds only the original messages, so the continued transcript stays unrecorded.
     expect(yield* (yield* makeImporter([continued])).run).toMatchObject({
       importedCount: 0,
-      skippedCount: 1,
+      skippedCount: 0,
     });
-    expect(yield* runtimes.list()).toEqual([]);
     expect(
       (yield* projections.getThreadRecords(threadId, ["messages"])).messages.map(
         (message) => message.text,
       ),
-    ).toEqual(["Fix it", "Fixed"]);
+    ).toEqual(["Fix it", "Fixed", "Continue outside GOAT", "Native continuation"]);
+    expect(Option.getOrThrow(yield* runtimes.getByThreadId({ threadId }))).toMatchObject({
+      runtimePayload: { importedTranscripts: [continued.source] },
+    });
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 

@@ -7,7 +7,7 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 
 import * as AutomationHold from "../automationHold.ts";
-import { forkParked } from "../serverActivation.ts";
+import { forkParked, withoutParentSpan } from "../serverActivation.ts";
 
 export interface SchedulerSourceOptions {
   /**
@@ -31,10 +31,11 @@ export class Scheduler extends Context.Service<
 
 const make = Effect.gen(function* () {
   const sources = yield* Ref.make(new Map<symbol, Effect.Effect<void>>());
-  const register: Scheduler["Service"]["register"] = Effect.fn("Scheduler.register")(function* <
-    E,
-    R,
-  >(name: string, runDueWork: Effect.Effect<void, E, R>, options?: SchedulerSourceOptions) {
+  const register: Scheduler["Service"]["register"] = Effect.fnUntraced(function* <E, R>(
+    name: string,
+    runDueWork: Effect.Effect<void, E, R>,
+    options?: SchedulerSourceOptions,
+  ) {
     const scope = yield* Effect.scope;
     const context = yield* Effect.context<R>();
     const hold = yield* AutomationHold.AutomationHold;
@@ -44,6 +45,7 @@ const make = Effect.gen(function* () {
         ? runDueWork
         : hold.current.pipe(Effect.flatMap((held) => (held === null ? runDueWork : Effect.void)));
     const run = gated.pipe(
+      withoutParentSpan,
       Effect.provideContext(context),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)

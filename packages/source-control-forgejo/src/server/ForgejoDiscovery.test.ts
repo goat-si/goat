@@ -5,6 +5,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { SpawnExecutableResolution } from "@goat/shared/shell";
 import { assert, it } from "@effect/vitest";
 import { VcsProcessSpawnError, VcsProcessTimeoutError } from "@goat/contracts";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
@@ -56,6 +57,9 @@ it.effect("explains a slow fj instead of advising an install when tea is absent"
           },
         }),
       ),
+    ),
+    Effect.provideService(SpawnExecutableResolution, async (command) =>
+      command === "fj" ? "/usr/bin/fj" : undefined,
     ),
   ),
 );
@@ -135,6 +139,9 @@ it.effect.each([
       }),
     ),
     Effect.provideService(HostProcess.HomeDirectory, "/home/maria"),
+    Effect.provideService(SpawnExecutableResolution, async (command) =>
+      command === "fj" ? "/usr/bin/fj" : undefined,
+    ),
   ),
 );
 

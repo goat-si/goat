@@ -83,8 +83,11 @@ function shouldStripDcsSequence(content: string): boolean {
   return /^[01]?[$+][qr]/.test(content);
 }
 
+const LONE_SHORT_RGB_SETTER =
+  /^\d+;rgb:(?![\da-f]{4}\/[\da-f]{4}\/[\da-f]{4}$)[\da-f]{1,4}\/[\da-f]{1,4}\/[\da-f]{1,4}$/i;
+
 function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
+  return /^(10|11|12);(?:\?|rgb:)/.test(content) && !LONE_SHORT_RGB_SETTER.test(content);
 }
 
 function isOscPaletteQuery(content: string): boolean {
@@ -217,6 +220,16 @@ export const MAX_PENDING_HISTORY_ESCAPE_SEQUENCE_LENGTH = 4 * 1024;
 // Held while the rest of a sequence past the cap is swallowed: this marker, the sequence's kind,
 // and at most one code unit split across chunks. A held unfinished sequence always starts with ESC.
 const SWALLOWING = "swallowing:";
+
+export function unfinishedSequenceReplay(pending: string): string {
+  if (pending.startsWith(SWALLOWING)) {
+    const kind = pending.charAt(SWALLOWING.length);
+    const tail = pending.slice(SWALLOWING.length + 1);
+    return "\u001b" + (kind === "E" ? "" : kind) + tail;
+  }
+  if (pending.length <= 4_096) return pending;
+  return pending.slice(0, 2) + carriedUnit(pending);
+}
 
 function swallowedKind(sequence: string): string {
   const introducer = sequence.charAt(1);

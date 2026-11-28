@@ -1,0 +1,8 @@
+export const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
+export const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
+export const FILES_VIEWED_MAX_PAGES = 5;
+export const FILES_VIEWED_PER_REQUEST = 100;
+export const REVIEW_THREAD_PAGES = 10;
+export const CHECK_CONTEXT_PAGES = 10;
+export const STAT_ALIASES_PER_REQUEST = 25;
+export const SUMMARY_BATCH_WINDOW = "10 millis";

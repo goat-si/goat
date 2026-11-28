@@ -337,7 +337,7 @@ describe("resolveAutoSettlementAt", () => {
   it("settles on merge after agent-started runs, but not after the user writes again", () => {
     const woken = shell({
       latestUserMessageAt: at(-30 * 60 * 1_000),
-      latestUserAuthoredMessageAt: at(-2 * 60 * 60 * 1_000),
+      latestResumingMessageAt: at(-2 * 60 * 60 * 1_000),
       latestRunRequestedAt: at(-30 * 60 * 1_000),
       latestRunCompletedAt: at(-29 * 60 * 1_000),
     });
@@ -352,7 +352,7 @@ describe("resolveAutoSettlementAt", () => {
     expect(
       ThreadSettlementService.resolveAutoSettlementAt({
         ...input,
-        thread: { ...woken, latestUserAuthoredMessageAt: at(-30 * 60 * 1_000) },
+        thread: { ...woken, latestResumingMessageAt: at(-30 * 60 * 1_000) },
       }),
     ).toBeNull();
   });

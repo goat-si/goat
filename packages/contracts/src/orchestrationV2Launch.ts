@@ -3,6 +3,7 @@ import { OrchestrationMessageContext } from "./composerContext.ts";
 import { MemoryTaskGrantCeilingField } from "./memory.ts";
 import * as Schema from "effect/Schema";
 import {
+  GitRefName,
   CommandId,
   MessageId,
   ScheduledTaskId,
@@ -13,17 +14,17 @@ import {
 export const OrchestrationV2ThreadLaunchWorkspaceStrategy = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("root"),
-    branch: Schema.optional(TrimmedNonEmptyString),
+    branch: Schema.optional(GitRefName),
   }),
   Schema.Struct({
     type: Schema.Literal("existing_worktree"),
     worktreePath: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
+    branch: Schema.optional(GitRefName),
   }),
   Schema.Struct({
     type: Schema.Literal("worktree"),
-    baseRef: TrimmedNonEmptyString,
-    branch: Schema.optional(TrimmedNonEmptyString),
+    baseRef: GitRefName,
+    branch: Schema.optional(GitRefName),
     startFromOrigin: Schema.optional(Schema.Boolean),
   }),
 ]);

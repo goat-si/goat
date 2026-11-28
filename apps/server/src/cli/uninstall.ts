@@ -2,6 +2,7 @@
 // Windows cleanup must outlive this executable to delete its directory; scoped ChildProcess kills children on exit.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { guardChild } from "@goat/shared/errorGuards";
 
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -87,7 +88,22 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
 });
 
 // cmd.exe needs verbatim quoting and a literal path, with delayed expansion disabled.
-export function spawnWindowsRemoval(comspec: string, dir: string, onError: (error: Error) => void) {
+export function spawnWindowsRemoval(
+  environment: NodeJS.ProcessEnv,
+  dir: string,
+  onError: (error: Error) => void,
+) {
+  const system32 = NodePath.win32.join(
+    environment["SystemRoot"] ||
+      environment["SYSTEMROOT"] ||
+      environment["windir"] ||
+      environment["WINDIR"] ||
+      "C:\\Windows",
+    "System32",
+  );
+  const ping = NodePath.win32.join(system32, "ping.exe");
+  const comspec =
+    environment["ComSpec"] ?? environment["COMSPEC"] ?? NodePath.win32.join(system32, "cmd.exe");
   // A missing shell fails after spawn returns, when the uninstall has already finished.
   return guardChild(
     NodeChildProcess.spawn(
@@ -97,10 +113,11 @@ export function spawnWindowsRemoval(comspec: string, dir: string, onError: (erro
         "/v:off",
         "/s",
         "/c",
-        '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
+        '""%GOAT_UNINSTALL_PING%" -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
       ],
       {
-        env: { ...process.env, GOAT_UNINSTALL_RUNTIME: dir },
+        cwd: system32,
+        env: { ...process.env, GOAT_UNINSTALL_PING: ping, GOAT_UNINSTALL_RUNTIME: dir },
         windowsVerbatimArguments: true,
         detached: true,
         stdio: "ignore",
@@ -250,10 +267,9 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
     // Windows refuses to unlink this running executable; a detached shell removes it after exit.
     if (platform === "win32") {
       const runtimeDir = plan.runtimeDir;
-      const comspec = environment["ComSpec"] ?? environment["COMSPEC"] ?? "cmd.exe";
       yield* Effect.try({
         try: () =>
-          spawnWindowsRemoval(comspec, runtimeDir, () => {
+          spawnWindowsRemoval(environment, runtimeDir, () => {
             process.exitCode = 1;
             try {
               NodeFS.writeSync(2, `${removalNotScheduled(runtimeDir)}\n`);

@@ -129,6 +129,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { delegatedWorktreeBase } from "./DelegatedWorktreeBase.ts";
 import { scheduledTaskReads } from "./scheduledTaskReads.ts";
 import { resolveScheduledTaskBaseRef } from "./ScheduledTaskBaseRef.ts";
 import {
@@ -2338,7 +2339,12 @@ const make = Effect.gen(function* () {
                 ),
               );
           }
-          workspaceStrategy = { type: "worktree", baseRef: base.commitSha, startFromOrigin: false };
+          workspaceStrategy = yield* delegatedWorktreeBase(
+            gitDriver,
+            project.workspaceRoot,
+            parent.thread.branch,
+            base.commitSha,
+          );
         }
         // ThreadManagementService.dispatch is the chokepoint for this command
         // type's own enablement check, using the same command id and its

@@ -5,7 +5,7 @@ import * as NodeReadlinePromises from "node:readline/promises";
 
 import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
+import { isCommandAvailable, resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
@@ -109,14 +109,25 @@ export const describeServerProcess = Effect.fn("triage.describeServerProcess")(f
   return `running (pid ${String(state.value.pid)}, ${state.value.origin}, ${version})`;
 });
 
-const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
+export const matchAgentAnswer = <Agent extends { readonly id: string }>(
+  agents: ReadonlyArray<Agent>,
+  answer: string,
+) =>
+  agents.find((_, index) => String(index + 1) === answer.trim()) ??
+  agents.find((agent) => agent.id === answer.trim().toLowerCase());
+
+export const pickAgent = <Agent extends { readonly id: string; readonly label: string }>(
+  agents: ReadonlyArray<Agent>,
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout,
+) =>
   Effect.tryPromise({
     try: async () => {
       const broken = Promise.withResolvers<never>();
       const readline = guardErrors(
         NodeReadlinePromises.createInterface({
-          input: process.stdin,
-          output: process.stdout,
+          input,
+          output,
         }),
         broken.reject,
       );
@@ -124,17 +135,15 @@ const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
         const menu = agents
           .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
           .join("\n");
+        const lines = readline[Symbol.asyncIterator]();
         for (;;) {
-          const answer = (
-            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken.promise])
-          ).trim();
-          const byNumber = agents[Number.parseInt(answer, 10) - 1];
-          if (byNumber !== undefined) {
-            return byNumber;
-          }
-          const byId = agents.find((agent) => agent.id === answer.toLowerCase());
-          if (byId !== undefined) {
-            return byId;
+          const next = lines.next();
+          output.write(`Run triage with:\n${menu}\n> `);
+          const line = await Promise.race([next, broken.promise]);
+          if (line.done) return undefined;
+          const picked = matchAgentAnswer(agents, line.value);
+          if (picked !== undefined) {
+            return picked;
           }
         }
       } finally {
@@ -252,6 +261,10 @@ export const triageCommand = Command.make("triage", {
           return yield* new TriageAgentChoiceRequiredError();
         }
         selected = yield* pickAgent(installed);
+        if (selected === undefined) {
+          yield* Console.log("\nNo agent started.");
+          return;
+        }
       }
 
       // Windows .cmd shims cannot carry multiline argv; keep the playbook on disk for both launch and paste fallback.
@@ -275,7 +288,12 @@ export const triageCommand = Command.make("triage", {
 
       const model = Option.getOrUndefined(flags.model);
       const launchPrompt = buildTriageLaunchPrompt(promptFilePath);
-      const spawnSpec = yield* resolveSpawnCommand(selected.command, [
+      const onPath =
+        (yield* HostProcess.Platform) === "win32"
+          ? null
+          : yield* resolveCommandPath(selected.command);
+      const command = onPath === null ? selected.command : path.resolve(onPath);
+      const spawnSpec = yield* resolveSpawnCommand(command, [
         ...(model === undefined ? [] : ["--model", model]),
         ...(selected.promptArgs ?? []),
         launchPrompt,

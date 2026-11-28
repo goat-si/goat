@@ -590,6 +590,22 @@ const connectLoginCommand = Command.make("login", {
   ),
 );
 
+export const connectLinkNextStep = Effect.fn("cloud.cli.connectLinkNextStep")(function* (
+  publishOnly: boolean,
+) {
+  const config = yield* ServerConfig.ServerConfig;
+  const running = Option.isSome(yield* readLiveServerRuntimeState(config.serverRuntimeStatePath));
+  const purpose = publishOnly
+    ? "publish agent activity (no managed tunnel)"
+    : "make this machine reachable";
+  const next = running
+    ? `A GOAT server is already running. Restart it to ${purpose}: run \`${yield* resolveCliCommand("service restart")}\` for the background service, or stop the server and start it again.`
+    : publishOnly
+      ? `Start GOAT to ${purpose}.`
+      : `Start the server with \`${yield* resolveCliCommand("serve")}\` to ${purpose}.`;
+  return next;
+});
+
 const connectLinkCommand = Command.make("link", {
   ...projectLocationFlags,
   headless: headlessFlag,
@@ -608,12 +624,8 @@ const connectLinkCommand = Command.make("link", {
         yield* Console.log("GOAT Connect\n");
         const linked = yield* linkEnvironmentForConnect(flags);
         if (linked) {
-          const serveCommand = yield* resolveCliCommand("serve");
-          yield* Console.log(
-            flags.publishOnly
-              ? `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start GOAT to publish agent activity (no managed tunnel).`
-              : `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
-          );
+          const next = yield* connectLinkNextStep(flags.publishOnly);
+          yield* Console.log(`✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  ${next}`);
         }
       }),
     ),

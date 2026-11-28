@@ -65,7 +65,6 @@ import type {
   PullRequestFileStats,
   PullRequestHeads,
   PullRequestPreview as PullRequestPreviewQuery,
-  PullRequestSubject,
   RepositoryAuthors,
   RepositoryLabels,
   ViewerPermissions,
@@ -226,22 +225,6 @@ export function toPullRequestNodeId(result: {
   readonly repository: { readonly pullRequest: { readonly id: string } | null } | null;
 }): string | null {
   return result.repository?.pullRequest?.id ?? null;
-}
-
-export function isSubjectOfPullRequest(result: PullRequestSubject.Result): boolean {
-  const expected = result.repository?.pullRequest?.id ?? null;
-  const node = result.node;
-  const actual =
-    node === null
-      ? null
-      : node.__typename === "IssueComment"
-        ? (node.pullRequest?.id ?? null)
-        : node.__typename === "PullRequestReviewComment"
-          ? node.reviewCommentPullRequest.id
-          : node.__typename === "PullRequestReview"
-            ? node.reviewPullRequest.id
-            : node.id;
-  return expected !== null && actual !== null && expected === actual;
 }
 
 const ReviewSubmissionSchema = Schema.Struct({
@@ -1627,10 +1610,10 @@ function toFilesPatch(entries: ReadonlyArray<unknown>): GitHubPullRequestFilesPa
     const hunks = value.patch ?? "";
     const status = value.status?.trim().toLowerCase();
     if (hunks.length === 0) {
-      // Hunkless renames are complete; omitted binary changes leave a patch gap.
+      // GitHub can omit a modified file's patch even when both counts are zero.
       const additions = value.additions ?? 0;
       const deletions = value.deletions ?? 0;
-      if (additions + deletions > 0) {
+      if (additions + deletions > 0 || status === "modified") {
         truncated = true;
         omittedFileStats.push({ path: value.filename, additions, deletions });
       }

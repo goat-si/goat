@@ -642,8 +642,10 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
         if (shell !== null) return yield* snapshotThenLive();
       }
+      const replayed = yield* loadReplayThrough(input.afterSequence, highWater);
+      const deletion = replayed.findLastIndex((item) => item.event.type === "thread.deleted");
       const replay = coalesceLiveUpdatedEvents(
-        yield* loadReplayThrough(input.afterSequence, highWater),
+        deletion === -1 ? replayed : replayed.slice(deletion),
       );
       if (
         input.acceptCompactVisits !== true &&

@@ -1,3 +1,4 @@
+import { isCiEnvironment, isDoNotTrackSet } from "@goat/shared/otelEnvironment";
 /**
  * Nothing is recorded or sent until the person grants `telemetryConsent` or the server's environment
  * sets GOAT_TELEMETRY_ENABLED; the environment wins either way. Events go to GOAT's ingest (infra/ingest at ingest.trygoat.ai), which stores
@@ -175,6 +176,7 @@ export const make = Effect.gen(function* () {
   const startupOverride = readOverride(Option.getOrUndefined(telemetryConfig.enabled));
   // A cached PATH does not establish the login shell's choice; wait for the shell before deciding.
   const environmentOverride = Effect.sync(() => {
+    if (isDoNotTrackSet(hostEnvironment)) return "disabled" as const;
     if (startupOverride === "disabled" || !awaitingShellConsent) return startupOverride;
     if (hostEnvironment.GOAT_DESKTOP_SHELL_DISCOVERY_PENDING === "1") return "pending" as const;
     return readOverride(hostEnvironment.GOAT_TELEMETRY_ENABLED);
@@ -186,7 +188,9 @@ export const make = Effect.gen(function* () {
   );
   const telemetryEnabled = Effect.flatMap(environmentOverride, (override) =>
     override === undefined
-      ? Effect.map(consent, (answer) => answer === "granted")
+      ? isCiEnvironment(hostEnvironment)
+        ? Effect.succeed(false)
+        : Effect.map(consent, (answer) => answer === "granted")
       : Effect.succeed(override === "enabled"),
   );
   const httpClient = yield* HttpClient.HttpClient;

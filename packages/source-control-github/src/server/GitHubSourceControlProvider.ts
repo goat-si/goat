@@ -74,6 +74,7 @@ import {
 } from "./sourceControlProvider.graphql.ts";
 import {
   GitHubFailure,
+  repositoryLookupError,
   failure,
   REPOSITORY_NOT_FOUND,
   fromGitHubApiError,
@@ -976,8 +977,15 @@ export const make = Effect.gen(function* () {
           (/^[^/\s]+$/.test(bareName)
             ? { host: fallbackHost, owner: yield* readViewerLogin(fallbackHost), name: bareName }
             : null);
-        if (locator === null) return yield* failure("Repositories are named owner/name.");
-        return repositoryCloneUrls(yield* readRepository(locator));
+        if (locator === null)
+          return yield* repositoryLookupError("Repositories are named owner/name.");
+        return repositoryCloneUrls(
+          yield* readRepository(locator).pipe(
+            Effect.mapError((error) =>
+              repositoryLookupError(`${locator.owner}/${locator.name}`, error),
+            ),
+          ),
+        );
       },
       (effect, input) =>
         effect.pipe(

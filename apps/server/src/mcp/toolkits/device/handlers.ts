@@ -10,6 +10,7 @@ import {
   LOCAL_DEVICE_HOST_ID,
   type ThreadId,
 } from "@goat/contracts";
+import { splitsSurrogatePair } from "@goat/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -84,6 +85,9 @@ const requireDeviceAccess = requireDeviceCredential.pipe(
   Effect.tap((scope) => authorizeThread(scope.thread.threadId)),
 );
 
+const slicePrefix = (text: string, max: number) =>
+  text.slice(0, splitsSurrogatePair(text, max) ? max - 1 : max);
+
 export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
   hosts: ReadonlyArray<DeviceHostSummary>,
   selector: string | undefined,
@@ -95,14 +99,14 @@ export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
   if (matches.length === 1 && matches[0]) return matches[0].id;
   const candidates = matches.length > 1 ? matches : hosts;
   const listed = [
-    ...candidates.slice(0, 10).map((host) => `${host.label.slice(0, 64)} (${host.id})`),
+    ...candidates.slice(0, 10).map((host) => `${slicePrefix(host.label, 64)} (${host.id})`),
     ...(candidates.length > 10 ? [`${candidates.length - 10} more`] : []),
   ].join(", ");
   return yield* new DeviceToolUnavailableError({
     reason:
       matches.length > 1
-        ? `Several device hosts are named ${selector.slice(0, 128)}; pass one id: ${listed}.`
-        : `No device host ${selector.slice(0, 128)}. Known hosts: ${listed || "none"}.`,
+        ? `Several device hosts are named ${slicePrefix(selector, 128)}; pass one id: ${listed}.`
+        : `No device host ${slicePrefix(selector, 128)}. Known hosts: ${listed || "none"}.`,
   });
 });
 
@@ -166,7 +170,11 @@ const handlers = {
       }
       const hostId = yield* resolveHostId(state.hosts, input?.hostId);
       const open = state.sessions
-        .filter((session) => session.threadId === scope.thread.threadId)
+        .filter(
+          (session) =>
+            session.threadId === scope.thread.threadId &&
+            (hostId === undefined || session.hostId === hostId),
+        )
         .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId }));
       return {
         hostStatuses: Object.fromEntries(

@@ -2,7 +2,14 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { UsageSource } from "@goat/contracts";
 
-import { formatHourShort, formatTokens, makeWindow, usageSourceMessages } from "./usageFormat.ts";
+import {
+  formatDateTimeShort,
+  formatHourShort,
+  formatPercent,
+  formatTokens,
+  makeWindow,
+  usageSourceMessages,
+} from "./usageFormat.ts";
 
 function malformedSource(count: number, overrides: Partial<UsageSource> = {}): UsageSource {
   return {
@@ -74,6 +81,49 @@ describe("usage source messages", () => {
     expect(usageSourceMessages([source, malformedSource(11), source])).toEqual([
       "11 malformed or inconsistent usage record(s) were skipped; usage may be incomplete.",
     ]);
+  });
+
+  describe("shared Windows and WSL warning counts", () => {
+    const windows = malformedSource(3, {
+      fingerprint: {
+        hostId: "MainPC",
+        provider: "claude",
+        resolvedHomePath: "C:\\Users\\user\\.claude\\projects",
+        volumeId: "1280555009:3659174697951285",
+        physicalSourceId: "physical-claude-projects",
+      },
+    });
+    const wsl = malformedSource(3, {
+      fingerprint: {
+        ...windows.fingerprint,
+        resolvedHomePath: "/mnt/c/Users/user/.claude/projects",
+        volumeId: "112:3659174697951287",
+      },
+    });
+
+    it("counts the same malformed records once across Windows and WSL", () => {
+      for (const sources of [
+        [windows, wsl],
+        [wsl, windows],
+      ]) {
+        expect(usageSourceMessages(sources)).toEqual([
+          "3 malformed or inconsistent usage record(s) were skipped; usage may be incomplete.",
+        ]);
+      }
+    });
+
+    it("keeps sources distinct without a shared alias or with different providers", () => {
+      const { physicalSourceId: _omitted, ...legacy } = wsl.fingerprint;
+      for (const fingerprint of [
+        legacy,
+        { ...wsl.fingerprint, physicalSourceId: "other-directory" },
+        { ...wsl.fingerprint, provider: "codex" as const },
+      ]) {
+        expect(usageSourceMessages([windows, { ...wsl, fingerprint }])).toEqual([
+          "6 malformed or inconsistent usage record(s) were skipped; usage may be incomplete.",
+        ]);
+      }
+    });
   });
 
   it("retains other diagnostics beside the combined warning", () => {
@@ -153,6 +203,15 @@ describe("hourly usage formatting", () => {
     );
   });
 
+  it("uses a 12-hour clock in locales that default to 24-hour", () => {
+    const instant = "2026-11-24T18:03:00.000Z";
+    for (const locale of ["fr", "de", "es"]) {
+      expect(formatHourShort(instant, "UTC", true, locale)).not.toContain("18");
+    }
+    expect(formatDateTimeShort(instant, "UTC", true, "fr")).not.toContain("18");
+    expect(formatHourShort(instant, "UTC", false, "es")).toBe("18:00");
+  });
+
   it("builds an exact minute-aligned 24-hour request", () => {
     const window = makeWindow(1, new Date("2026-08-11T12:37:42.123Z"), "hour");
 
@@ -175,6 +234,14 @@ describe("hourly usage formatting", () => {
     } finally {
       resolvedOptions.mockRestore();
     }
+  });
+});
+
+describe("percent formatting", () => {
+  it("keeps a share short of the whole below 100%", () => {
+    expect(formatPercent(0.9996)).toBe(">99.9%");
+    expect(formatPercent(0.999)).toBe("99.9%");
+    expect(formatPercent(1)).toBe("100.0%");
   });
 });
 

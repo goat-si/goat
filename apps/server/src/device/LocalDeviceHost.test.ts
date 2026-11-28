@@ -672,19 +672,9 @@ describe("Android SDK availability", () => {
     }),
   );
 
-  // regression: #12017 detect unsupported legacy Android command-line tools
-  it.effect("explains how to upgrade legacy command-line tools in the standard macOS SDK", () =>
+  it.effect("supports connected devices with only platform tools", () =>
     Effect.gen(function* () {
-      const root = "/test/home/Library/Android/sdk";
-      const reason = yield* diagnose(
-        [`${root}/platform-tools/adb`, `${root}/emulator/emulator`, `${root}/tools/bin/avdmanager`],
-        { HOME: "/test/home" },
-      );
-      expect(reason).toContain("older, unsupported version");
-      expect(reason).toContain(root);
-      expect(reason).toContain(
-        "Install Android SDK Command-line Tools (latest) in Android Studio's SDK Manager under SDK Tools.",
-      );
+      expect(yield* diagnose(["/sdk/platform-tools/adb"], { ANDROID_HOME: "/sdk" })).toBeNull();
     }),
   );
 

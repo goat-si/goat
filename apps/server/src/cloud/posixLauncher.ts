@@ -102,11 +102,12 @@ export async function findPosixLauncher(input: {
   try {
     recorded = (await readBounded(records, LAUNCHER_RECORDS_MAX_BYTES)) ?? "";
   } catch {}
+  const searchPath = input.environment.PATH ?? "";
   const candidates = [
-    ...(input.environment.PATH ?? "")
+    ...searchPath
       .slice(0, LAUNCHER_PATH_MAX_CHARS)
       .split(":")
-      .filter(Boolean)
+      .filter((directory) => directory.length > 0 || searchPath.length > 0)
       .map((directory) => NodePath.resolve(input.cwd, directory, "goat")),
     NodePath.join(
       input.environment.GOAT_INSTALL_BIN_DIR || NodePath.join(input.home, ".local/bin"),

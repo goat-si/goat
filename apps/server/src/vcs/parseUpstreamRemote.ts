@@ -15,3 +15,16 @@ export function parseUpstreamRefWithRemoteNames(
     branchName: parsed.branchName,
   };
 }
+
+/** Without an origin remote, the first remote in git order supplies the fallback default branch. */
+export function fallbackDefaultRemote(
+  originDefaultBranch: string | null,
+  remoteNamesInGitOrder: ReadonlyArray<string>,
+): string | null {
+  const [firstRemoteName] = remoteNamesInGitOrder;
+  return originDefaultBranch === null &&
+    firstRemoteName !== undefined &&
+    !remoteNamesInGitOrder.includes("origin")
+    ? firstRemoteName
+    : null;
+}

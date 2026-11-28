@@ -139,6 +139,120 @@ describe("thread links", () => {
     ).toBe("[Kept](t3-thread://v1/a%3A1)");
   });
 
+  it.each([
+    ["a blank line", "Intro\n\n", "    ", "~~~", ""],
+    ["an indented heading", "Intro\n  # Example\n", "    ", "~~~", ""],
+    ["a closed fence", "Intro\n```\nexample\n```\n", "    ", "~~~", ""],
+    ["a literal list marker", "# Example\n", "    ", "- ```md", ""],
+    ["a heading in a quote", "> # Example\n", ">     ", "~~~", "> "],
+  ])(
+    "keeps indented code literal and rewrites prose after %s",
+    (_name, before, indent, fence, quote) => {
+      const inside = "[old](goat-thread://v1/code)";
+      const outside = "[old](goat-thread://v1/prose)";
+      const example = `${before}${indent}${fence}\n${indent}${inside}\n${quote.trimEnd()}\n${quote}See `;
+      expect(relabelThreadLinks(`${example}${outside}`, () => "linked")).toBe(
+        `${example}[linked](goat-thread://v1/prose)`,
+      );
+    },
+  );
+
+  it.each([
+    ["a paragraph with four spaces", "Intro\n    ~~~"],
+    ["a paragraph with a tab", "Intro\n\t```"],
+    ["a list paragraph", "- Intro\n      ~~~"],
+    ["an HTML block", "<div>\n    ~~~\n</div>"],
+    ["deeply nested quotes", ">".repeat(6000) + " text\n\n    ~~~"],
+  ])("rewrites the prose link after %s", (_name, before) => {
+    const prose = `${before}\n\nSee `;
+    expect(relabelThreadLinks(`${prose}[old](goat-thread://v1/prose)`, () => "linked")).toBe(
+      `${prose}[linked](goat-thread://v1/prose)`,
+    );
+  });
+
+  it("rewrites a link in footnote prose before an indented fence", () => {
+    const footnote = "Note[^n].\n\n[^n]: note\n\n    See ";
+    expect(
+      relabelThreadLinks(`${footnote}[old](goat-thread://v1/prose)\n\n    ~~~`, () => "linked"),
+    ).toBe(`${footnote}[linked](goat-thread://v1/prose)\n\n    ~~~`);
+  });
+
+  it.each([
+    ["a paragraph code span", "Intro\n    ```\n    [old](goat-thread://v1/code)\n    ```"],
+    [
+      "a fence with over-indented markers",
+      "~~~\n    ~~~\n    ~~~\n[old](goat-thread://v1/code)\n~~~",
+    ],
+    [
+      "a fence in a footnote",
+      "Note[^n].\n\n[^n]: note\n\n    ~~~\n    [old](goat-thread://v1/code)\n    ~~~",
+    ],
+  ])("keeps links literal inside %s and rewrites the link after it", (_name, code) => {
+    const prose = `${code}\n\nSee `;
+    expect(relabelThreadLinks(`${prose}[old](goat-thread://v1/prose)`, () => "linked")).toBe(
+      `${prose}[linked](goat-thread://v1/prose)`,
+    );
+  });
+
+  it.each([
+    ["4 spaces", "    ```md\n    [old](goat-thread://v1/abc)\n    ```", ""],
+    ["tab", "\t```md\n\t[old](goat-thread://v1/abc)\n\t```", ""],
+    ["list + 5 spaces", "-     ```md\n      [old](goat-thread://v1/abc)\n      ```", ""],
+    ["nested list", "- a\n  -     ```md\n        [old](goat-thread://v1/abc)\n        ```", ""],
+    ["nested list with tab", "-\t-     ~~~\n          [old](goat-thread://v1/abc)", ""],
+    ["quote + 5 spaces", ">     ```md\n>     [old](goat-thread://v1/abc)\n>     ```", "> "],
+    [
+      "spaced nested quote + 5 spaces",
+      ">    >     ```md\n>    >     [old](goat-thread://v1/abc)",
+      ">    > ",
+    ],
+    [
+      "quote + list + 5 spaces",
+      "> -     ```md\n>       [old](goat-thread://v1/abc)\n>       ```",
+      "> ",
+    ],
+    ["quote + space + tab + list", "> \t-     ```md\n>         [old](goat-thread://v1/abc)", "> "],
+    [
+      "quote + list after para",
+      "> para\n> -     ```md\n>       [old](goat-thread://v1/abc)\n>       ```",
+      "> ",
+    ],
+    [
+      "1. after paragraph",
+      "Intro\n1.     ```md\n       [old](goat-thread://v1/abc)\n       ```",
+      "",
+    ],
+    [
+      "ordered list >= 2 after blank",
+      "Intro\n\n2.     ```md\n       [old](goat-thread://v1/abc)",
+      "",
+    ],
+    [
+      "quote after blank line past closer",
+      "Example\n\n>       ~~~\n>       ~~~\n>       [old](goat-thread://v1/abc)",
+      "> ",
+    ],
+    [
+      "quote after autolink",
+      "<https://example.com>\n>     ~~~\n>     [old](goat-thread://v1/abc)",
+      "> ",
+    ],
+    ["blank line inside indented code", "    ```md\n\n    [old](goat-thread://v1/abc)", ""],
+    ["quote after indented code", "    ```md\n>     ```\n>     [old](goat-thread://v1/abc)", "> "],
+    ["4 spaces after closer", "    ```md\n    a\n    ```\n    [old](goat-thread://v1/abc)", ""],
+    ["4 spaces with U+2028", "    ```\u2028[old](goat-thread://v1/t1)```", ""],
+    ["hosted link", "    ```\n    [old](goat-thread://v1/thr)\n    ```", ""],
+  ])(
+    "keeps links inside fence-looking indented code blocks literal (%s)",
+    (_name, block, prose) => {
+      expect(relabelThreadLinks(block, () => "linked")).toBe(block);
+      const after = `${block}\n${prose.trimEnd()}\n${prose}See `;
+      expect(relabelThreadLinks(`${after}[old](goat-thread://v1/t)`, () => "linked")).toBe(
+        `${after}[linked](goat-thread://v1/t)`,
+      );
+    },
+  );
+
   it("leaves links inside code spans and fences as written", () => {
     const markdown = [
       "Live [old](t3-thread://v1/t1), literal `[old](t3-thread://v1/t1)`.",
@@ -156,6 +270,119 @@ describe("thread links", () => {
         "After [New](goat-thread://v1/t1)",
       ].join("\n"),
     );
+    const nested = [
+      "> > ```md",
+      ">> [old](goat-thread://v1/t1)",
+      ">>```",
+      "> > [old](goat-thread://v1/t1)",
+    ];
+    expect(relabelThreadLinks(nested.join("\n"), () => "New")).toBe(
+      [...nested.slice(0, 3), "> > [New](goat-thread://v1/t1)"].join("\n"),
+    );
+    for (const escaped of [
+      "\\``[old](goat-thread://v1/t1)`",
+      "\\```[old](goat-thread://v1/t1)``",
+    ]) {
+      expect(threadLinkIds(escaped)).toEqual([]);
+    }
+  });
+
+  it("ends code where CommonMark does, so a link after it stays live", () => {
+    const after = "See [live](goat-thread://v1/t1)";
+    const hidden = "[hidden](goat-thread://v1/in-code)";
+    for (const markdown of [
+      ["```ts", 'const fence = "```";', hidden, "```", after],
+      ["> ```ts", '> const fence = "```";', `> ${hidden}`, "> ```", `> ${after}`],
+      ["> ```", ` > ${hidden}`, "> ```", after],
+      ["- ```bash", "  echo hi", "  ```", "", after],
+      ["- > ```md", `  > ${hidden}`, "  > ```", "", after],
+      [">> ```md", `> > ${hidden}`, ">> ```", `> ${after}`],
+      ["> > ~~~", `>> ${hidden}`, ">> ~~~", after],
+      ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
+      ["````md", "```", hidden, "````", after],
+      ["Use ~~~ to mark it.", after],
+      ["> para", ">     ~~~", `>     ${after}`],
+      ["> para", `>     ~~~ ${after}`],
+      ["- > para", "  >     ```md", `  >     ${after}`],
+      [`Intro\u2028-     ~~~ ${after}`],
+      ["Intro", `2.     ~~~ ${after}`],
+      ["Intro", `2. -     ~~~ ${after}`],
+      [">\t-     ```md", `>       ${after}`],
+      ["> para", "lazy", ">     ~~~", `>     ${after}`],
+      ["> para", "> 2. >", `> 2.     ~~~ ${after}`],
+      ["> para\r", ">     ~~~\r", `>     ${after}`],
+      [`> para\r\r>     ~~~\r>     ${hidden}\r> ${after}`],
+      ["para", "    -     ```", `    ${after}`],
+      ["para", "    -     ```", `          ${after}`],
+      ["    ~~~", `-   ${after}`],
+      ["    ~~~md", "    ~~~", "    ~~~", after],
+      ["- item", "  >     ~~~", `  >     ${hidden}`, `    ${after}`],
+      ["10. >     ```md", `    >     ${hidden} \`\`\``, "", after],
+      ["  - >     ```md", `    >     ${hidden} \`\`\``, "", after],
+      ["> - Run this:", ">", ">     ```bash", ">   echo hi", ">", ">     ```", `>     ${after}`],
+      ["Example", "", ">     ~~~", ">\t\t~~~", `>     ${hidden}`, ">\t\t~~~", `> ${after}`],
+      [after, ">     ~~~", `>     ${hidden}`],
+      [`1.       \`\`\`md ${hidden}`, `   \t${after}`],
+      [">      ```md", `> \t${after}`],
+      [">     ```md", `>\t ${after}`],
+      ["```" + hidden + "``` then", after],
+      ["Use ```example", hidden, "end``` then", after],
+      ["Stray ` tick", "", after, "and `code`"],
+      ["Stray ` tick", `# ${after}`, "and `code`"],
+      ["Stray ` tick", `- ${after}`, "and `code`"],
+      ["Stray ` tick", `> ${after} and \`code\``],
+      ["> Stray ` tick", `> > ${after} and \`code\``],
+      ["- Stray ` tick", `  > ${after} and \`code\``],
+      ["> Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["> Use `example", `${hidden} end\``, after],
+      ["Use `example", `    > ${hidden} end\``, after],
+      ["> Use `example", `>     > ${hidden} end\``, `> ${after}`],
+      ["> Intro", "Use `example", `> ${hidden} end\``, `> ${after}`],
+      ["> > Intro", "> Use `example", `> > ${hidden} end\``, `> > ${after}`],
+      ["1. Stray ` tick", `    > ${after} and \`code\``],
+      ["1. Intro", "", "    Stray ` tick", `    > ${after} and \`code\``],
+      ["- Intro", "", "Use `example", `    > ${hidden} end\``, after],
+      ...["- - -", "* \t* *", "___", "===", "-"].flatMap((boundary) => [
+        ["Stray ` tick", boundary, `${after} and \`code\``],
+        ["> Stray ` tick", `> ${boundary}`, `> ${after} and \`code\``],
+      ]),
+      ["Stray ` tick\r", "  ---\r", `${after} and \`code\``],
+      ["> Stray ` tick", "---", `${after} and \`code\``],
+      ["Use `example", "```" + hidden + "`", after],
+      ["\\\\``" + after + "`"],
+      [`Use \`example\r${hidden} end\`. Stray \` tick\r\r${after}\rand \`code\``],
+      [`Stray \` tick\r# ${after}\rand \`code\``],
+    ]) {
+      const joined = markdown.join("\n");
+      expect(threadLinkIds(joined)).toEqual(["t1"]);
+      expect(relabelThreadLinks(joined, () => "New")).toBe(
+        joined.replace("[live](goat-thread://v1/t1)", "[New](goat-thread://v1/t1)"),
+      );
+    }
+  });
+
+  it.each(["\r", "\r\n", "\n"])("keeps fenced examples literal with %j line endings", (eol) => {
+    for (const fence of ["~~~", "```"]) {
+      const text = [fence, "[hidden](goat-thread://v1/hidden)", fence].join(eol);
+      const input = `${text}${eol}[after](goat-thread://v1/after)`;
+      expect(threadLinkIds(input)).toEqual(["after"]);
+      expect(relabelThreadLinks(input, () => "Task")).toBe(
+        `${text}${eol}[Task](goat-thread://v1/after)`,
+      );
+    }
+  });
+
+  it("keeps multiline code literal when a line only resembles a block boundary", () => {
+    for (const markdown of [
+      ...["--- text", "== =", "-_*", "    ==="].map((line) => ["Use `example", line]),
+      ["> Use `example", ">     ---"],
+      ["> Use `example", "==="],
+    ]) {
+      const source = [...markdown, "[old](goat-thread://v1/t1) end`"].join("\n");
+      expect(threadLinkIds(source)).toEqual([]);
+      expect(relabelThreadLinks(source, () => "New")).toBe(source);
+    }
   });
 
   it("writes the thread id verbatim so the link opens that exact thread", () => {

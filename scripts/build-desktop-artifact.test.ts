@@ -163,16 +163,16 @@ const makeLinuxCliArchiveFixture = Effect.fn("test.makeLinuxCliArchiveFixture")(
       yield* fs.writeFile(memberPath, SCREEN_WASM_BYTES);
     else yield* fs.writeFileString(memberPath, member);
   }
-  const archivePath = path.join(input.root, `${input.stem}.tar.gz`);
   const tar = yield* spawner.spawn(
-    ChildProcess.make("tar", ["-czf", archivePath, "-C", contentRoot, "."], {
+    ChildProcess.make("tar", ["-czf", `${input.stem}.tar.gz`, "-C", contentRoot, "."], {
+      cwd: input.root,
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
     }),
   );
   assert.equal(Number(yield* tar.exitCode), 0);
-  return archivePath;
+  return path.join(input.root, `${input.stem}.tar.gz`);
 });
 
 function mockProcess(exitCode: number, stdout = "") {

@@ -1,4 +1,4 @@
-import type { GitCommandError } from "@goat/contracts";
+import { trimAsciiWhitespace, type GitCommandError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { ExecuteGitResult } from "./GitVcsDriver.ts";
 import { parseRemoteNamesInGitOrder } from "../git/remoteRefs.ts";
@@ -7,12 +7,12 @@ export function parseDefaultBranchFromRemoteHeadRef(
   value: string,
   remoteName: string,
 ): string | null {
-  const trimmed = value.trim();
+  const trimmed = trimAsciiWhitespace(value);
   const prefix = `refs/remotes/${remoteName}/`;
   if (!trimmed.startsWith(prefix)) {
     return null;
   }
-  const refName = trimmed.slice(prefix.length).trim();
+  const refName = trimmed.slice(prefix.length);
   return refName.length > 0 && refName !== "HEAD" ? refName : null;
 }
 

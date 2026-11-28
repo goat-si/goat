@@ -1,3 +1,5 @@
+import { activityListing } from "./pullRequestActivityListing.testkit.ts";
+import { resolveTarget } from "./pullRequestTarget.ts";
 import { registerPullRequestBehaviorTests } from "./PullRequestInteractive.testkit.ts";
 import {
   project,
@@ -448,6 +450,11 @@ it.effect("lists GitHub Enterprise PRs for a stored unknown repository after hos
       result.entries.map(({ host, number }) => [host, number]),
       [["code.example.test", 42]],
     );
+    const target = yield* resolveTarget(
+      { repository: "team/project", number: 42 },
+      yield* service.addressedProject("p1" as ProjectId),
+    );
+    assert.strictEqual(target.url, "https://code.example.test/team/project/pull/42");
   }),
 );
 
@@ -4612,6 +4619,7 @@ it.effect.each(["commit", "credential", "expiry", "refresh"] as const)(
               Effect.suspend(() =>
                 use({ accountId: "101", viewer: "octocat", credentialFingerprint: credential }),
               ),
+            ...activityListing("a".repeat(40)),
             getDiff: () => Effect.die("Membership must not fetch patch hunks"),
             getDiffFilePaths: (input) =>
               Effect.gen(function* () {
@@ -4776,6 +4784,7 @@ it.effect.each(["commit", "credential"] as const)(
               Effect.suspend(() =>
                 use({ accountId: "101", viewer: "octocat", credentialFingerprint: credential }),
               ),
+            ...activityListing("a".repeat(40)),
             getDiff: () =>
               Effect.sync(() => ({
                 patch:
@@ -4833,6 +4842,7 @@ it.effect.each(["expiry", "commit expiry", "cache hit", "commit cache hit", "ref
         ],
         providers: [
           fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            ...activityListing("a".repeat(40)),
             getDiff: () =>
               Effect.gen(function* () {
                 if (++diffReads !== 1) return { patch: "", truncated: false, nextCursor: null };

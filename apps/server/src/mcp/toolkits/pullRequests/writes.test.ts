@@ -126,6 +126,7 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
   };
   const overrides = Layer.mergeAll(
     dependenciesWithPullRequests({
+      addressedProject: () => Effect.succeed(project),
       update: (input) => record("update", input),
       comment: (input) => record("comment", input),
       updateComment: (input) => record("updateComment", input),
@@ -210,7 +211,10 @@ it.effect(
         const server = yield* McpServer.McpServer;
         for (const [verb, args] of [
           ["comment", { body: "Hello" }],
-          ["review_submit", { verdict: "approve", body: "", comments: [] }],
+          [
+            "review_submit",
+            { verdict: "approve", body: "", comments: [], expectedHeadSha: "abc1234" },
+          ],
           ["thread_reply", { threadId: "review-thread", body: "Hello" }],
         ] as const) {
           const name = `goat_pull_request_${verb}` as const;
@@ -460,9 +464,9 @@ it.effect(
           ],
           [
             "review_submit",
-            { verdict: "approve", body: "", comments: [] },
+            { verdict: "approve", body: "", comments: [], expectedHeadSha: "abc1234" },
             "submitReview",
-            { verdict: "approve", body: "", comments: [] },
+            { verdict: "approve", body: "", comments: [], expectedHeadSha: "abc1234" },
           ],
           [
             "thread_reply",
@@ -561,7 +565,7 @@ it.effect.each(["comment", "submitReview"] as const)(
           clientRequestId: "partial",
           ...(partial === "comment"
             ? { body: "Hello" }
-            : { verdict: "approve", body: "", comments: [] }),
+            : { verdict: "approve", body: "", comments: [], expectedHeadSha: "abc1234" }),
         };
         expect(yield* call("goat_call", { path: `pull_request.${verb}`, args })).toMatchObject({
           status: "error",
@@ -703,3 +707,36 @@ it("starts thread reconciliation from activity and warns that GitLab approval ca
   expect(entries["pull_request.review_submit"]?.guide).toContain("unknown_outcome");
   expect(entries["pull_request.review_submit"]?.guide).toContain("tell the user");
 });
+
+it.effect("requires the reviewed head for approval and forwards it", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* Effect.gen(function* () {
+      yield* seed;
+      const review = { verdict: "approve", body: "", comments: [] };
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.review_submit",
+          args: { ...target, ...review, clientRequestId: "missing-head" },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringContaining("expectedHeadSha") },
+      });
+      expect(yield* Ref.get(h.calls)).toHaveLength(0);
+      yield* write("review_submit", {
+        ...review,
+        expectedHeadSha: "abc1234",
+        clientRequestId: "pinned-head",
+      });
+      expect(yield* Ref.get(h.calls)).toMatchObject([{ input: { expectedHeadSha: "abc1234" } }]);
+      yield* write("review_submit", {
+        verdict: "comment",
+        body: "Question",
+        comments: [],
+        clientRequestId: "comment-review",
+      });
+      expect(yield* Ref.get(h.calls)).toHaveLength(2);
+    }).pipe(Effect.provide(h.registered));
+  }),
+);

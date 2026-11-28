@@ -67,7 +67,7 @@ export function cloneUrlForProtocol(url: string, protocol: CloneProtocol): strin
     if (protocol === "ssh") return `git@${host}:${decodeURIComponent(parsed.path)}`;
     const path = parsed.scp
       ? parsed.path.split("/").map(encodeURIComponent).join("/")
-      : parsed.path;
+      : parsed.path.replaceAll("#", "%23").replaceAll("?", "%3F");
     return `https://${host}/${path}`;
   } catch {
     return null;
@@ -86,7 +86,9 @@ export function cloneUrlRepositoryPath(url: string): string | null {
   if (isWindowsDrivePath(url.trim())) return null;
   const parsed = parseCloneUrl(url);
   if (!parsed) return null;
-  let pathSegments = (parsed.path.split(/[?#]/)[0] ?? "").split("/").filter(Boolean);
+  let pathSegments = (parsed.path.split(parsed.scp ? "?" : /[?#]/, 1)[0] ?? "")
+    .split("/")
+    .filter(Boolean);
   if (!parsed.scp) {
     try {
       pathSegments = pathSegments.map(decodeURIComponent);

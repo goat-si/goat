@@ -21,7 +21,6 @@ import {
   resolveSpawnCommand,
   withPathDirectoryListings,
 } from "@goat/shared/shell";
-import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Base64 from "effect/encoding/Base64";
@@ -55,12 +54,14 @@ interface EditorLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly detached?: boolean;
+  readonly waitForExit?: boolean;
 }
 
 interface ProcessLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly options: ChildProcess.CommandOptions;
+  readonly waitForExit?: boolean;
 }
 
 interface TargetPathAndPosition {
@@ -90,48 +91,11 @@ const DETACHED_IGNORE_STDIO_OPTIONS = {
   stderr: "ignore",
 } as const satisfies ChildProcess.CommandOptions;
 
-const compactEnv = (input: Record<string, Option.Option<string>>): NodeJS.ProcessEnv =>
-  Object.fromEntries(
-    Object.entries(input).flatMap(([key, value]) =>
-      Option.match(value, {
-        onNone: () => [],
-        onSome: (resolved) => [[key, resolved]],
-      }),
-    ),
-  );
-
-const BrowserLaunchEnvConfig = Config.all({
-  SYSTEMROOT: Config.String("SYSTEMROOT").pipe(Config.option),
-  windir: Config.String("windir").pipe(Config.option),
-  WSL_DISTRO_NAME: Config.String("WSL_DISTRO_NAME").pipe(Config.option),
-  WSL_INTEROP: Config.String("WSL_INTEROP").pipe(Config.option),
-  SSH_CONNECTION: Config.String("SSH_CONNECTION").pipe(Config.option),
-  SSH_TTY: Config.String("SSH_TTY").pipe(Config.option),
-  container: Config.String("container").pipe(Config.option),
-  DISPLAY: Config.String("DISPLAY").pipe(Config.option),
-  WAYLAND_DISPLAY: Config.String("WAYLAND_DISPLAY").pipe(Config.option),
-}).pipe(Config.map(compactEnv));
-
-const CommandLookupEnvConfig = Config.all({
-  PATH: Config.String("PATH").pipe(Config.option),
-  Path: Config.String("Path").pipe(Config.option),
-  path: Config.String("path").pipe(Config.option),
-  PATHEXT: Config.String("PATHEXT").pipe(Config.option),
-  HOME: Config.String("HOME").pipe(Config.option),
-  LOCALAPPDATA: Config.String("LOCALAPPDATA").pipe(Config.option),
-  ProgramFiles: Config.String("ProgramFiles").pipe(Config.option),
-  ProgramW6432: Config.String("ProgramW6432").pipe(Config.option),
-  XDG_DATA_HOME: Config.String("XDG_DATA_HOME").pipe(Config.option),
-  "ProgramFiles(x86)": Config.String("ProgramFiles(x86)").pipe(Config.option),
-}).pipe(Config.map(compactEnv));
-
-const readBrowserLaunchEnv = BrowserLaunchEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
-const readCommandLookupEnv = CommandLookupEnvConfig.pipe(Effect.orElseSucceed(() => ({})));
-
-// External Electron apps must start as applications even when GOAT's server runs in Electron's Node mode.
-const readExternalLaunchEnv = HostProcess.Environment.pipe(
-  Effect.map(({ ELECTRON_RUN_AS_NODE: _runAsNode, ...env }) => env),
-);
+import {
+  readBrowserLaunchEnv,
+  readCommandLookupEnv,
+  readExternalLaunchEnv,
+} from "./externalLauncherEnv.ts";
 
 function parseTargetPathAndPosition(target: string): Option.Option<TargetPathAndPosition> {
   const match = TARGET_WITH_POSITION_PATTERN.exec(target);
@@ -633,7 +597,14 @@ const resolveFileManagerRevealLaunch = Effect.fn("resolveFileManagerRevealLaunch
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   if (platform === "darwin") {
-    return { editor: "file-manager", target, command: "open", args: ["-R", target] };
+    // `open -R` reports targets Finder cannot reveal only through its exit status.
+    return {
+      editor: "file-manager",
+      target,
+      command: "open",
+      args: ["-R", target],
+      waitForExit: true,
+    };
   }
 
   if (platform === "win32") {
@@ -861,7 +832,7 @@ const readGraphicalSessionEnv = Effect.fn("externalLauncher.readGraphicalSession
   Effect.orElseSucceed((): NodeJS.ProcessEnv => ({})),
 );
 
-const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
+const launchProcess = Effect.fn("externalLauncher.launchProcess")(function* (
   launch: ProcessLaunch,
   onError: (cause: unknown) => ExternalLauncherError,
 ): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
@@ -872,6 +843,14 @@ const launchAndUnref = Effect.fn("externalLauncher.launchAndUnref")(function* (
     env: { ...env, ...launch.options.env },
     extendEnv: false,
   });
+
+  if (launch.waitForExit) {
+    const exitCode = yield* spawner.exitCode(command).pipe(Effect.mapError(onError));
+    if (exitCode !== 0) {
+      return yield* onError(new Error(`${launch.command} exited with status ${exitCode}`));
+    }
+    return;
+  }
 
   yield* spawner.spawn(command).pipe(
     Effect.flatMap((handle) => handle.unref),
@@ -885,7 +864,7 @@ const launchBrowser = Effect.fn("externalLauncher.launchBrowser")(function* (
   target: string,
 ): Effect.fn.Return<void, ExternalLauncherError, ChildProcessSpawner.ChildProcessSpawner> {
   const launch = yield* resolveBrowserLaunch(target);
-  return yield* launchAndUnref(
+  return yield* launchProcess(
     launch,
     (cause) =>
       new ExternalLauncherBrowserSpawnError({
@@ -916,10 +895,11 @@ const launchEditorProcess = Effect.fn("externalLauncher.launchEditorProcess")(fu
   if (spawnCommand.shell && launch.args.some((arg) => WINDOWS_SHIM_UNSAFE_ARG_PATTERN.test(arg))) {
     return yield* new ExternalLauncherUnsupportedTargetError({ editor: launch.editor });
   }
-  yield* launchAndUnref(
+  yield* launchProcess(
     {
       command: spawnCommand.command,
       args: spawnCommand.args,
+      waitForExit: launch.waitForExit ?? false,
       options: {
         detached: launch.detached ?? true,
         shell: spawnCommand.shell,

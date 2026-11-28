@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - the guarded file read needs open
 // flags (O_NOFOLLOW, O_NONBLOCK) the FileSystem service does not expose.
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import {
   EnvironmentTheme,
@@ -25,6 +26,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { lock } from "proper-lockfile";
 
 import * as ServerConfig from "./config.ts";
 import { supervise } from "./backgroundSupervision.ts";
@@ -51,6 +53,67 @@ interface PublishedThemes {
   readonly seq: number;
   readonly themes: ReadonlyArray<EnvironmentTheme>;
 }
+
+const NOT_PUBLISHED = "could not be published. The themes directory may be full or not writable.";
+
+/** A theme the service will not publish or select. `problem` ends the sentence naming it. */
+export class EnvironmentThemeRefusedError extends Schema.TaggedError<EnvironmentThemeRefusedError>()(
+  "EnvironmentThemeRefusedError",
+  {
+    themeId: Schema.String,
+    problem: Schema.String,
+    known: Schema.optional(Schema.Array(Schema.String)),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    const known = this.known ? ` Available: ${this.known.join(", ")}.` : "";
+    return `Theme "${this.themeId}" ${this.problem}${known}`;
+  }
+}
+
+/**
+ * Hold through the settings write so CLI and server publishers share one catalog snapshot.
+ * Returns a guard that skips a rollback once a stalled holder has lost the lock to another.
+ */
+export const acquireThemePublishLock = Effect.fn("EnvironmentTheme.acquirePublishLock")(function* (
+  themesDir: string,
+  themeId: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs
+    .makeDirectory(themesDir, { recursive: true })
+    .pipe(
+      Effect.mapError(
+        (cause) => new EnvironmentThemeRefusedError({ themeId, problem: NOT_PUBLISHED, cause }),
+      ),
+    );
+  let compromised = false;
+  yield* Effect.acquireRelease(
+    Effect.tryPromise({
+      try: () =>
+        lock(themesDir, {
+          lockfilePath: NodePath.join(themesDir, ".goat-theme-publish.lock"),
+          stale: 60_000,
+          onCompromised: () => {
+            compromised = true;
+          },
+        }),
+      catch: (cause) =>
+        new EnvironmentThemeRefusedError({
+          themeId,
+          problem:
+            (cause as { code?: unknown } | null)?.code === "ELOCKED"
+              ? "could not be published because the themes directory is busy. Try again."
+              : NOT_PUBLISHED,
+          cause,
+        }),
+    }),
+    (release) => Effect.promise(() => release().catch(() => undefined)),
+  );
+  return <E>(rollback: Effect.Effect<void, E>) =>
+    Effect.suspend(() => (compromised ? Effect.void : rollback));
+});
 
 export class EnvironmentThemeService extends Context.Service<
   EnvironmentThemeService,

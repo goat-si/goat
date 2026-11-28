@@ -26,8 +26,8 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpApi from "effect/http-api/HttpApi";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Schema from "effect/Schema";
-
 import * as ServerConfig from "../config.ts";
+import * as ServerHttp from "../http.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import * as ToolAdmission from "../mcp/ToolAdmission.ts";
@@ -42,11 +42,9 @@ import * as Sessions from "./SessionStore.ts";
 import * as AuthHttp from "./http.ts";
 import { registerSourceForTest } from "./connectionContext.ts";
 import { MAIN_LISTENER, onMainListener } from "./connectionContext.testkit.ts";
-
 class AuthTestApi extends HttpApi.make("environment")
   .add(EnvironmentHttpApi.groups.auth)
   .add(EnvironmentHttpApi.groups.mcpOAuth) {}
-
 const layerConfig = ServerConfig.layerTest(process.cwd(), { prefix: "goat-mcp-oauth-test-" });
 const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
   Layer.provide(Sqlite.layerMemory),
@@ -63,6 +61,7 @@ const makeLayerRoutes = (capture: (auth: EnvironmentAuth.EnvironmentAuth["Servic
       Layer.provide(AuthHttp.layer),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
+      Layer.provide(ServerHttp.layerApiBodyLimit),
     ),
   ).pipe(
     Layer.provideMerge(layerEnvironmentAuth),
@@ -75,7 +74,6 @@ const makeLayerRoutes = (capture: (auth: EnvironmentAuth.EnvironmentAuth["Servic
     ),
     Layer.provide(NodeServices.layer),
   );
-
 /** One /mcp request's authentication; its admission ends with the request. */
 const authenticateOnce = (
   auth: EnvironmentAuth.EnvironmentAuth["Service"],
@@ -88,13 +86,11 @@ const authenticateOnce = (
       ),
     ),
   );
-
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const ORIGIN = "https://box.example.ts.net";
 const REDIRECT = "http://localhost/callback";
 const verifier = "a".repeat(43) + "-verifier-for-tests";
 const challenge = "DeB41nTVkPwpbbYecrnqtVq7VXLezustdHAK4SWt13c";
-
 const at = (path: string, init?: RequestInit) =>
   new Request(`http://127.0.0.1${path}`, {
     ...init,
@@ -105,9 +101,7 @@ const form = (body: Record<string, string>) => ({
   headers: { "content-type": "application/x-www-form-urlencoded" },
   body: new URLSearchParams(body).toString(),
 });
-
 type Handler = (request: Request) => Effect.Effect<Response>;
-
 const withRoutes = <A, E>(
   use: (handler: Handler, auth: EnvironmentAuth.EnvironmentAuth["Service"]) => Effect.Effect<A, E>,
 ) =>
@@ -134,16 +128,13 @@ const withRoutes = <A, E>(
       (web) => Effect.promise(() => web.dispose()),
     );
   }).pipe(Effect.provide(NodeServices.layer));
-
 const json = <A>(response: Response) => Effect.promise(() => response.json() as Promise<A>);
-
 const postJson = (path: string, body: unknown, cookie?: string) =>
   at(path, {
     method: "POST",
     headers: { "content-type": "application/json", ...(cookie ? { cookie } : {}) },
     body: encodeJson(body),
   });
-
 const decide = (
   handler: Handler,
   authorization: Record<string, string>,
@@ -157,7 +148,6 @@ const decide = (
       ),
     ),
   );
-
 const withAuthenticatedMemoryTools = (
   auth: EnvironmentAuth.EnvironmentAuth["Service"],
   token: string,
@@ -197,7 +187,6 @@ const withAuthenticatedMemoryTools = (
       ),
     ),
   );
-
 const register = (handler: Handler, redirect = REDIRECT) =>
   handler(
     at("/oauth/mcp/register", {
@@ -211,13 +200,11 @@ const register = (handler: Handler, redirect = REDIRECT) =>
       }),
     }),
   );
-
 const registeredClientId = (handler: Handler) =>
   register(handler).pipe(
     Effect.flatMap((response) => json<{ client_id: string }>(response)),
     Effect.map((body) => body.client_id),
   );
-
 const authorizeParams = (clientId: string, redirect = "http://localhost:51234/callback") => ({
   response_type: "code",
   client_id: clientId,
@@ -227,7 +214,6 @@ const authorizeParams = (clientId: string, redirect = "http://localhost:51234/ca
   state: "state-1",
   resource: `${ORIGIN}/mcp`,
 });
-
 it.effect("accepts six callbacks while rejecting oversized and unsafe registrations", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {
@@ -257,7 +243,6 @@ it.effect("accepts six callbacks while rejecting oversized and unsafe registrati
     }),
   ),
 );
-
 it.effect("derives discovery metadata from the origin the client reached", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {
@@ -279,7 +264,25 @@ it.effect("derives discovery metadata from the origin the client reached", () =>
     }),
   ),
 );
-
+it.effect("answers 413 to a body over the API limit", () =>
+  withRoutes((handler) =>
+    Effect.gen(function* () {
+      const body = "x".repeat(ServerHttp.API_MAX_BODY_BYTES + 1);
+      for (const [path, contentType] of [
+        ["/api/auth/browser-session", "application/json"],
+        ["/oauth/token", "application/x-www-form-urlencoded"],
+        ["/oauth/mcp/register", "application/json"],
+      ]) {
+        const init = { method: "POST", headers: { "content-type": contentType! } };
+        expect((yield* handler(at(path!, { ...init, body }))).status, path).toBe(413);
+        // A chunked body declares no length, so the reader itself has to stop.
+        const chunked = new Blob([body]).stream();
+        const streamed = at(path!, { ...init, body: chunked, duplex: "half" } as RequestInit);
+        expect((yield* handler(streamed)).status, `${path} chunked`).toBe(413);
+      }
+    }),
+  ),
+);
 it.effect("registers loopback and https clients and never redirects for an unverified client", () =>
   withRoutes((handler) =>
     Effect.gen(function* () {
@@ -294,11 +297,9 @@ it.effect("registers loopback and https clients and never redirects for an unver
         expect(response.status).toBe(400);
         expect(yield* json<unknown>(response)).toMatchObject({ error: "invalid_redirect_uri" });
       }
-
       const registered = yield* register(handler);
       expect(registered.status).toBe(201);
       const { client_id: clientId } = (yield* json<unknown>(registered)) as { client_id: string };
-
       const forged = yield* handler(
         at(
           `/oauth/mcp/authorize?${new URLSearchParams(authorizeParams(`${clientId.split(".")[0]}.forged`))}`,
@@ -306,7 +307,6 @@ it.effect("registers loopback and https clients and never redirects for an unver
       );
       expect(forged.status).toBe(400);
       expect(forged.headers.get("location")).toBeNull();
-
       const unregistered = yield* handler(
         at(
           `/oauth/mcp/authorize?${new URLSearchParams(
@@ -316,7 +316,6 @@ it.effect("registers loopback and https clients and never redirects for an unver
       );
       expect(unregistered.status).toBe(400);
       expect(unregistered.headers.get("location")).toBeNull();
-
       const query = new URLSearchParams(authorizeParams(clientId)).toString();
       const handoff = yield* handler(at(`/oauth/mcp/authorize?${query}`));
       expect(handoff.status).toBe(302);
@@ -329,7 +328,6 @@ it.effect("registers loopback and https clients and never redirects for an unver
         redirectHost: "localhost:51234",
         environmentHost: "box.example.ts.net",
       });
-
       const forgedDetails = yield* handler(
         postJson("/oauth/mcp/approval", authorizeParams(`${clientId.split(".")[0]}.forged`)),
       );
@@ -338,7 +336,6 @@ it.effect("registers loopback and https clients and never redirects for an unver
     }),
   ),
 );
-
 it.live("signs in with a pairing code and issues a token only /mcp accepts", () =>
   withRoutes((handler, auth) =>
     Effect.gen(function* () {

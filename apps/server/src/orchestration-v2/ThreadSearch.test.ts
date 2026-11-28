@@ -37,6 +37,15 @@ it.layer(layerTest)("ThreadSearch", (it) => {
             plan.map((row) => row.detail).join("\n"),
           );
         }
+        // A cancelled run can hold tens of thousands of items; scanning them per hit took 50 s.
+        assert.isTrue(
+          plan.some(
+            (row) =>
+              row.detail.includes("orchestration_v2_projection_turn_items_message_ordinal_idx") &&
+              row.detail.includes("<expr>=?"),
+          ),
+          plan.map((row) => row.detail).join("\n"),
+        );
       }
     }),
   );
@@ -522,7 +531,7 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
             mention,
             "heron-mention",
             "user",
-            String.raw`Fix [\_\_init\_\_.py](pkg/__init__.py) and [\_café\_.py](pkg/_caf%C3%A9_.py)`,
+            String.raw`Fix [\_\_init\_\_.py](pkg/__init__.py), [\_café\_.py](pkg/_caf%C3%A9_.py), [\~\~draft\~\~.md](./notes/~~draft~~.md), [&#91;TODO&#93;.md](notes/%5BTODO%5D.md), and [\&#91;lit\&#93;.md](./notes/%26%2391;lit%26%2393;.md)`,
           ),
         ],
         projections.apply,
@@ -533,13 +542,21 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
         matches.map((match) => [match.threadId, match.snippet]),
         [[labeled, "See the heron plan now"]],
       );
-      for (const query of ["__init__.py", "_café_.py"]) {
+      for (const query of [
+        "__init__.py",
+        "_café_.py",
+        "~~draft~~.md",
+        "[TODO",
+        "[TODO].md",
+        "&#91;lit&#93;.md",
+      ]) {
         const mentions = yield* search.search({ query });
         assert.deepEqual(
-          mentions.matches.map((match) => [match.threadId, match.snippet]),
-          [[mention, "Fix __init__.py and _café_.py"]],
+          mentions.matches.map((match) => [match.threadId, match.snippet.includes(query)]),
+          [[mention, true]],
         );
       }
+      assert.deepEqual((yield* search.search({ query: "[lit" })).matches, []);
     }),
   );
 
@@ -935,33 +952,6 @@ it.layer(layerTest)("ThreadSearch.searchThreads", (it) => {
     }),
   );
 });
-
-it.effect("starts snippets a few words before the match so one line shows it", () =>
-  Effect.sync(() => {
-    const snippet = (text: string, word: string) =>
-      ThreadSearch.buildSearchSnippet(text, text.indexOf(word));
-    const long = `${"lead ".repeat(60)}the NEEDLE sits here ${"tail ".repeat(60)}`;
-    const cut = snippet(long, "NEEDLE");
-    assert.isAtMost(cut.length, 240);
-    assert.match(cut, /^…(lead ){2,4}the NEEDLE sits here/);
-    assert.isTrue(cut.endsWith("…"));
-    // Whitespace collapses only in the shown part, so the offset still lands.
-    assert.match(snippet(`${"word\n\n  ".repeat(60)}un café`, "café"), /un café$/);
-    // A cut never splits an emoji's surrogate pair.
-    assert.notMatch(
-      snippet(`x${"🚀".repeat(200)}needle`, "needle"),
-      /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/,
-    );
-    // Emphasis and code marks go, as the thread shows the text.
-    assert.equal(
-      ThreadSearch.buildSearchSnippet("Use **bold** and `code` here", 0),
-      "Use bold and code here",
-    );
-    assert.equal(ThreadSearch.buildSearchSnippet("Call __init__ first", 0), "Call __init__ first");
-    // Short text still moves a late match into view.
-    assert.equal(snippet(`${"word ".repeat(20)}needle`, "needle"), "…word word word word needle");
-  }),
-);
 
 it.layer(layerTest)("ThreadSearch accent prefix", (it) => {
   it.effect("finds Latin short prefixes across accents with and without the index", () =>

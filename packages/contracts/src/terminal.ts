@@ -15,7 +15,11 @@ const SEQUENCE_SOS_PM_APC = 5;
 const SEQUENCE_OSC = 6;
 
 // Bits above the low three hold a high surrogate until its other half arrives.
-function nextTerminalSequenceState(state: number, unit: number): number {
+function nextTerminalSequenceState(
+  state: number,
+  unit: number,
+  onC1ReturnToGround?: (byte: number, remainingBytes: number) => void,
+): number {
   if (unit === 0x1b) return SEQUENCE_ESCAPE;
   if (state === TERMINAL_SEQUENCE_GROUND || unit === 0x18 || unit === 0x1a) {
     return TERMINAL_SEQUENCE_GROUND;
@@ -58,7 +62,10 @@ function nextTerminalSequenceState(state: number, unit: number): number {
     if (byte === 0x90) mode = SEQUENCE_DCS;
     else if (byte === 0x9b) mode = SEQUENCE_CSI;
     else if (byte === 0x98 || byte >= 0x9e) mode = SEQUENCE_SOS_PM_APC;
-    else return TERMINAL_SEQUENCE_GROUND;
+    else {
+      onC1ReturnToGround?.(byte, shift / 6);
+      return TERMINAL_SEQUENCE_GROUND;
+    }
   }
   return mode;
 }
@@ -93,6 +100,25 @@ export function terminalSequenceEnd(state: number, text: string): number {
   return index;
 }
 
+function scanSnapshotContinuation(state: number, data: string, limit = data.length) {
+  let control = "";
+  let replacementCount = 0;
+  const replayC1 = (byte: number, remainingBytes: number) => {
+    // Replay IND, NEL, HTS and RI from ground. Any bytes parsed after the control
+    // are now stray UTF-8 continuation bytes.
+    if (byte === 0x84 || byte === 0x85 || byte === 0x88 || byte === 0x8d) {
+      control = "\u001b" + String.fromCharCode(byte - 0x40);
+    }
+    replacementCount = remainingBytes;
+  };
+  let end = 0;
+  while (state !== TERMINAL_SEQUENCE_GROUND && end < limit) {
+    state = nextTerminalSequenceState(state, data.charCodeAt(end), replayC1);
+    end += 1;
+  }
+  return { state, end, control, replacementCount };
+}
+
 const historyEncoder = new TextEncoder();
 // A BOM at a retained chunk boundary is terminal data, not an encoding marker.
 const historyDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -125,7 +151,13 @@ export function retainedTerminalHistory(history: string, maxBytes: number): stri
     0,
     history.length - retained.length,
   );
-  return retained.slice(terminalSequenceEnd(state, retained));
+  const { end, control, replacementCount } = scanSnapshotContinuation(state, retained);
+  const tail = retained.slice(end);
+  if (replacementCount === 0) return control + tail;
+  // The two-byte ESC form fits where the consumed code point did. Each replacement
+  // glyph takes three bytes, so keep only as many as fit alongside the control and tail.
+  const available = maxBytes - historyEncoder.encode(tail).byteLength - control.length;
+  return control + "\ufffd".repeat(Math.min(replacementCount, Math.floor(available / 3))) + tail;
 }
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;

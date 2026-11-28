@@ -36,6 +36,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 
+import { trimAsciiWhitespace } from "@goat/contracts";
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -449,7 +450,7 @@ export const make = Effect.gen(function* () {
         timeoutMs: 5_000,
       });
       if (result.exitCode === 0) {
-        return result.stdout.trim().replace(/^refs\/heads\//, "") || null;
+        return trimAsciiWhitespace(result.stdout).replace(/^refs\/heads\//, "") || null;
       }
       if (result.exitCode === 1) return null;
       return yield* new GitCommandError({

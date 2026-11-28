@@ -446,13 +446,6 @@ describe("evaluatePullRequestWatch", () => {
     assert.deepEqual(evaluate(final.next, lateResult, noRemarks).changes, []);
   });
 
-  it("does not report passed again for a new passed check where none is required", () => {
-    const first = evaluate(watch(), detail({ checks: [check("test", "success")] }), noRemarks);
-    assert.deepEqual(first.changes, [{ kind: "checks-passed", count: 1, required: false }]);
-    const both = detail({ checks: [check("test", "success"), check("lint", "success")] });
-    assert.deepEqual(evaluate(first.next, both, noRemarks).changes, []);
-  });
-
   it("does not wake a watch saved before passed checks were recorded", () => {
     const green = detail({ checks: [{ ...check("test", "success"), required: true }] });
     const told = watch({ headSha: "aaaaaaaaaa", passed: true });

@@ -18,7 +18,7 @@ import {
   ensureServerMachineNonce,
   serverMachineNonceDirectory,
 } from "../environment/ServerEnvironmentMachine.ts";
-import { awaitLauncherLoss } from "../launcherWatch.ts";
+import { stopOnLauncherLoss } from "../launcherWatch.ts";
 import { holdWorkspaceLeaseRegistry } from "../workspace/workspaceLeaseRegistry.ts";
 import {
   acquireServerOwnerLock,
@@ -48,7 +48,8 @@ const prepareWorkingDirectory = Effect.fn("server.prepareWorkingDirectory")(func
   return result.original;
 });
 
-const runServerCommand = Effect.fn("server.runServerCommand")(function* (
+// Untraced: the server outlives the command span.
+const runServerCommand = Effect.fnUntraced(function* (
   flags: CliServerFlags,
   options?: {
     readonly startupPresentation?: ServerConfig.StartupPresentation;
@@ -124,15 +125,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
       yield* holdWorkspaceLeaseRegistry();
       const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
       const desktop = config.mode === "desktop" && config.desktopBootstrapToken !== undefined;
-      const running = desktop
-        ? Effect.raceFirst(
-            run,
-            awaitLauncherLoss().pipe(
-              // End like SIGTERM does (interrupt-only exit, so the runtime forces process exit).
-              Effect.andThen(Effect.interrupt),
-            ),
-          )
-        : run;
+      const running = desktop ? stopOnLauncherLoss(run) : run;
       return yield* running.pipe(
         Effect.onExit((exit) =>
           Effect.gen(function* () {
@@ -170,9 +163,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   );
 });
 
-export const runDefaultServerCommand = Effect.fn("server.runDefaultServerCommand")(function* (
-  flags: CliServerFlags,
-) {
+export const runDefaultServerCommand = Effect.fnUntraced(function* (flags: CliServerFlags) {
   const originalCwd = yield* prepareWorkingDirectory();
   if (Option.isSome(flags.cwd)) {
     const cwd = flags.cwd.value.trim();
@@ -208,7 +199,7 @@ const { autoBootstrapProjectFromCwd: _autoBootstrapProjectFromCwd, ...serveComma
 
 export const serveCommand = Command.make("serve", serveCommandFlags).pipe(
   Command.withDescription(
-    "Run the GOAT server without opening a browser and print headless pairing details.",
+    "Run the GOAT server without opening a browser. In a terminal it prints pairing details; for a background service, run `goat pair` to connect a device.",
   ),
   Command.withHandler((flags) =>
     runServerCommand(

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_TERMINAL_ID,
+  retainedTerminalHistory,
   TerminalError,
   TerminalOpenInput,
   TerminalSessionSnapshot,
@@ -21,6 +22,16 @@ it("preserves missing-folder recovery guidance across the terminal error contrac
   );
   expect(decoded.message).toContain("Restore the folder at this path before retrying.");
   expect(() => decodeTerminalError({ _tag: "TerminalCwdNotFoundError", cwd: 42 })).toThrow();
+});
+
+describe("terminal snapshot replay after an omitted DCS", () => {
+  it.each([
+    [8, "\u0085ready", "\u001bEready"],
+    [8, "\u2140ready", "\u001bEready"],
+    [10, "\u2140ready", "\u001bE\ufffdready"],
+  ])("keeps the line break within a %i-byte history budget", (budget, rest, replay) => {
+    expect(retainedTerminalHistory("\u001bPz" + "z".repeat(50) + rest, budget)).toBe(replay);
+  });
 });
 
 function decodeSync<S extends Schema.Top>(schema: S, input: unknown): Schema.Schema.Type<S> {
