@@ -66,7 +66,7 @@ fn pinned_prompts_match_source_when_available() {
             for step in &s.scenario.steps {
                 if let goat2_parity::scenario::Step::Send { text: prompt, .. } = step
                     && prompt != "temporary queued text"
-                    && prompt != "steer after completion"
+                    && prompt != "steer after the interrupt"
                 {
                     assert!(text.contains(prompt), "{}: {prompt}", s.scenario.name);
                 }
@@ -164,7 +164,7 @@ fn pinned_step_prompts_equal_stored_outbound_frame_text() {
                 let absent = match loaded.scenario.name.as_str() {
                     "queue_edit_then_start" => input == "i2" && text == "temporary queued text" && loaded.scenario.steps.iter().any(|s| matches!(s, Step::QueueEdit { input: edited, text, .. } if edited == input && texts.contains(text))),
                     "queue_cancel_while_active" => input == "i2" && loaded.scenario.steps.iter().any(|s| matches!(s, Step::QueueCancel { input: cancelled, .. } if cancelled == input)),
-                    "steer_refused_at_admission" => text == "steer after completion",
+                    "steer_refused_at_admission" => text == "steer after the interrupt",
                     _ => false,
                 };
                 assert!(
