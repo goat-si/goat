@@ -5,7 +5,7 @@ import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "./paper/parts.tsx";
 import { useClient, useHost, useHostContext, useThread } from "./host/HostProvider.tsx";
 import { botRows, workerThreads, type BotRowData } from "./host/store.ts";
-import type { CommandResult, RequestOpened, RequestOutcome } from "./host/wire.ts";
+import type { CommandResult, RequestOpened, RequestOutcome, TurnItem } from "./host/wire.ts";
 import { Planned, plannedProps } from "./planned/Planned.tsx";
 import { useUi, type UiStore } from "./ui-state/uiState.ts";
 import { clock, duration, shortTime } from "./lib/format.ts";
@@ -258,7 +258,7 @@ function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string
       items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={btn(e.task, () => onOpenTask(e.childThreadId), { "data-child-row": e.childThreadId })} />);
     }
   }
-  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
+  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} item={thread.requestItems[r.requestId]} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
   for (const o of outbox) {
     const status = o.status === "unconfirmed" ? "Not confirmed" : o.status === "failed" ? `Not sent · ${o.error ?? ""}` : snap.connection === "open" ? "Sent" : `Sent · ${bot.name} starts when the host connects`;
     items.push(
@@ -291,40 +291,74 @@ function UserBubble({ text }: { text: string }) {
   return <P.SentMessage text={text} face={null} status={null} actions={null} />;
 }
 
-export function RequestCard({ threadId, request, onHide }: { threadId: string; request: RequestOpened; onHide: () => void }) {
+export function RequestCard({ threadId, request, item, onHide }: { threadId: string; request: RequestOpened; item?: TurnItem | undefined; onHide: () => void }) {
   const client = useClient();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [answerText, setAnswerText] = useState("");
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
   const [title, ...rest] = request.summary.split("\n");
-  const resolve = async (key: string, body: { outcome: RequestOutcome; optionId?: string; text?: string }) => {
+  const resolve = async (key: string, body: { outcome: RequestOutcome; optionId?: string; text?: string; answers?: Record<string, string | string[]> }) => {
     setPending(key); setError(null);
     const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, ...body });
     setPending(null);
     if (!r.ok) setError(r.error?.message ?? "The host did not take this answer.");
   };
-  const action = (key: string, label: string, primary: boolean, body: { outcome: RequestOutcome; optionId?: string; text?: string }, title?: string) => {
-    const props = btn(label, () => void resolve(key, body), { "aria-busy": pending === key, title: title ?? label, "data-option": key });
+  const action = (key: string, label: string, primary: boolean, body: Parameters<typeof resolve>[1], hint?: string, disabled = false) => {
+    const props = disabled ? { role: "button", "aria-disabled": true, "aria-label": label, title: hint ?? label, "data-option": key } as P.El
+      : btn(label, () => void resolve(key, body), { "aria-busy": pending === key, title: hint ?? label, "data-option": key });
     return primary ? <P.DecisionPrimary key={key} label={label} button={props} /> : <P.DecisionSecondary key={key} label={label} button={props} />;
   };
+  const notNow = <P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />;
+  const text = (t: ReactNode) => <div style={{ color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px" }}>{t}</div>;
   let buttons: ReactNode[];
   let body: ReactNode = rest.join(" ") || null;
   if (request.kind === "decision" && (request.options?.length ?? 0) > 0) {
-    buttons = request.options!.map((o, i) => action(o.id, o.label, i === 0, { outcome: "decided", optionId: o.id }, o.consequence));
-  } else if (request.kind === "approval") {
-    buttons = [action("accept", "Approve", true, { outcome: "accept" }), action("decline", "Decline", false, { outcome: "decline" })];
+    buttons = request.options!.map((o, i) => action(o.id, o.label, o.id === (request.recommended ?? request.options![0]!.id) || (request.recommended === undefined && i === 0), { outcome: "decided", optionId: o.id }, o.consequence));
+  } else if (request.kind === "approval" && item?.type === "approval_request") {
+    // v1 CodexAdapterV2: the waiting item carries the prompt, the reason and the offered decisions.
+    body = <>{item.prompt && text(<code style={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: 12 }}>{item.prompt}</code>)}{item.reason && text(item.reason)}{!item.prompt && !item.reason && body}</>;
+    const offered = item.options?.length ? item.options : [{ decision: "accept" as const, label: "Approve" }, { decision: "decline" as const, label: "Decline" }];
+    buttons = offered.map((o, i) => action(o.decision, o.label, i === 0, { outcome: o.decision }, o.warning));
+  } else if (request.kind === "question" && item?.type === "user_input_request") {
+    const missing = item.questions.filter((q) => q.required !== false && !(answers[q.id]?.length) && !custom[q.id]?.trim());
+    body = <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {item.questions.map((q) => (
+        <div key={q.id} data-question={q.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {text(<><b style={{ color: "#0D0D0D", fontWeight: 500 }}>{q.header}</b> {q.question}</>)}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {q.options.map((o) => {
+              const value = o.value ?? o.label;
+              const on = answers[q.id]?.includes(value) ?? false;
+              return <span key={value} {...(btn(o.label, () => setAnswers((a) => {
+                const cur = a[q.id] ?? [];
+                return { ...a, [q.id]: q.multiSelect ? (on ? cur.filter((x) => x !== value) : [...cur, value]) : (on ? [] : [value]) };
+              }), { "aria-pressed": on, title: o.description }) as object)}
+                style={{ padding: "4px 10px", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: on ? "#FFFFFF" : "#0D0D0D", background: on ? "#0D0D0D" : "#FFFFFF", boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }}>{o.label}</span>;
+            })}
+          </div>
+          {(q.allowCustomAnswer || q.options.length === 0) && <input aria-label={`Answer: ${q.header}`} value={custom[q.id] ?? q.initialAnswer ?? ""} onChange={(e) => setCustom((c) => ({ ...c, [q.id]: e.target.value }))}
+            style={{ all: "unset", padding: "6px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />}
+        </div>
+      ))}
+    </div>;
+    const payload: Record<string, string | string[]> = {};
+    for (const q of item.questions) {
+      const picked = answers[q.id] ?? [];
+      const typed = custom[q.id]?.trim();
+      const all = typed ? [...picked, typed] : picked;
+      if (all.length) payload[q.id] = q.multiSelect ? all : all[0]!;
+    }
+    buttons = [action("answered", "Answer", true, { outcome: "answered", answers: payload }, missing.length ? "Answer the required questions first" : undefined, missing.length > 0), notNow];
   } else if (request.kind === "resend") {
     buttons = [action("resend", "Resend", true, { outcome: "resend" }, "Send the message again"), action("dropped", "Drop", false, { outcome: "dropped" })];
-  } else if (request.kind === "question") {
-    body = <>
-      {body}
-      <textarea className="goat2-input" rows={2} aria-label="Answer" value={answerText} onChange={(e) => setAnswerText(e.target.value)}
-        style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />
-    </>;
-    buttons = [action("answered", "Answer", true, { outcome: "answered", text: answerText.trim() })];
+  } else if (request.kind === "approval" || request.kind === "question") {
+    // Fail closed: without the engine's waiting item we do not know the offered choices.
+    body = <>{body}{text("Waiting for the details of this request from the host.")}</>;
+    buttons = [notNow];
   } else {
     body = body ?? "Signing in from here is not built yet.";
-    buttons = [<P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />, <Planned key="p" id="settings-accounts" style={{ alignSelf: "center" }} />];
+    buttons = [notNow, <Planned key="p" id="settings-accounts" style={{ alignSelf: "center" }} />];
   }
   return (
     <div data-request={request.requestId}>

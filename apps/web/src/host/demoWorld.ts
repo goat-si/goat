@@ -108,9 +108,19 @@ export function demoWorld(): FakeWorld {
     [at(15, 40, 40), cmd("b2-1", at(15, 40, 40), "bun test sidebar.test.ts", false, "running")],
   ]));
   add(thread(user("t-auth", "Fix flaky auth redirect test", "web-dashboard", { status: "needs_you", needsYou: { kind: "approval", summary: "Run the e2e suite?" } }, at(15, 38)), [
-    [at(15, 38), { type: "request.opened", requestId: "req-e2e", runId: null, itemId: null, kind: "approval", summary: "Run the e2e suite?\nIt takes about 12 minutes on this machine." }],
+    [at(15, 37), { type: "run.started", runId: "run-a1", inputIds: [], generation: 1, engineRef: null }],
+    [at(15, 38), { type: "item.completed", runId: "run-a1", engineLocator: null, item: { ...item("t-auth", "run-a1", "it-e2e", at(15, 38), { type: "approval_request", requestId: "req-e2e", requestKind: "command", prompt: "bun run test:e2e", reason: "Runs the browser suite against the local dev server (about 12 minutes).",
+      options: [{ decision: "accept", label: "Run once" }, { decision: "acceptForSession", label: "Allow for this session" }, { decision: "decline", label: "Decline" }] }), status: "waiting" } }],
+    [at(15, 38), { type: "request.opened", requestId: "req-e2e", runId: "run-a1", itemId: "it-e2e", kind: "approval", summary: "Run the e2e suite?" }],
   ]));
-  add(thread(user("t-csv", "Add CSV export to reports", "web-dashboard", { status: "needs_you", needsYou: { kind: "question", summary: "Which columns?" } }, at(15, 36)), []));
+  add(thread(user("t-csv", "Add CSV export to reports", "web-dashboard", { status: "needs_you", needsYou: { kind: "question", summary: "Which columns?" } }, at(15, 36)), [
+    [at(15, 35), { type: "run.started", runId: "run-c1", inputIds: [], generation: 1, engineRef: null }],
+    [at(15, 36), { type: "item.completed", runId: "run-c1", engineLocator: null, item: { ...item("t-csv", "run-c1", "it-cols", at(15, 36), { type: "user_input_request", requestId: "req-cols", questions: [
+      { id: "columns", header: "Columns", question: "Which columns go into the export?", multiSelect: true, required: true, options: [{ label: "Date", description: "Report date" }, { label: "Amount", description: "Total" }, { label: "Customer", description: "Customer name" }] },
+      { id: "name", header: "File name", question: "What should the file be called?", allowCustomAnswer: true, required: false, options: [], initialAnswer: "" },
+    ] }), status: "waiting" } }],
+    [at(15, 36), { type: "request.opened", requestId: "req-cols", runId: "run-c1", itemId: "it-cols", kind: "question", summary: "Which columns?" }],
+  ]));
   add(thread(user("t-cron", "Migrate cron jobs to queue", "api-server", { status: "failed" }, at(15, 20)), []));
   add(thread(user("t-copy", "Update onboarding copy", "web-dashboard", {}, at(15, 10)), []));
   add(thread(user("t-mem", "Investigate memory leak in worker", "api-server", { status: "running" }, at(15, 39)), []));

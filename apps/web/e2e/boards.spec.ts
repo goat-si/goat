@@ -191,3 +191,13 @@ test("thread mode: start a thread, approve a request, workspace follows the wind
     expect(Math.round(bg!.y + bg!.height)).toBe(height);
   }
 });
+
+test("thread view: structured question answers", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.locator("[data-thread-row=t-csv]").click();
+  await expect(page.locator("[data-option=answered]")).toHaveAttribute("aria-disabled", "true");
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Date", exact: true }).click();
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Amount", exact: true }).click();
+  await page.locator("[data-option=answered]").click();
+  await expect(page.getByText("Which columns go into the export?")).toHaveCount(0);
+});

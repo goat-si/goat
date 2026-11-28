@@ -205,7 +205,7 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
             style={{ color: "#5D5D5DD9", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12.5, padding: "0 0 12px", textAlign: "center" }}>Load earlier messages</div>}
           <TimelineEntries entries={thread.entries} activeRunStartedAt={thread.activeRunStartedAt} nowIso={now().toISOString()} />
           {thread.openRequests.filter((rq) => !hidden.has(rq.requestId)).map((rq) => (
-            <div key={rq.requestId} style={{ paddingBottom: 12 }}><RequestCard threadId={card.id} request={rq} onHide={() => setHidden((h) => new Set(h).add(rq.requestId))} /></div>
+            <div key={rq.requestId} style={{ paddingBottom: 12 }}><RequestCard threadId={card.id} request={rq} item={thread.requestItems[rq.requestId]} onHide={() => setHidden((h) => new Set(h).add(rq.requestId))} /></div>
           ))}
           {outbox.map((o) => (
             <div key={o.clientRequestId} data-outbox={o.status}>
