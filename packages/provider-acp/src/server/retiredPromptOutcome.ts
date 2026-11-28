@@ -1,6 +1,20 @@
-import type { ProviderDriverKind } from "@goat/contracts";
+import type { OrchestrationV2ProviderTurn, ProviderDriverKind } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { AcpAdapterV2Flavor } from "./adapterFlavor.ts";
+
+export function withExecutedProviderTurnModel(
+  settledTurn: OrchestrationV2ProviderTurn,
+  executedModel: string | undefined,
+): OrchestrationV2ProviderTurn {
+  if (executedModel === undefined) return settledTurn;
+  return {
+    ...settledTurn,
+    model: executedModel,
+    ...(settledTurn.turnTokenUsage === undefined
+      ? {}
+      : { turnTokenUsage: { ...settledTurn.turnTokenUsage, models: [executedModel] } }),
+  };
+}
 
 export type PromptOutcomeCheck = Effect.Success<
   ReturnType<NonNullable<AcpAdapterV2Flavor["watchPromptOutcome"]>>

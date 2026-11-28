@@ -1,6 +1,10 @@
 import { makeRecordWakeReport } from "./recordWakeReport.ts";
 import { confirmPromptMemory, preparePromptMemory } from "./promptMemory.ts";
-import { promptOutcomeFailure, readRetiredPromptOutcome } from "./retiredPromptOutcome.ts";
+import {
+  promptOutcomeFailure,
+  readRetiredPromptOutcome,
+  withExecutedProviderTurnModel,
+} from "./retiredPromptOutcome.ts";
 import type { PromptOutcomeCheck } from "./retiredPromptOutcome.ts";
 import {
   hasAcpDeferredBackgroundWork,
@@ -6550,10 +6554,10 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             flavor.executedModel === undefined
               ? undefined
               : yield* flavor.executedModel(context.nativeThreadId);
-          const turn: OrchestrationV2ProviderTurn = {
-            ...providerTurnPayload(context, settledStatus, now),
-            ...(executedModel === undefined ? {} : { model: executedModel }),
-          };
+          const turn = withExecutedProviderTurnModel(
+            providerTurnPayload(context, settledStatus, now),
+            executedModel,
+          );
           yield* emitProviderEvent({
             type: "provider_turn.updated",
             driver,
