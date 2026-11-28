@@ -933,3 +933,21 @@ test("a terminal queued before stale request cancellation cannot clear the resum
     } finally { await session.shutdown(); }
   }
 });
+
+test("conflicting streamed terminal text fails and closes the owning session", async () => {
+  for (const kind of ["text", "reasoning"] as const) {
+    const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = [];
+    const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures));
+    try {
+      assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+      fake.emit(`session.${kind}.delta`, { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, delta: "A" });
+      fake.emit(`session.${kind}.ended`, { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, text: "B" });
+      await tick(); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1, kind);
+      assert.equal(failures.length, 1, kind);
+      assert.equal(fake.calls.filter((call) => call.method === "close").length, 1, kind);
+      const deltas = events.flatMap((event) => event.type === (kind === "text" ? "text_delta" : "content_delta") && "text" in event ? [event.text] : []);
+      assert.deepEqual(deltas, ["A"], kind);
+    } finally { await session.shutdown(); }
+  }
+});

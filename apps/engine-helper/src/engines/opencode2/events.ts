@@ -87,8 +87,9 @@ export class OpenCode2Projection {
         let state = this.texts.get(id);
         if (!state) { state = { kind, message: data.assistantMessageID, text: "", sent: "", completed: false }; this.texts.set(id, state); }
         if (state.completed) { if ("text" in data && data.text !== state.text) throw new Error("OpenCode stream text conflicts with recovered output"); return true; }
-        if ("delta" in data) state.text += data.delta;
-        else if ("text" in data) state.text = data.text;
+        const next = "delta" in data ? state.text + data.delta : "text" in data ? data.text : state.text;
+        if (!next.startsWith(state.sent)) throw new Error("OpenCode text changed after streaming");
+        state.text = next;
         this.emitText(id, state);
         if (event.type.endsWith(".ended")) this.completeText(id, state);
         return true;
