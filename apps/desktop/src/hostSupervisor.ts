@@ -6,14 +6,21 @@
 // - Quitting ends the work (structure/10_processes.md): stop() sends SIGTERM to the group, then
 //   SIGKILL to whatever is left after the grace period.
 // - A host that exits on its own is a crash: its leftover group is killed, then it is restarted
-//   with GOAT v1's backoff (apps/desktop/src/backend/DesktopBackendRecoveryPolicy.ts:1-7:
-//   jittered 1 s .. 30 s, at most 5 restarts per 10 minutes, then a crash-loop pause).
+//   under GOAT v1's recovery policy, lifted verbatim in ./backend/DesktopBackendRecoveryPolicy.ts
+//   (jittered 1 s .. 30 s, at most 5 restarts per 10 minutes, then a crash-loop pause; delay index
+//   record.attempt - 1 as v1 DesktopBackendManager.ts:722).
 //   Exception: a host that exits with code 0 before it ever got ready chose to exit (an empty stub
 //   binary does this); restarting it cannot help, so it is left "exited" until Start Host.
 // - stdin stays an open pipe the shell never writes. If the shell dies without running stop(),
 //   the host sees EOF and exits (host-side rule, lane E).
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Writable } from "node:stream";
+import {
+  emptyRecoveryRecord,
+  recordRestart,
+  restartDelayMs,
+  type RecoveryRecord,
+} from "./backend/DesktopBackendRecoveryPolicy.ts";
 
 export type HostPhase = "starting" | "ready" | "restarting" | "crash-loop" | "exited" | "stopping" | "stopped";
 
@@ -71,19 +78,9 @@ export interface HostSupervisorOptions {
   readonly stopGraceMs?: number;
   readonly killWaitMs?: number;
   readonly healthIntervalMs?: number;
-  readonly maxRestarts?: number;
-  readonly recoveryWindowMs?: number;
+  /** Overrides v1's jittered delay (tests). */
   readonly restartDelayMs?: (attempt: number) => number;
   readonly now?: () => number;
-}
-
-const RECOVERY_WINDOW_MS = 10 * 60_000;
-const MAX_RESTARTS = 5;
-
-/** GOAT v1 DesktopBackendRecoveryPolicy.restartDelayMs, unchanged. */
-export function restartDelayMs(attempt: number, randomUnit: number = Math.random()): number {
-  const upper = Math.min(30_000, 1_000 * 2 ** Math.min(Math.max(0, attempt), 5));
-  return Math.floor(upper / 2 + (Math.min(1, Math.max(0, randomUnit)) * upper) / 2);
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -129,7 +126,7 @@ export class HostSupervisor {
   #child: ChildProcess | null = null;
   #childExited: Promise<void> = Promise.resolve();
   #restartTimer: ReturnType<typeof setTimeout> | null = null;
-  #crashTimes: number[] = [];
+  #record: RecoveryRecord = emptyRecoveryRecord();
   #state: HostState = { phase: "stopped", pid: null, restarts: 0, lastExit: null, announce: null };
   #stopping = false;
   #stopPromise: Promise<void> | null = null;
@@ -151,7 +148,13 @@ export class HostSupervisor {
       clearTimeout(this.#restartTimer);
       this.#restartTimer = null;
     }
-    this.#crashTimes = [];
+    // v1 DesktopBackendRecovery.reset: clear the budget, keep the slow-crash history.
+    const { history, notifiedKey } = this.#record;
+    this.#record = {
+      ...emptyRecoveryRecord(),
+      ...(history === undefined ? {} : { history }),
+      ...(notifiedKey === undefined ? {} : { notifiedKey }),
+    };
     this.#set({ restarts: 0 });
     this.#spawn();
   }
@@ -313,18 +316,20 @@ export class HostSupervisor {
     if (pid !== null) await killGroup(pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
     if (this.#stopping || generation !== this.#generation) return;
     const now = (this.#opts.now ?? Date.now)();
-    const windowMs = this.#opts.recoveryWindowMs ?? RECOVERY_WINDOW_MS;
-    this.#crashTimes = this.#crashTimes.filter((at) => now - at < windowMs);
-    if (this.#crashTimes.length >= (this.#opts.maxRestarts ?? MAX_RESTARTS)) {
-      this.#log(`host crash loop: ${this.#crashTimes.length} restarts in ${windowMs} ms, paused`);
-      this.#set({ phase: "crash-loop", restarts: this.#crashTimes.length });
+    const previousKey = this.#record.notifiedKey;
+    this.#record = recordRestart(this.#record, now, String(generation), this.#state.lastExit ?? "unknown");
+    if (this.#record.notifiedKey !== undefined && this.#record.notifiedKey !== previousKey) {
+      this.#log(`host keeps exiting with ${this.#record.notifiedKey} (slow crash pattern)`);
+    }
+    if (this.#record.pause !== null) {
+      this.#log(`host crash loop: ${this.#record.attempts.length} restarts in 10 min, paused`);
+      this.#set({ phase: "crash-loop", restarts: this.#record.attempts.length });
       return;
     }
-    const attempt = this.#crashTimes.length;
-    this.#crashTimes.push(now);
-    const delay = (this.#opts.restartDelayMs ?? restartDelayMs)(attempt);
-    this.#log(`host restart ${attempt + 1} in ${delay} ms`);
-    this.#set({ phase: "restarting", restarts: this.#crashTimes.length });
+    const attempt = this.#record.attempt;
+    const delay = this.#opts.restartDelayMs?.(attempt - 1) ?? restartDelayMs(attempt - 1, Math.random());
+    this.#log(`host restart ${attempt} in ${delay} ms`);
+    this.#set({ phase: "restarting", restarts: this.#record.attempts.length });
     this.#restartTimer = setTimeout(() => {
       this.#restartTimer = null;
       if (!this.#stopping) this.#spawn();

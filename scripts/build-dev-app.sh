@@ -9,6 +9,8 @@
 #   --no-open     do not relaunch the app after installing (it is relaunched only if it was running)
 # Installs only from goat2: run it in ~/Developer/goat2 after each merge (docs/lanes/PART1.md).
 # Lane branches can build with --no-install.
+# Refuses to build when `pnpm -r typecheck` or `cargo test --workspace --locked` fails, so a broken
+# goat2 is never installed (owner 2026-11-28). --locked also refuses a Cargo.lock that is out of date.
 set -euo pipefail
 
 APP_NAME="GOAT 2 (Dev)"
@@ -28,7 +30,8 @@ done
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
-COMMIT="$(git rev-parse --short=11 HEAD)"
+# 12 characters: v1 DesktopAppIdentity COMMIT_HASH_DISPLAY_LENGTH.
+COMMIT="$(git rev-parse --short=12 HEAD)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [[ "$BRANCH" != "goat2" && $INSTALL == 1 ]]; then
   echo "the installed Dev app is built from goat2 (this checkout is on $BRANCH)." >&2
@@ -52,8 +55,19 @@ if [[ ! -d "$ELECTRON_PKG/dist/Electron.app" ]]; then
   (cd "$ELECTRON_PKG" && node install.js)
 fi
 
+echo "==> checks: pnpm -r typecheck"
+if ! pnpm -r typecheck; then
+  echo "typecheck failed on $BRANCH $COMMIT: not building $APP_NAME" >&2
+  exit 1
+fi
+echo "==> checks: cargo test --workspace --locked"
+if ! cargo test --workspace --locked; then
+  echo "cargo test failed on $BRANCH $COMMIT: not building $APP_NAME" >&2
+  exit 1
+fi
+
 echo "==> goat2-host (cargo build --release)"
-cargo build --release -p goat2-host
+cargo build --release --locked -p goat2-host
 HOST_BIN="$REPO/target/release/goat2-host"
 
 echo "==> apps/web (vite build)"
@@ -69,8 +83,10 @@ rm -rf "$OUT"
 mkdir -p "$OUT"
 ditto "$ELECTRON_PKG/dist/Electron.app" "$APP"
 plist() { /usr/libexec/PlistBuddy -c "$1" "$2"; }
-# Set a string key, adding it when the plist does not have it (Electron's helper plists omit some).
-plist_set() { plist "Set :$1 $2" "$3" 2>/dev/null || plist "Add :$1 string $2" "$3"; }
+# Set a top-level string key, adding it when missing (Electron's helper plists omit some). plutil
+# takes the value as one argument, so quotes and apostrophes in it are safe (PlistBuddy's command
+# parser is not, and it exits 0 on a parse error).
+plist_set() { plutil -replace "$1" -string "$2" "$3"; }
 
 # Main executable and helpers carry the app name: Electron looks for "<executable> Helper*.app".
 mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/$APP_NAME"
@@ -84,6 +100,24 @@ plist "Set :CFBundleVersion $BUILD_NUMBER" "$INFO"
 plist "Delete :ElectronAsarIntegrity" "$INFO" 2>/dev/null || true
 plist "Add :GOAT2Commit string $COMMIT$DIRTY_MARK" "$INFO"
 plist "Add :GOAT2Branch string $BRANCH" "$INFO"
+# Info.plist keys lifted from v1 scripts/build-desktop-artifact.ts (mac.extendInfo, mac.protocols)
+# and scripts/lib/mac-command-usage-descriptions.ts, with "GOAT" read as this app. Left out: the
+# web-browser document types and http/https handlers (no in-app browser in GOAT 2 yet) and the
+# screen-capture prompt (no window capture shortcut).
+# macOS 26 offers Messages/Mail codes in every text field unless opted out.
+plist "Add :NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac bool true" "$INFO"
+plist_set NSLocalNetworkUsageDescription "GOAT 2 connects to devices on your local network for remote environments and commands run by terminals and coding agents." "$INFO"
+plist_set NSCalendarsUsageDescription "Commands you run in GOAT 2 may need access to your calendars." "$INFO"
+plist_set NSCalendarsFullAccessUsageDescription "Commands you run in GOAT 2 may need to read and write your calendar events." "$INFO"
+plist_set NSCalendarsWriteOnlyAccessUsageDescription "Commands you run in GOAT 2 may need to add events to your calendars." "$INFO"
+plist_set NSMicrophoneUsageDescription "GOAT 2 uses this Mac's microphone for commands run by terminals and coding agents. After you allow access, those commands can record without asking again." "$INFO"
+# Links to the app's own origin (goat2-dev://app/...) open in GOAT 2 (Dev) (apps/desktop/src/main.ts).
+plist "Delete :CFBundleURLTypes" "$INFO" 2>/dev/null || true
+plist "Add :CFBundleURLTypes array" "$INFO"
+plist "Add :CFBundleURLTypes:0 dict" "$INFO"
+plist "Add :CFBundleURLTypes:0:CFBundleURLName string $APP_NAME" "$INFO"
+plist "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$INFO"
+plist "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string goat2-dev" "$INFO"
 for helper in "$APP/Contents/Frameworks/Electron Helper"*.app; do
   suffix="$(basename "$helper" .app)"
   suffix="${suffix#Electron Helper}"            # "", " (GPU)", " (Plugin)", " (Renderer)"
@@ -112,8 +146,8 @@ cat > "$RES/app/build-info.json" <<EOF
 EOF
 cp "$HOST_BIN" "$RES/bin/goat2-host"
 
-echo "==> ad-hoc signing"
-codesign --force --deep --sign - "$APP"
+echo "==> ad-hoc signing (@electron/osx-sign, v1 entitlements)"
+node apps/desktop/scripts/sign-macos-ad-hoc.ts "$APP"
 codesign --verify --deep --strict "$APP"
 
 if [[ $INSTALL == 0 ]]; then
