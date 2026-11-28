@@ -12,10 +12,18 @@ use serde_json::{Map, Number, Value};
 #[derive(Debug, Clone)]
 enum Field {
     Text,
-    Number { integer: bool },
+    Number {
+        integer: bool,
+    },
     Boolean,
-    Choice { values: BTreeSet<String> },
-    MultiChoice { values: BTreeSet<String>, min: u64, max: Option<u64> },
+    Choice {
+        values: BTreeSet<String>,
+    },
+    MultiChoice {
+        values: BTreeSet<String>,
+        min: u64,
+        max: Option<u64>,
+    },
 }
 
 /// A parsed form: the questions to ask and how answers become content.
@@ -125,12 +133,12 @@ fn parse_field(property: &Map<String, Value>) -> Option<(Field, Vec<UserInputOpt
                 _ => None,
             }?;
             let values: BTreeSet<String> = options.iter().map(option_value).collect();
-            let min = property.get("minItems").and_then(Value::as_u64).unwrap_or(0);
+            let min = property
+                .get("minItems")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             let max = property.get("maxItems").and_then(Value::as_u64);
-            if max == Some(0)
-                || max.is_some_and(|max| min > max)
-                || min > values.len() as u64
-            {
+            if max == Some(0) || max.is_some_and(|max| min > max) || min > values.len() as u64 {
                 return None;
             }
             Some((Field::MultiChoice { values, min, max }, options))
@@ -206,7 +214,9 @@ fn typed_answer(field: &Field, answer: &Value) -> Option<Value> {
             }
             let count = selected.len() as u64;
             if count >= *min && max.is_none_or(|max| count <= max) {
-                Some(Value::Array(selected.into_iter().map(Value::String).collect()))
+                Some(Value::Array(
+                    selected.into_iter().map(Value::String).collect(),
+                ))
             } else {
                 None
             }
@@ -316,7 +326,10 @@ impl ElicitationForm {
                 out.insert(companion.clone(), Value::String(text.clone()));
             } else if self.allow_other
                 && matches!(field, Field::Choice { .. })
-                && !self.fields.iter().any(|(f, _)| *f == format!("{id}__other"))
+                && !self
+                    .fields
+                    .iter()
+                    .any(|(f, _)| *f == format!("{id}__other"))
                 && answer
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.trim().is_empty())
@@ -355,12 +368,22 @@ mod tests {
             .unwrap();
         assert_eq!(content.get("color__other"), Some(&json!("green")));
         assert_eq!(content.get("count"), Some(&json!(3)));
-        assert!(form.content(json!({"color": "red"}).as_object().unwrap()).is_none());
+        assert!(
+            form.content(json!({"color": "red"}).as_object().unwrap())
+                .is_none()
+        );
     }
 
     #[test]
     fn unaskable_form_is_declined() {
-        assert!(parse_elicitation_form(&json!({"properties": {"x": {"type": "object"}}}), "m", false).is_none());
+        assert!(
+            parse_elicitation_form(
+                &json!({"properties": {"x": {"type": "object"}}}),
+                "m",
+                false
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -373,9 +396,13 @@ mod tests {
         .unwrap();
         assert_eq!(form.questions[0].multi_select, Some(true));
         assert_eq!(form.questions[0].required, Some(true));
-        assert!(form.content(json!({"tags": []}).as_object().unwrap()).is_none());
+        assert!(
+            form.content(json!({"tags": []}).as_object().unwrap())
+                .is_none()
+        );
         assert_eq!(
-            form.content(json!({"tags": ["b", "zz"]}).as_object().unwrap()).unwrap()["tags"],
+            form.content(json!({"tags": ["b", "zz"]}).as_object().unwrap())
+                .unwrap()["tags"],
             json!(["b"])
         );
     }

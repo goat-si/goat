@@ -8,14 +8,17 @@
 use std::path::PathBuf;
 
 use goat2_contracts::{
-    ApprovalDecision, ApprovalOption, ModelSelection, ProviderCapabilities, RuntimeMode,
+    ApprovalDecision, ApprovalOption, EngineDriver, ModelSelection, ProviderCapabilities,
+    RuntimeMode,
 };
 use goat2_engine_api::{EngineError, SessionSpec};
 use serde_json::{Map, Value};
 
 use crate::capabilities::acp_base_capabilities;
 use crate::policy::{self, Disposition, RuntimePolicy};
-use crate::wire::{InitializeInfo, ModeState, SessionSetup, find_model_config_option, select_values};
+use crate::wire::{
+    InitializeInfo, ModeState, SessionSetup, find_model_config_option, select_values,
+};
 
 /// The command that starts the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,7 +32,10 @@ pub struct LaunchCommand {
 }
 
 impl LaunchCommand {
-    pub fn new(program: impl Into<PathBuf>, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(
+        program: impl Into<PathBuf>,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         Self {
             program: program.into(),
             args: args.into_iter().map(Into::into).collect(),
@@ -75,11 +81,19 @@ pub enum StdoutLine {
 pub enum ModelWrite {
     Keep,
     /// `session/set_config_option` on the model option.
-    ConfigOption { config_id: String, value: String },
+    ConfigOption {
+        config_id: String,
+        value: String,
+    },
     /// `session/set_model` (ACP session models), with optional `_meta`.
-    SetModel { model_id: String, meta: Option<Map<String, Value>> },
+    SetModel {
+        model_id: String,
+        meta: Option<Map<String, Value>>,
+    },
     /// The agent does not offer the model.
-    Unavailable { message: String },
+    Unavailable {
+        message: String,
+    },
 }
 
 /// Something an extension notification means for the turn.
@@ -87,8 +101,18 @@ pub enum ModelWrite {
 pub enum FlavorEvent {
     /// Treat as a `session/update` params object.
     SessionUpdate(Value),
-    Notice { message: String, warning: bool },
+    Notice {
+        message: String,
+        warning: bool,
+    },
     AuthUrl(String),
+    /// The agent finished the prompt by extension (xAI `_x.ai/session/prompt_complete`): settle the
+    /// turn as if `session/prompt` answered with `stop_reason`. A `prompt_id` that is not the
+    /// turn's latest prompt is stale and ignored.
+    PromptComplete {
+        prompt_id: Option<String>,
+        stop_reason: String,
+    },
 }
 
 /// Client capabilities a flavor advertises in `initialize`.
@@ -103,12 +127,13 @@ pub struct ClientCaps {
 pub trait AcpFlavor: Send + Sync + 'static {
     /// v1 driver kind: `grok`, `fx`, `antigravity` or `acpRegistry`.
     fn driver(&self) -> &str;
-    /// The agent id (`EngineDriver::Acp { agent_id }`), e.g. `grok-build`, `claude-acp`.
-    fn agent_id(&self) -> &str;
+    /// The card's engine driver (`Grok`, `Fx`, `Antigravity` or `AcpRegistry { agent_id }`).
+    fn engine_driver(&self) -> EngineDriver;
     fn capabilities(&self) -> ProviderCapabilities {
         acp_base_capabilities()
     }
-    /// The command line for this thread's runtime mode.
+    /// The command line for this thread's runtime mode. `SessionSpec.launch` overrides are applied
+    /// by the driver afterwards (binary replaces the program, args replace, env adds).
     fn launch(&self, spec: &SessionSpec) -> Result<LaunchCommand, EngineError>;
     /// `initialize._meta` (Grok `clientType: extension`).
     fn initialize_meta(&self) -> Option<Map<String, Value>> {
@@ -125,7 +150,11 @@ pub trait AcpFlavor: Send + Sync + 'static {
         None
     }
     /// `_meta` for session new/load/resume. `instructions` is the GOAT system prompt append.
-    fn session_meta(&self, _init: &InitializeInfo, _instructions: Option<&str>) -> Option<Map<String, Value>> {
+    fn session_meta(
+        &self,
+        _init: &InitializeInfo,
+        _instructions: Option<&str>,
+    ) -> Option<Map<String, Value>> {
         None
     }
     /// Whether [Self::session_meta] already carries the instructions (Antigravity `systemPrompt.append`).
@@ -176,6 +205,10 @@ pub trait AcpFlavor: Send + Sync + 'static {
     }
     /// A request the shared client does not serve. None answers "method not found".
     fn ext_request(&self, _method: &str, _params: &Value) -> Option<Value> {
+        None
+    }
+    /// `session/prompt._meta` for the prompt GOAT names `prompt_id` (xAI matches completions to it).
+    fn prompt_meta(&self, _prompt_id: &str) -> Option<Map<String, Value>> {
         None
     }
     /// v1 `rewriteUserText`.
@@ -246,7 +279,10 @@ pub fn default_model_write(selection: &ModelSelection, setup: &SessionSetup) -> 
             .and_then(Value::as_str)
             .unwrap_or("model")
             .to_owned();
-        if select_values(option).iter().any(|(value, _)| value == model) {
+        if select_values(option)
+            .iter()
+            .any(|(value, _)| value == model)
+        {
             return ModelWrite::ConfigOption {
                 config_id,
                 value: model.to_owned(),

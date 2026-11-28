@@ -134,7 +134,10 @@ impl ChildProcess {
 
     /// [Self::spawn], calling `on_stderr_line` for every stderr line (Antigravity prints its
     /// sign-in URL there, v1 `antigravityAuthSupport.ts`).
-    pub fn spawn_with_stderr(launch: &Launch, on_stderr_line: Option<StderrHook>) -> io::Result<Self> {
+    pub fn spawn_with_stderr(
+        launch: &Launch,
+        on_stderr_line: Option<StderrHook>,
+    ) -> io::Result<Self> {
         let mut command = Command::new(&launch.program);
         command
             .args(&launch.args)

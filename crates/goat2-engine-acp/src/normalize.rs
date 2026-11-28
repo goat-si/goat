@@ -38,20 +38,16 @@ pub fn normalize_v1_session_update(mut params: Value) -> Value {
         .to_owned();
     match kind.as_str() {
         // A malformed notice must not reach consumers as one.
-        "notice" => {
-            if !valid_notice(update) {
-                let raw = Value::Object(update.clone());
-                *update = Map::new();
-                update.insert("sessionUpdate".into(), json!(UNKNOWN_UPDATE));
-                update.insert("originalSessionUpdate".into(), json!("notice"));
-                update.insert("raw".into(), raw);
-            }
+        "notice" if !valid_notice(update) => {
+            let raw = Value::Object(update.clone());
+            *update = Map::new();
+            update.insert("sessionUpdate".into(), json!(UNKNOWN_UPDATE));
+            update.insert("originalSessionUpdate".into(), json!("notice"));
+            update.insert("raw".into(), raw);
         }
         // v1 defines a null tool name as unchanged; v2 consumers read null as a clear.
-        "tool_call" | "tool_call_update" => {
-            if update.get("name").is_some_and(Value::is_null) {
-                update.remove("name");
-            }
+        "tool_call" | "tool_call_update" if update.get("name").is_some_and(Value::is_null) => {
+            update.remove("name");
         }
         "available_commands_update" => {
             if let Some(commands) = update
@@ -109,7 +105,10 @@ mod tests {
             "sessionId": "s", "update": {"sessionUpdate": "available_commands_update",
             "availableCommands": [{"name": "plan", "description": "d", "input": {"hint": "goal"}}, {"name": "x", "description": "d", "input": null}]}
         }));
-        assert_eq!(out["update"]["availableCommands"][0]["input"], json!({"type": "text", "hint": "goal"}));
+        assert_eq!(
+            out["update"]["availableCommands"][0]["input"],
+            json!({"type": "text", "hint": "goal"})
+        );
         assert!(out["update"]["availableCommands"][1].get("input").is_none());
     }
 }

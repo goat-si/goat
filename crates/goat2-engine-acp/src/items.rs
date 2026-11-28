@@ -9,9 +9,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use goat2_contracts::{
-    FileChangeDetail, ItemId, MessageId, NativeItemRef, NativeRefStrength, NoticeSeverity,
-    PlanId, PlanStep, PlanStepStatus, ThreadId, TurnItem, TurnItemBody, TurnItemStatus,
-    WebSearchResult,
+    FileChangeDetail, ItemId, MessageId, NativeItemRef, NativeRefStrength, NoticeSeverity, PlanId,
+    PlanStep, PlanStepStatus, ThreadId, TurnItem, TurnItemBody, TurnItemStatus, WebSearchResult,
 };
 use goat2_engine_api::EngineEvent;
 use serde_json::{Map, Value, json};
@@ -314,7 +313,10 @@ pub fn tool_body(state: &ToolState) -> TurnItemBody {
                         && results.len() < 20
                     {
                         let url = word.trim_end_matches(['.', ',', ';', ':', ')', ']']);
-                        if !results.iter().any(|r: &WebSearchResult| r.url.as_deref() == Some(url)) {
+                        if !results
+                            .iter()
+                            .any(|r: &WebSearchResult| r.url.as_deref() == Some(url))
+                        {
                             results.push(WebSearchResult {
                                 title: None,
                                 url: Some(url.to_owned()),
@@ -347,7 +349,7 @@ fn tool_status(state: &ToolState, turn_end: Option<TurnItemStatus>) -> TurnItemS
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Segment {
     item_id: ItemId,
     text: String,
@@ -512,7 +514,12 @@ impl TurnProjector {
         ItemId::new(format!("{}:tool:{tool_call_id}", self.turn_id))
     }
 
-    fn write_tool(&mut self, index: usize, turn_end: Option<TurnItemStatus>, out: &mut Vec<EngineEvent>) {
+    fn write_tool(
+        &mut self,
+        index: usize,
+        turn_end: Option<TurnItemStatus>,
+        out: &mut Vec<EngineEvent>,
+    ) {
         let state = self.tools[index].clone();
         if self.written_tools.contains(&state.tool_call_id) {
             return;
@@ -776,9 +783,16 @@ mod tests {
             })
             .collect();
         assert_eq!(completed.len(), 2);
-        assert!(matches!(&completed[0].body, TurnItemBody::AssistantMessage { text, .. } if text == "Hello"));
+        assert!(
+            matches!(&completed[0].body, TurnItemBody::AssistantMessage { text, .. } if text == "Hello")
+        );
         match &completed[1].body {
-            TurnItemBody::CommandExecution { input, exit_code, output_omitted, .. } => {
+            TurnItemBody::CommandExecution {
+                input,
+                exit_code,
+                output_omitted,
+                ..
+            } => {
                 assert_eq!(input, "ls -la");
                 assert_eq!(*exit_code, Some(0));
                 assert_eq!(*output_omitted, Some(true));
@@ -804,13 +818,20 @@ mod tests {
             .collect();
         assert_eq!(items[0].status, TurnItemStatus::Interrupted);
         match &items[0].body {
-            TurnItemBody::FileChange { file_name, additions, deletions, .. } => {
+            TurnItemBody::FileChange {
+                file_name,
+                additions,
+                deletions,
+                ..
+            } => {
                 assert_eq!(file_name, "/w/a.rs");
                 assert_eq!((*additions, *deletions), (Some(2), Some(1)));
             }
             other => panic!("{other:?}"),
         }
-        assert!(matches!(&items[1].body, TurnItemBody::TodoList { steps, .. } if steps[0].status == PlanStepStatus::Running));
+        assert!(
+            matches!(&items[1].body, TurnItemBody::TodoList { steps, .. } if steps[0].status == PlanStepStatus::Running)
+        );
     }
 
     #[test]

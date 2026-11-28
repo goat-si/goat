@@ -4,11 +4,7 @@
 //! inbound messages are read from JSON here, field by field, the way v1 `effect-acp` tolerates
 //! agents that are ahead of or behind the pinned schema (`packages/effect-acp/src/compat.ts`).
 
-use serde_json::{Map, Value};
-
-pub(crate) fn record(value: &Value) -> Option<&Map<String, Value>> {
-    value.as_object()
-}
+use serde_json::Value;
 
 pub(crate) fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
     value.get(key).and_then(Value::as_str)
@@ -61,10 +57,19 @@ pub struct InitializeInfo {
 
 impl InitializeInfo {
     pub fn from_value(value: &Value) -> Self {
-        let caps = value.get("agentCapabilities").cloned().unwrap_or(Value::Null);
-        let session = caps.get("sessionCapabilities").cloned().unwrap_or(Value::Null);
+        let caps = value
+            .get("agentCapabilities")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let session = caps
+            .get("sessionCapabilities")
+            .cloned()
+            .unwrap_or(Value::Null);
         let mcp = caps.get("mcpCapabilities").cloned().unwrap_or(Value::Null);
-        let prompt = caps.get("promptCapabilities").cloned().unwrap_or(Value::Null);
+        let prompt = caps
+            .get("promptCapabilities")
+            .cloned()
+            .unwrap_or(Value::Null);
         let info = value.get("agentInfo").cloned().unwrap_or(Value::Null);
         let auth_methods = value
             .get("authMethods")
@@ -184,8 +189,8 @@ pub fn parse_models(value: &Value) -> Option<ModelState> {
 
 impl SessionSetup {
     pub fn from_value(value: &Value, requested_session_id: Option<&str>) -> Option<Self> {
-        let session_id = text_field(value, "sessionId")
-            .or_else(|| requested_session_id.map(str::to_owned))?;
+        let session_id =
+            text_field(value, "sessionId").or_else(|| requested_session_id.map(str::to_owned))?;
         Some(Self {
             session_id,
             modes: parse_modes(value),
@@ -205,7 +210,11 @@ pub fn find_model_config_option(options: &[Value]) -> Option<&Value> {
     options
         .iter()
         .find(|option| str_field(option, "category") == Some("model"))
-        .or_else(|| options.iter().find(|option| str_field(option, "id") == Some("model")))
+        .or_else(|| {
+            options
+                .iter()
+                .find(|option| str_field(option, "id") == Some("model"))
+        })
 }
 
 /// Every selectable value of a select config option, flattening groups (v1 `flattenSelectChoices`).

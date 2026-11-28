@@ -412,6 +412,9 @@ mod tests {
             select_permission_option_id(&options, PermissionChoice::Decline).as_deref(),
             Some("no")
         );
-        assert_eq!(select_auto_approved_option(&options).as_deref(), Some("once"));
+        assert_eq!(
+            select_auto_approved_option(&options).as_deref(),
+            Some("once")
+        );
     }
 }
