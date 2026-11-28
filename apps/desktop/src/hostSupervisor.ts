@@ -142,6 +142,12 @@ export class HostSupervisor {
 
   /** Starts the host; also ends a crash-loop pause (the "Start Host" menu item). */
   start(): void {
+    // A manual restart owns the next spawn until the old group is gone (it starts the new host).
+    if (this.#restartInProgress !== null) return;
+    this.#startFresh();
+  }
+
+  #startFresh(): void {
     // While a crashed host's group is still being cleaned, recovery owns the next spawn.
     if (this.#stopping || this.#child !== null || this.#recoveryActive) return;
     if (this.#restartTimer !== null) {
@@ -212,7 +218,7 @@ export class HostSupervisor {
       }
       await this.#recovering;
       if (this.#stopping) return;
-      this.start();
+      this.#startFresh();
     })().finally(() => {
       this.#restartInProgress = null;
     });

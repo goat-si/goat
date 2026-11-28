@@ -254,6 +254,30 @@ test("restart() replaces the host and its whole group, and is not a crash", asyn
   await h.supervisor.stop();
 });
 
++test("start() during restart() waits for the old group and starts exactly one new host", async () => {
+  // The agent ignores SIGTERM, so ending the old group takes the full grace period.
+  const h = await harness("grandchild,ignore-term", { stopGraceMs: 600 });
+  h.supervisor.start();
+  await h.reached("ready");
+  await until(() => h.pids("agent").length === 1);
+  const [oldHost] = h.pids("host");
+  const [oldAgent] = h.pids("agent");
+  assert.ok(oldHost !== undefined && oldAgent !== undefined);
+  const restarting = h.supervisor.restart();
+  // Menu "Start Host" pressed while the old group is still being ended.
+  h.supervisor.start();
+  await settle(100);
+  assert.equal(h.pids("host").length, 1, "start() spawned a host before the old group was gone");
+  await restarting;
+  await h.reached("ready");
+  assert.equal(alive(oldHost), false);
+  assert.equal(alive(oldAgent), false);
+  await settle(300);
+  assert.equal(h.pids("host").length, 2, "restart() did not start exactly one replacement host");
+  await h.supervisor.stop();
+  for (const pid of [...h.pids("host"), ...h.pids("agent")]) assert.equal(alive(pid), false);
+});
+
 test("stop() during restart() ends the old group and starts nothing", async () => {
   const h = await harness("grandchild,ignore-term");
   h.supervisor.start();
