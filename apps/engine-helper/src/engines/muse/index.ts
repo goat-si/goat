@@ -230,7 +230,14 @@ class MuseSession implements EngineSession {
   }
   async steer(turnId: string, inputs: readonly EngineInput[]): Promise<SteerResult> {
     if (!this.active || this.active.id !== turnId || unsupportedAttachments(inputs)) return { status: "declined", reason: "This Muse turn cannot be steered" };
-    try { const result = await this.command("turn/steer", { expectedTurnId: turnId, input: parts(inputs) }); return result.turnId === turnId ? { status: "accepted" } : { status: "unknown", reason: "Muse steering targeted a different turn" }; }
+    try {
+      const result = await this.command("turn/steer", { expectedTurnId: turnId, input: parts(inputs) });
+      if (result.turnId !== turnId) return { status: "unknown", reason: "Muse steering targeted a different turn" };
+      // MSP turn/steer answers once the input is in the running turn, so it is read on acceptance;
+      // the goat2 contract wants every accepted steer settled before that turn's turn_finished.
+      this.host.emit({ type: "steer_updated", turnId, inputIds: inputs.map((input) => input.inputId), status: { type: "completed" } });
+      return { status: "accepted" };
+    }
     catch (error) {
       const kind = (error as { kind?: unknown } | null)?.kind;
       const refused = ["commandRejected", "invalidParams", "inputTooLarge", "backpressured"].includes(String(kind));

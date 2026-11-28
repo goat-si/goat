@@ -83,6 +83,10 @@ test("steer and interrupt target the active turn", async () => {
   await session.interrupt(started.turnId);
   const finished = await h.wait((e) => e.type === "turn_finished");
   assert.deepEqual(finished.type === "turn_finished" && finished.outcome, { type: "interrupted" });
+  const settled = h.events.findIndex((e) => e.type === "steer_updated");
+  assert.deepEqual(h.events[settled], { type: "steer_updated", turnId: started.turnId, inputIds: ["i"], status: { type: "completed" } });
+  assert.equal(h.events.filter((e) => e.type === "steer_updated").length, 1, "only the accepted steer is settled");
+  assert.ok(settled < h.events.indexOf(finished), "steer settled before turn_finished");
   await session.shutdown();
 });
 

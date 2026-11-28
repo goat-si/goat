@@ -250,7 +250,13 @@ class CursorSession implements EngineSession {
     if (!active || active.run.id !== turnId) return { status: "declined" as const, reason: "no matching active turn" };
     const text = inputs.map(i => i.text).join("\n");
     if (!text.trim() || inputs.some(i => i.attachments.length)) return { status: "declined" as const, reason: "Cursor steer requires text without attachments" };
-    try { return (await active.run.steer?.(text)) === "complete_delivered" ? { status: "accepted" as const } : { status: "declined" as const, reason: "Cursor declined steering" }; }
+    try {
+      if ((await active.run.steer?.(text)) !== "complete_delivered") return { status: "declined" as const, reason: "Cursor declined steering" };
+      // complete_delivered: the SDK put the text into the running run, so it is read on acceptance;
+      // the goat2 contract wants every accepted steer settled before that turn's turn_finished.
+      if (!active.finalized) this.host.emit({ type: "steer_updated", turnId, inputIds: inputs.map(i => i.inputId), status: { type: "completed" } });
+      return { status: "accepted" as const };
+    }
     catch { return { status: "unknown" as const, reason: "Cursor steering failed" }; }
   }
   async interrupt(turnId: string) {

@@ -71,6 +71,10 @@ test("Cursor helper streams a turn, projects tools, steers, interrupts and resum
     assert.equal((await h.request("turn.steer", { turnId: second.turnId, inputs: input("refuse") })).result.status, "declined");
     await h.request("turn.interrupt", { turnId: second.turnId });
     assert.equal((await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === second.turnId)).event.outcome.type, "interrupted");
+    const secondEvents = h.lines.map(l => l.event).filter(e => e && e.turnId === second.turnId);
+    const settled = secondEvents.filter(e => e.type === "steer_updated");
+    assert.deepEqual(settled, [{ type: "steer_updated", turnId: second.turnId, inputIds: ["i"], status: { type: "completed" } }]);
+    assert.ok(secondEvents.indexOf(settled[0]) < secondEvents.findIndex(e => e.type === "turn_finished"), "steer settled before turn_finished");
     await h.request("shutdown", {});
   } finally { h.child.kill(); }
   const resumed = helper();
