@@ -10,6 +10,8 @@ export function sceneUi(scene: string): Partial<UiState> {
     case "25D-0": return { ...base, pinned: [], panelThreadId: "t-review-7712" };
     case "1N65-1": return { ...base, mode: "threads", threadId: "t-billing" };
     case "1NEM-1": case "1OXX-1": return { ...base, mode: "threads", threadId: "t-billing" };
+    // Part 2 provider boards (design/paper/part2): Settings > Providers, sign-in, Add provider > ACP Registry.
+    case "1PBB-2": case "1Q0P-2": case "1QAN-2": return { ...base, mode: "settings", settingsPath: "/settings/providers", settingsSearch: {} };
     default: return base;
   }
 }

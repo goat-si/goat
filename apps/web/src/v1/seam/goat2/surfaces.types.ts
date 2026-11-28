@@ -53,3 +53,12 @@ export interface ProviderPortShape {
 
 /** Installs (or with null removes) the port the lifted provider screens read through. */
 export declare const installProviderPort: (port: ProviderPortShape | null) => void;
+
+/** Settings > Providers (v1 ProviderSettingsPanel for GOAT 2's environment); instanceId focuses one provider. */
+export declare const ProvidersSettingsScreen: ComponentType<{ instanceId?: string }>;
+
+/** Where the GOAT 2 frame is, for v1 code that reads its router location (settings paths, ?instanceId=). */
+export interface V1Location { readonly pathname: string; readonly hash?: string; readonly search?: Readonly<Record<string, unknown>> }
+export declare const setV1Location: (location: V1Location) => void;
+/** How v1 code moves: the GOAT 2 frame receives the resolved target (v1 useNavigate / Link). */
+export declare const setV1Navigator: (navigate: (to: Required<V1Location>) => void) => void;

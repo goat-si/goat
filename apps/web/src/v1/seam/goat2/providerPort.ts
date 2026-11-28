@@ -9,6 +9,8 @@ import {
   type ServerProvider as ServerProviderType,
   type ServerSettings,
   DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  isUnconfiguredDefaultInstanceEnabled,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
@@ -132,8 +134,9 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
       unsubscribe();
       unsubscribe = port
         ? port.subscribe((entries) => {
-            get.set(goat2SettingsAtom, withHostInstances(get.once(goat2SettingsAtom), entries));
-            get.setSelf<ReadonlyArray<ServerProviderType> | null>(entries.map(toServerProvider));
+            const all = [...entries, ...cloudPlaceholders(entries, entries[0]?.probe.checkedAt ?? new Date().toISOString())];
+            get.set(goat2SettingsAtom, withHostInstances(get.once(goat2SettingsAtom), all));
+            get.setSelf<ReadonlyArray<ServerProviderType> | null>(all.map(toServerProvider));
           })
         : () => {};
     };
@@ -148,6 +151,30 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
 ).pipe(Atom.keepAlive, Atom.withLabel("goat2:providers"));
 
 /**
+ * v1's cloud defaults (Claude Cloud, Cursor Cloud, Devin Cloud) list themselves whenever their local sibling is on
+ * (contracts settings.ts CLOUD_SIBLING_DRIVERS, implicitDefaultInstance). GOAT 2 runs cloud providers in a later part
+ * (PRD part2/providers), so the host never reports them; instead of v1's endless "Waiting for the server" they show
+ * switched off with that reason. Host-reported entries for these drivers win.
+ */
+export const GOAT2_CLOUD_DRIVERS = ["claudeCloud", "cursorCloud", "devinCloud"] as const;
+export function cloudPlaceholders(entries: ReadonlyArray<Goat2ProviderEntry>, checkedAt: string): Goat2ProviderEntry[] {
+  return GOAT2_CLOUD_DRIVERS.filter((driver) => !entries.some((e) => e.driver === driver)).map((driver) => ({
+    instanceId: driver,
+    driver,
+    enabled: false,
+    probe: {
+      installed: false,
+      version: null,
+      status: "disabled",
+      auth: { status: "unknown" },
+      models: [],
+      checkedAt,
+      message: "Cloud providers come in a later GOAT 2 release.",
+    },
+  }));
+}
+
+/**
  * v1's provider settings list rows from settings.providerInstances (plus each driver's default slot,
  * ProviderSettingsPanel.tsx:763-830). On GOAT 2 the host owns the instances, so each entry is folded in: driver,
  * enablement, display name and the ACP registry agent (v1 acpRegistry config.agentId) come from the host; other
@@ -160,7 +187,10 @@ export function withHostInstances(settings: ServerSettings, entries: ReadonlyArr
   let changed = false;
   for (const entry of entries) {
     const existing = instances[entry.instanceId];
-    if (!existing && entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId) continue;
+    // v1 lists an unconfigured default slot only for its enabled-by-default drivers (Codex, Claude); every other
+    // instance the host reports is configured here, so it gets a row as it would in v1 once set up.
+    if (!existing && entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
+      && isUnconfiguredDefaultInstanceEnabled(ProviderInstanceId.make(entry.instanceId))) continue;
     const config = entry.acpAgentId
       ? { ...((existing?.config as object | undefined) ?? {}), agentId: entry.acpAgentId }
       : existing?.config;

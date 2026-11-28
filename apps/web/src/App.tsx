@@ -14,6 +14,9 @@ import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
 import { NewBotDialog } from "./bot-home/NewBot.tsx";
 import { ThreadMode } from "./threads/ThreadMode.tsx";
 import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
+import { SettingsMode } from "./settings/SettingsMode.tsx";
+import { installProviderPort } from "@v1/surfaces";
+import { hostProviderPort } from "./providers/hostProviderPort.ts";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -32,7 +35,13 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
 function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
   const [ui, setUi] = useUi(store);
   const snap = useHost();
+  const client = useClient();
   const { desktop, build } = useHostContext();
+  // The lifted v1 provider screens read providers through this port (docs/part2/provider-wire.md).
+  useEffect(() => {
+    installProviderPort(hostProviderPort(client));
+    return () => installProviderPort(null);
+  }, [client]);
   const rows = useMemo(() => botRows(snap.state), [snap.state]);
   const main = rows.find((r) => r.role === "main") ?? null;
   const bot = rows.find((r) => r.botId === ui.botId) ?? main;
@@ -65,7 +74,9 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   ) : null;
   const topRight = (
     <P.TopRight>
-      {bot ? <P.TopTitle face={<Face bot={bot} size={20} />} name={bot.name} button={{}} /> : <span />}
+      {ui.mode === "settings"
+        ? (main ? <P.TopTitle face={<Face bot={main} size={20} />} name="Settings" button={{}} /> : <span />)
+        : bot ? <P.TopTitle face={<Face bot={bot} size={20} />} name={bot.name} button={{}} /> : <span />}
       <P.TopActions split={plannedProps("multiplexer")} share={plannedProps("share")} stamp={stamp}
         panel={btn("Toggle right panel", () => setUi((s) => ({ panelOpen: !s.panelOpen })), { "aria-pressed": ui.panelOpen, "data-active": ui.panelOpen })} />
     </P.TopRight>
@@ -94,7 +105,7 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
         <P.RailRoutines button={plannedProps("routines")} />
         <P.RailMachines button={plannedProps("machines")} />
       </>}
-      bottom={<><P.RailSearch button={plannedProps("search")} /><P.RailSettings button={plannedProps("settings-accounts")} /></>}
+      bottom={<><P.RailSearch button={plannedProps("search")} /><P.RailSettings button={btn("Settings", () => setUi({ mode: "settings" }), { "data-active": ui.mode === "settings", title: "Settings" })} /></>}
     />
   );
 
@@ -106,6 +117,13 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
     return (
       <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
         <ThreadMode ui={ui} setUi={setUi} rail={rail} lights={desktop ? null : <P.ThreadTrafficLights />} stamp={stamp} toggleSidebar={toggleSidebar} />
+      </div>
+    );
+  }
+  if (ui.mode === "settings") {
+    return (
+      <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
+        <SettingsMode ui={ui} setUi={setUi} top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail} nav={null} />
       </div>
     );
   }

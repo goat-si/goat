@@ -3,7 +3,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 export interface UiState {
-  mode: "bots" | "threads";
+  mode: "bots" | "threads" | "settings";
   botId: string;
   sidebarOpen: boolean;
   panelOpen: boolean;
@@ -15,6 +15,9 @@ export interface UiState {
   /** Bots added to the rail from "…" (the main bot is always there). */
   railBots: string[];
   readMarks: Record<string, string>;
+  /** Settings page path in settings mode (v1 SettingsPath, e.g. "/settings/providers") and its search (?instanceId=). */
+  settingsPath?: string;
+  settingsSearch?: Record<string, string>;
 }
 
 export const DEFAULT_UI: UiState = {
