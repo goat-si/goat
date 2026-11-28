@@ -483,8 +483,9 @@ async fn shutdown_settles_the_turn_and_its_requests_before_exited() {
     );
 }
 
-/// Review finding 4: a steer sent before Claude's first `command_lifecycle` frame still learns
-/// that Claude refused it, so the host can queue it as a followup.
+/// Review finding 4: a steer sent before Claude's first `command_lifecycle` frame waits for it,
+/// is written once the CLI shows it reports lifecycles, and still learns that Claude refused it,
+/// so the host can queue it as a followup.
 #[tokio::test]
 async fn an_early_steer_refused_by_claude_is_declined() {
     let run = Run::new("wire/lifecycle_steer_early_refused.ndjson");

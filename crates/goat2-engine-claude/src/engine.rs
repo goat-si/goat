@@ -319,6 +319,8 @@ struct Inner {
     stderr: Mutex<Option<StderrSource>>,
     /// Woken whenever the active turn settles.
     settled: Notify,
+    /// Woken when the CLI shows whether it reports `command_lifecycle`.
+    lifecycle_known: Notify,
     /// Held while a stdout frame is checked against the current generation and applied, and by
     /// every generation change, so an old process's frame never lands in a newer session.
     frame_gate: Mutex<()>,
@@ -405,6 +407,7 @@ async fn start_session(
         process: tokio::sync::Mutex::new(None),
         stderr: Mutex::new(None),
         settled: Notify::new(),
+        lifecycle_known: Notify::new(),
         frame_gate: Mutex::new(()),
         stop_gate: tokio::sync::Mutex::new(()),
         generation: AtomicU64::new(0),
@@ -926,6 +929,32 @@ impl Inner {
         }
     }
 
+    /// Whether this CLI reports `command_lifecycle`, waiting (up to the steer deadline) for the
+    /// first frame after the turn's prompt if it has not shown it yet. Unknown when the turn
+    /// ends or the deadline passes first.
+    async fn known_lifecycle(&self, turn_id: &str) -> Lifecycle {
+        let decided = tokio::time::timeout(self.options.steer_ack_timeout, async {
+            loop {
+                let known = self.lifecycle_known.notified();
+                tokio::pin!(known);
+                known.as_mut().enable();
+                let (lifecycle, active) = match self.state.lock() {
+                    Ok(state) => (
+                        state.lifecycle,
+                        state.turn.as_ref().is_some_and(|t| t.id == turn_id),
+                    ),
+                    Err(_) => return Lifecycle::Unknown,
+                };
+                if lifecycle != Lifecycle::Unknown || !active {
+                    return lifecycle;
+                }
+                known.await;
+            }
+        })
+        .await;
+        decided.unwrap_or(Lifecycle::Unknown)
+    }
+
     /// [Self::bump_generation], unless background work runs (then None, nothing changes).
     fn bump_generation_unless_background(&self) -> Option<u64> {
         let _gate = self.frame_gate.lock();
@@ -1062,14 +1091,14 @@ impl Inner {
         let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
         // A lifecycle-capable CLI answers the root prompt with `command_lifecycle` before anything
         // else (2.1.332 capture: queued, started, then system:init). Any other first frame after a
-        // prompt means this CLI never reports it, so steers waiting on it are accepted on write.
+        // prompt means this CLI never reports it; steers then are declined (see `steer`).
         if state.lifecycle == Lifecycle::Unknown && state.turn.is_some() {
-            if kind == "command_lifecycle" {
-                state.lifecycle = Lifecycle::Reported;
+            state.lifecycle = if kind == "command_lifecycle" {
+                Lifecycle::Reported
             } else {
-                state.lifecycle = Lifecycle::Absent;
-                self.accept_waiting_steers(state);
-            }
+                Lifecycle::Absent
+            };
+            self.lifecycle_known.notify_waiters();
         }
         if let Some(session_id) = message.get("session_id").and_then(Value::as_str)
             && !session_id.is_empty()
@@ -1153,32 +1182,6 @@ impl Inner {
                 input_ids: steer.input_ids.clone(),
                 status: SteerStatus::Completed,
             });
-        }
-    }
-
-    /// This CLI has no `command_lifecycle`: a steer is accepted once it is written. Waiting
-    /// steers already on stdin are accepted now; one still being written is accepted by its own
-    /// `steer` call when the write lands (it then sees the lifecycle is absent).
-    fn accept_waiting_steers(&self, state: &mut State) {
-        let waiting: Vec<(String, oneshot::Sender<Result<(), String>>)> =
-            state.steer_waiters.drain().collect();
-        let mut accepted = Vec::new();
-        if let Some(turn) = state.turn.as_mut() {
-            let turn_id = turn.id.clone();
-            for (uuid, waiter) in waiting {
-                if let Some(steer) = turn.steers.get_mut(&uuid)
-                    && steer.written
-                {
-                    steer.accepted = true;
-                    if steer.phase == SteerPhase::Consumed {
-                        self.consume_steer(&turn_id, steer);
-                    }
-                    accepted.push(waiter);
-                }
-            }
-        }
-        for waiter in accepted {
-            let _ = waiter.send(Ok(()));
         }
     }
 
@@ -1309,23 +1312,12 @@ impl Inner {
     fn on_system(&self, state: &mut State, message: &Value) {
         let subtype = message.get("subtype").and_then(Value::as_str).unwrap_or("");
         // A new CLI turn after a held or absorbed result is the queued steer running (v1 keeps the
-        // steered turn open across Claude's own result, ClaudeSteerLifecycle.ts).
-        let no_lifecycle = state.lifecycle == Lifecycle::Absent;
+        // steered turn open across Claude's own result, ClaudeSteerLifecycle.ts). Which steer runs
+        // is told by its own `started` or echo (v1 markSteersAccepted).
         if subtype == "init"
             && let Some(turn) = state.turn.as_mut()
             && turn.absorbed_result
         {
-            // Which steer runs is told by its own `started` or echo (v1 markSteersAccepted). A CLI
-            // without `command_lifecycle` has no such evidence: continuing the turn after the
-            // steer's abort or held result is the steers it holds being read.
-            if no_lifecycle {
-                let turn_id = turn.id.clone();
-                for steer in turn.steers.values_mut() {
-                    if steer.phase != SteerPhase::Consumed {
-                        self.consume_steer(&turn_id, steer);
-                    }
-                }
-            }
             turn.absorbed_result = false;
             turn.held_result = None;
         }
@@ -2559,6 +2551,23 @@ impl EngineSession for ClaudeSession {
             Err(reason) => return SteerResult::Declined { reason },
         };
         let input_ids: Vec<InputId> = inputs.iter().map(|i| i.input_id.clone()).collect();
+        // Owner decision 2026-11-29 (a deliberate difference from v1, which steers blindly): only a
+        // CLI that reports `command_lifecycle` says whether it read a steer, so only such a CLI is
+        // steered. Otherwise the steer is Declined before anything is written; the host queues it
+        // as the next turn's followup, so it is neither lost nor repeated.
+        match inner.known_lifecycle(turn_id).await {
+            Lifecycle::Reported => {}
+            Lifecycle::Absent => {
+                return SteerResult::Declined {
+                    reason: "This Claude CLI does not report whether it read a message sent during a turn; it is queued for the next turn".into(),
+                };
+            }
+            Lifecycle::Unknown => {
+                return SteerResult::Declined {
+                    reason: "Claude has not shown yet whether it reports messages sent during a turn; it is queued for the next turn".into(),
+                };
+            }
+        }
         let uuid = util::uuid();
         let (tx, mut rx) = oneshot::channel();
         {
@@ -2567,7 +2576,6 @@ impl EngineSession for ClaudeSession {
                     reason: "Claude session state is unavailable".into(),
                 };
             };
-            let lifecycle = state.lifecycle;
             let Some(turn) = state.turn.as_mut() else {
                 return SteerResult::Declined {
                     reason: "The Claude turn already ended".into(),
@@ -2583,11 +2591,8 @@ impl EngineSession for ClaudeSession {
                     reason: "The Claude turn is stopping".into(),
                 };
             }
-            // Until this CLI is known to lack `command_lifecycle`, wait for Claude's verdict;
-            // without it the steer is accepted on write.
-            let wait = lifecycle != Lifecycle::Absent;
             turn.steered = true;
-            // Provisional until written (no lifecycle) or until Claude's verdict (lifecycle).
+            // Provisional until Claude's verdict (queued/started/echo/refusal).
             turn.steers.insert(
                 uuid.clone(),
                 Steer {
@@ -2598,9 +2603,7 @@ impl EngineSession for ClaudeSession {
                     completed_sent: false,
                 },
             );
-            if wait {
-                state.steer_waiters.insert(uuid.clone(), tx);
-            }
+            state.steer_waiters.insert(uuid.clone(), tx);
         }
         let delivery = inner
             .deliver(&protocol::user_message(content, Some(&uuid), Some("next")))
@@ -2622,14 +2625,12 @@ impl EngineSession for ClaudeSession {
             return result;
         }
         {
-            // The write landed. On a CLI known to lack command_lifecycle that is the acceptance;
-            // otherwise Claude's verdict (queued/started/refused) decides below.
+            // The write landed; Claude's verdict (queued/started/refused) decides below.
             let Ok(mut state) = inner.state.lock() else {
                 return SteerResult::Unknown {
                     reason: "Claude session state is unavailable".into(),
                 };
             };
-            let absent = state.lifecycle == Lifecycle::Absent;
             let mut present = false;
             let mut answer = None;
             if let Some(turn) = state.turn.as_mut()
@@ -2638,13 +2639,6 @@ impl EngineSession for ClaudeSession {
             {
                 present = true;
                 steer.written = true;
-                if absent {
-                    steer.accepted = true;
-                    if steer.phase == SteerPhase::Consumed {
-                        inner.consume_steer(turn_id, steer);
-                    }
-                    answer = Some(SteerResult::Accepted);
-                }
             }
             if !present {
                 // The turn settled while the message was being written. A verdict that arrived
