@@ -44,6 +44,15 @@ pub(super) struct Translator {
     async_tools: HashMap<String, (String, String)>,
     async_latest: Vec<Value>,
     async_emitted: HashMap<(String, String), (String, String, String)>,
+    context_window: Option<u64>,
+    last_live: Option<u64>,
+    message_usage: Option<Value>,
+    compact_after: Option<u64>,
+}
+
+fn number(v: &Value, key: &str) -> Option<u64> {
+    let n = v.get(key)?.as_f64()?.trunc().max(0.0);
+    (n <= 9_007_199_254_740_991.0).then_some(n as u64)
 }
 
 fn s<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
@@ -217,6 +226,10 @@ impl Translator {
             async_tools: HashMap::new(),
             async_latest: Vec::new(),
             async_emitted: HashMap::new(),
+            context_window: None,
+            last_live: None,
+            message_usage: None,
+            compact_after: None,
         }
     }
     pub(super) fn start_turn(&mut self) {
@@ -230,6 +243,28 @@ impl Translator {
         self.failure = None;
         self.finished = false;
         self.retry = None;
+        self.last_live = None;
+        self.message_usage = None;
+        self.compact_after = None;
+    }
+    pub(super) fn set_model(&mut self, model: &Value) {
+        self.context_window = number(model, "contextWindow").filter(|n| *n > 0);
+    }
+    fn usage_event(&self, turn: &str, used: u64, max: u64) -> Option<EngineEvent> {
+        let mut usage = serde_json::json!({"usedTokens":used,"maxTokens":max});
+        if let Some(Value::Object(fields)) = &self.message_usage {
+            usage.as_object_mut()?.extend(fields.clone());
+        }
+        Some(EngineEvent::TokenUsage {
+            turn_id: Some(turn.to_owned()),
+            usage: serde_json::from_value(usage).ok()?,
+        })
+    }
+    pub(super) fn stats_usage(&self, stats: &Value, turn: &str) -> Option<EngineEvent> {
+        let context = &stats["contextUsage"];
+        let max = number(context, "contextWindow").filter(|n| *n > 0)?;
+        let used = number(context, "tokens").or(self.compact_after)?;
+        self.usage_event(turn, used, max)
     }
     pub(super) fn interrupt(&mut self) {
         self.interrupted = true;
@@ -353,6 +388,32 @@ impl Translator {
                 self.streams.clear();
             }
             "message_update" => {
+                let usage = &record["usage"];
+                if let Some(used) = number(usage, "totalTokens").filter(|n| *n > 0) {
+                    let mut fields = serde_json::Map::new();
+                    let cached = number(usage, "cacheRead");
+                    if let Some(input) = number(usage, "input")
+                        .and_then(|n| n.checked_add(cached.unwrap_or(0)))
+                        .and_then(|n| n.checked_add(number(usage, "cacheWrite").unwrap_or(0)))
+                    {
+                        fields.insert("inputTokens".into(), input.into());
+                    }
+                    if let Some(n) = cached {
+                        fields.insert("cachedInputTokens".into(), n.into());
+                    }
+                    if let Some(n) = number(usage, "output") {
+                        fields.insert("outputTokens".into(), n.into());
+                    }
+                    self.message_usage = Some(Value::Object(fields));
+                    if self.last_live != Some(used)
+                        && let Some(max) = self.context_window
+                    {
+                        self.last_live = Some(used);
+                        if let Some(event) = self.usage_event(turn_id, used, max) {
+                            out.push(event);
+                        }
+                    }
+                }
                 if let Some((retry, message)) = self.retry.take() {
                     out.push(self.retry_item(
                         turn_id,
@@ -534,6 +595,9 @@ impl Translator {
                 self.compaction = Some(format!("{turn_id}:compaction:{}", self.ordinal));
             }
             "compaction_end" => {
+                if !record["result"].is_null() {
+                    self.compact_after = number(&record["result"], "estimatedTokensAfter");
+                }
                 let id = self
                     .compaction
                     .take()

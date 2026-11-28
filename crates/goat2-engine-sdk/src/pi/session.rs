@@ -638,6 +638,19 @@ async fn pump(
                                 .settled
                                 .take()
                                 .unwrap_or_else(|| json!({"type":"agent_settled"}));
+                            let stats_id = client.next_id();
+                            if let Ok(stats) = client
+                                .conn
+                                .call(
+                                    stats_id.clone(),
+                                    &json!({"type":"get_session_stats","id":stats_id}),
+                                    Duration::from_secs(2),
+                                )
+                                .await
+                                && let Some(event) = state.translator.stats_usage(&stats, &turn)
+                            {
+                                let _ = tx.send(event);
+                            }
                             let events = state.translator.translate(&settled, &turn);
                             state.cancel_unread(&tx);
                             state.turn = None;
@@ -1609,12 +1622,19 @@ impl PiSession {
         let model_changed = selected
             .as_ref()
             .is_some_and(|(provider, id)| current_model != Some((provider.as_str(), id.as_str())));
-        if model_changed && let Some((provider, id)) = selected {
+        let reported_model = if model_changed && let Some((provider, id)) = selected {
             self.client
                 .call(json!({"type":"set_model","provider":provider,"modelId":id}))
                 .await
-                .map_err(err)?;
-        }
+                .map_err(err)?
+        } else {
+            live["model"].clone()
+        };
+        self.shared
+            .lock()
+            .await
+            .translator
+            .set_model(&reported_model);
         let thinking = settings
             .model_selection
             .options

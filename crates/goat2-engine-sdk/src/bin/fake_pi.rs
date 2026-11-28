@@ -53,6 +53,7 @@ fn main() {
     let mut tier = "default".to_owned();
     let mut recover_compaction = 0;
     let mut background = "";
+    let mut usage_case = false;
     for line in io::stdin().lock().lines() {
         let Ok(line) = line else { break };
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
@@ -66,7 +67,7 @@ fn main() {
                 }
                 response(
                     &request,
-                    json!({"sessionId":"fake-session", "sessionFile":session, "isStreaming":if recover_compaction > 0 { false } else { active }, "isCompacting":recover_compaction == 1, "pendingMessageCount":if recover_compaction == 2 { 1 } else { 0 }, "model":{"provider":model_provider, "id":model_id}, "thinkingLevel":thinking}),
+                    json!({"sessionId":"fake-session", "sessionFile":session, "isStreaming":if recover_compaction > 0 { false } else { active }, "isCompacting":recover_compaction == 1, "pendingMessageCount":if recover_compaction == 2 { 1 } else { 0 }, "model":{"provider":model_provider, "id":model_id, "contextWindow":1000}, "thinkingLevel":thinking}),
                 );
                 if recover_compaction > 0 {
                     if recover_compaction != 3 && recover_compaction != 4 {
@@ -99,6 +100,14 @@ fn main() {
                 json!({"models":[{"provider":"fake", "id":"fake-model", "name":"Fake model", "reasoning":false}, {"provider":"vendor/nested", "id":"custom/model", "name":"Slash model"}]}),
             ),
             "get_commands" => response(&request, json!({"commands":[]})),
+            "get_session_stats" => response(
+                &request,
+                if usage_case {
+                    json!({"contextUsage":{"tokens":90,"contextWindow":1000}})
+                } else {
+                    json!({})
+                },
+            ),
             "set_model" => {
                 model_provider = request["provider"].as_str().unwrap_or("").to_owned();
                 model_id = request["modelId"].as_str().unwrap_or("").to_owned();
@@ -303,6 +312,25 @@ fn main() {
                         emit(
                             json!({"type":"extension_ui_request", "id":"dialog-1", "method":method, "title":if text == "question" {"Choose a color"} else {"Approve action?"}, "message":"Please respond", "timeout":if text == "approval-expire" {-1} else {0}}),
                         );
+                    }
+                    "usage" => {
+                        usage_case = true;
+                        emit(
+                            json!({"type":"message_update","usage":{"totalTokens":80,"input":50,"cacheRead":10,"cacheWrite":5,"output":15},"assistantMessageEvent":{"type":"text_delta","delta":"hello"}}),
+                        );
+                        emit(
+                            json!({"type":"message_update","usage":{"totalTokens":80,"input":50,"cacheRead":10,"cacheWrite":5,"output":15}}),
+                        );
+                        finish("done", false);
+                        active = false;
+                    }
+                    "bad-usage" => {
+                        usage_case = false;
+                        emit(
+                            json!({"type":"message_update","usage":{"totalTokens":"bad","input":{}},"assistantMessageEvent":{"type":"text_delta","delta":"ok"}}),
+                        );
+                        finish("done", false);
+                        active = false;
                     }
                     "tool" => {
                         emit(

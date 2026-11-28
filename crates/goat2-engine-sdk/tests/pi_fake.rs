@@ -289,6 +289,40 @@ async fn start(id: &str) -> EngineHandle {
         .await
         .expect("fake starts")
 }
+
+#[tokio::test]
+async fn usage_is_emitted_before_turn_finished() {
+    let mut h = start("pi-usage").await;
+    let turn = accepted(h.session.start_turn(input("usage"), &settings()).await);
+    let events = finished(&mut h).await;
+    assert_eq!(events.iter().filter(|event| matches!(event, EngineEvent::TokenUsage { turn_id: Some(id), usage } if id == &turn && usage.used_tokens == 80 && usage.max_tokens == Some(1000) && usage.input_tokens == Some(65) && usage.cached_input_tokens == Some(10) && usage.output_tokens == Some(15))).count(), 1, "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, EngineEvent::TokenUsage { turn_id: Some(id), usage } if id == &turn && usage.used_tokens == 90 && usage.max_tokens == Some(1000) && usage.input_tokens == Some(65) && usage.cached_input_tokens == Some(10) && usage.output_tokens == Some(15) && usage.cost.is_none())), "{events:?}");
+    assert!(matches!(
+        events.last(),
+        Some(EngineEvent::TurnFinished { .. })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn malformed_usage_does_not_fail_turn() {
+    let mut h = start("pi-bad-usage").await;
+    accepted(h.session.start_turn(input("bad-usage"), &settings()).await);
+    let events = finished(&mut h).await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EngineEvent::TokenUsage { .. }))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
 async fn next(h: &mut EngineHandle) -> EngineEvent {
     tokio::time::timeout(Duration::from_secs(5), h.events.recv())
         .await
