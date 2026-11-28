@@ -1161,3 +1161,24 @@ async fn a_steer_written_after_its_turn_ended_is_unknown() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Review round 10 finding 1: Claude reads the steer and crashes before acknowledging it. The exit
+/// does not show it went unread, so the answer is Unknown (Declined would requeue it).
+#[tokio::test]
+async fn a_written_steer_without_a_verdict_at_exit_is_unknown() {
+    let run = Run::new("wire/steer_read_then_crash.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also this."))
+        .await;
+    assert!(matches!(steer, SteerResult::Unknown { .. }), "{steer:?}");
+    let events = until(&mut handle, |e| matches!(e, EngineEvent::Exited { .. })).await;
+    assert!(
+        steer_updates(&events).is_empty(),
+        "{:?}",
+        steer_updates(&events)
+    );
+    handle.session.shutdown().await;
+}
