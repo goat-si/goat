@@ -535,3 +535,27 @@ pub fn present_nonnull<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 ) -> Result<Option<T>, D::Error> {
     T::deserialize(d).map(Some)
 }
+
+/// A trimmed nonempty v1 SetupOperationId.
+pub mod auth_operation_id {
+    use serde::{Deserialize, Deserializer, Serializer, de, ser};
+    fn check(v: &str) -> Result<(), &'static str> {
+        if v.is_empty()
+            || v.trim_matches(super::is_ecmascript_whitespace) != v
+            || v.encode_utf16().count() > 128
+        {
+            Err("invalid setup operation id")
+        } else {
+            Ok(())
+        }
+    }
+    pub fn serialize<S: Serializer>(v: &str, s: S) -> Result<S::Ok, S::Error> {
+        check(v).map_err(ser::Error::custom)?;
+        s.serialize_str(v)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        let v = String::deserialize(d)?;
+        check(&v).map_err(de::Error::custom)?;
+        Ok(v)
+    }
+}
