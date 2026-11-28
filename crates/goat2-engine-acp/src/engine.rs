@@ -2361,6 +2361,7 @@ fn launch_for(flavor: &dyn AcpFlavor, spec: &SessionSpec) -> Result<Launch, Engi
             command.env.push((name.clone(), value.clone()));
         }
     }
+    flavor.finish_launch(&mut command);
     let mut launch = Launch::new(command.program).without_host_identity();
     launch.args = command.args.into_iter().map(Into::into).collect();
     launch.cwd = Some(PathBuf::from(&spec.engine.cwd));

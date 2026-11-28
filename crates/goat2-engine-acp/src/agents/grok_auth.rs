@@ -6,10 +6,17 @@
 //! (`resolveGrokAuthMethodId`). v1's in-app key sign-in flow (`makeGrokAuth`) belongs to the
 //! provider settings host, not the driver; the driver only reads the key at each launch (v1
 //! `readStoredApiKey`, adapter.ts:134-135,400-416). The key is never logged.
+//!
+//! "The launch environment" is the merged one, as in v1 (adapter.ts:400-416 applies the key to
+//! the session environment, the instance variables over the process environment): an instance
+//! override that sets `XAI_API_KEY` blank masks an inherited key and is itself filled from the
+//! stored key, and the sign-in method follows that result (final review 6 finding B2).
 
 use std::sync::Arc;
 
 use goat2_engine_api::SessionSpec;
+
+use crate::flavor::LaunchCommand;
 
 /// v1 `GROK_API_KEY_ENV`.
 pub const GROK_API_KEY_ENV: &str = "XAI_API_KEY";
@@ -26,22 +33,75 @@ fn non_blank(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
-/// Whether the session's launch environment already carries `XAI_API_KEY`: the host's own
-/// environment or the session's launch variables.
-pub fn launch_environment_has_key(spec: &SessionSpec) -> bool {
-    let from_spec = spec
+/// v1 `applyStoredGrokApiKey` on a merged environment: `set` is `XAI_API_KEY` as the launch
+/// variables set it (None when they leave it alone) and `inherited` the host's. Returns whether
+/// the merged environment ends up with a key, and the stored key to set when it has to fill a
+/// blank or missing one.
+pub fn resolve_key(
+    set: Option<&str>,
+    inherited: Option<String>,
+    stored: Option<&StoredApiKey>,
+) -> (bool, Option<String>) {
+    let effective = match set {
+        Some(value) => Some(value.to_owned()),
+        None => inherited,
+    };
+    if non_blank(effective).is_some() {
+        return (true, None);
+    }
+    let fill = non_blank(stored.and_then(|read| read()));
+    (fill.is_some(), fill)
+}
+
+fn inherited_key() -> Option<String> {
+    std::env::var(GROK_API_KEY_ENV).ok()
+}
+
+/// [resolve_key] for a session: the session's launch variables over the host environment.
+pub fn resolve_for_spec(
+    spec: &SessionSpec,
+    stored: Option<&StoredApiKey>,
+) -> (bool, Option<String>) {
+    let set = spec
         .launch
         .as_ref()
-        .and_then(|l| l.env.get(GROK_API_KEY_ENV).cloned());
-    non_blank(from_spec).is_some() || non_blank(std::env::var(GROK_API_KEY_ENV).ok()).is_some()
+        .and_then(|l| l.env.get(GROK_API_KEY_ENV))
+        .map(String::as_str);
+    resolve_key(set, inherited_key(), stored)
+}
+
+/// Whether the session's merged launch environment carries a non-blank `XAI_API_KEY`: the
+/// session's launch variable when it sets one (even blank), otherwise the host's.
+pub fn launch_environment_has_key(spec: &SessionSpec) -> bool {
+    resolve_for_spec(spec, None).0
 }
 
 /// v1 `applyStoredGrokApiKey`: the variable to add for this launch, if any.
 pub fn stored_key_variable(spec: &SessionSpec, stored: Option<&StoredApiKey>) -> Option<String> {
-    if launch_environment_has_key(spec) {
-        return None;
+    resolve_for_spec(spec, stored).1
+}
+
+/// v1 `applyStoredGrokApiKey` on the final command, after the session's launch overrides were
+/// merged in: a blank or missing `XAI_API_KEY` (the last one the command sets, else the inherited
+/// one unless the command removes it) is filled from the stored key.
+pub fn apply_to_merged(command: &mut LaunchCommand, stored: Option<&StoredApiKey>) {
+    let set = command
+        .env
+        .iter()
+        .rev()
+        .find(|(name, _)| name == GROK_API_KEY_ENV)
+        .map(|(_, value)| value.as_str());
+    let removed = command.env_remove.iter().any(|name| {
+        name == GROK_API_KEY_ENV
+            || name
+                .strip_suffix('*')
+                .is_some_and(|prefix| GROK_API_KEY_ENV.starts_with(prefix))
+    });
+    let inherited = if removed { None } else { inherited_key() };
+    if let (_, Some(key)) = resolve_key(set, inherited, stored) {
+        command.env.retain(|(name, _)| name != GROK_API_KEY_ENV);
+        command.env.push((GROK_API_KEY_ENV.to_owned(), key));
     }
-    non_blank(stored.and_then(|read| read()))
 }
 
 /// v1 `resolveGrokAuthMethodId`: the API key method when the launch environment has a key,

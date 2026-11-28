@@ -73,6 +73,8 @@
 //! Provider probe scenarios (GOAT 2, for `src/probe*.rs`):
 //! - `GOAT_ACP_EXIT_AT_START=<code>`: exit with this code before reading stdin (after the stderr line).
 //! - `GOAT_ACP_ARGV_LOG_PATH=<file>`: write `{"argv": [...], "patch": <--patch file contents>}` at start.
+//! - `GOAT_ACP_ENV_LOG_PATH=<file>` (GOAT 2): write the variables named in `GOAT_ACP_ENV_LOG_NAMES`
+//!   (comma separated) as a JSON object at start, `null` for an unset one.
 //! - `GOAT_ACP_INITIALIZE_META=<json>`: the `initialize` result's `_meta` (Grok `modelState`).
 //! - `GOAT_ACP_AUTH_METHODS=<json>`: the raw `authMethods` (env-var and terminal methods); with
 //!   `GOAT_ACP_AUTH_METHOD_ID` unset, `GOAT_ACP_AUTH_REQUIRED=1` makes `session/new` answer -32000.
@@ -987,6 +989,20 @@ fn main() {
             left -= n;
         }
         let _ = err.flush();
+    }
+    if let Some(path) = env("GOAT_ACP_ENV_LOG_PATH") {
+        let names = env("GOAT_ACP_ENV_LOG_NAMES").unwrap_or_default();
+        let seen: serde_json::Map<String, Value> = names
+            .split(',')
+            .filter(|n| !n.is_empty())
+            .map(|n| {
+                (
+                    n.to_owned(),
+                    std::env::var(n).map_or(Value::Null, Value::from),
+                )
+            })
+            .collect();
+        let _ = std::fs::write(path, Value::Object(seen).to_string());
     }
     if let Some(path) = env("GOAT_ACP_ARGV_LOG_PATH") {
         let argv: Vec<String> = std::env::args().skip(1).collect();

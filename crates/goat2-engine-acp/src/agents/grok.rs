@@ -197,16 +197,23 @@ impl AcpFlavor for Grok {
         }
         Ok(command)
     }
+    /// v1 `applyStoredGrokApiKey(sessionEnvironment, stored)` (adapter.ts:400-416, auth.ts:57-64)
+    /// on the merged environment: a launch override that leaves `XAI_API_KEY` blank is filled
+    /// from the stored key (final review 6 finding B2).
+    fn finish_launch(&self, command: &mut LaunchCommand) {
+        grok_auth::apply_to_merged(command, self.stored_api_key.as_ref());
+    }
     fn auth_policy(&self) -> AuthPolicy {
         AuthPolicy::OnRequired {
             method_id: Some(grok_auth::auth_method_id(self.has_api_key).into()),
         }
     }
-    /// v1 `resolveGrokAuthMethodId(launch.environment)` (acpSupport.ts:164-168,234).
+    /// v1 `resolveGrokAuthMethodId(launch.environment)` (acpSupport.ts:164-168,234): the method
+    /// follows the merged launch environment after the stored key filled it, so a blank override
+    /// that masks an inherited key, with nothing stored, signs in with the cached token (final
+    /// review 6 finding B2). `has_api_key` only answers [Self::auth_policy], which has no session.
     fn auth_policy_for(&self, spec: &SessionSpec) -> AuthPolicy {
-        let has_key = self.has_api_key
-            || grok_auth::launch_environment_has_key(spec)
-            || grok_auth::stored_key_variable(spec, self.stored_api_key.as_ref()).is_some();
+        let (has_key, _) = grok_auth::resolve_for_spec(spec, self.stored_api_key.as_ref());
         AuthPolicy::OnRequired {
             method_id: Some(grok_auth::auth_method_id(has_key).into()),
         }

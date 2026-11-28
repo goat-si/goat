@@ -467,6 +467,10 @@ pub trait AcpFlavor: Send + Sync + 'static {
     /// The command line for this thread's runtime mode. `SessionSpec.launch` overrides are applied
     /// by the driver afterwards (binary replaces the program, args replace, env adds).
     fn launch(&self, spec: &SessionSpec) -> Result<LaunchCommand, EngineError>;
+    /// Adjust the final command once `SessionSpec.launch` (or a probe's launch settings) has been
+    /// merged in. Grok fills a blank merged `XAI_API_KEY` from the stored key here (v1
+    /// `applyStoredGrokApiKey` on the merged environment, provider-grok auth.ts:57-64).
+    fn finish_launch(&self, _command: &mut LaunchCommand) {}
     /// `initialize._meta` (Grok `clientType: extension`).
     fn initialize_meta(&self) -> Option<Map<String, Value>> {
         None
