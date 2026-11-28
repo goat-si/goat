@@ -1451,7 +1451,7 @@ export function TlRowRunning({ text }: { text: ReactNode }) {
 }
 
 /** 1NEM-1 0.0.1.0.1 */
-export function ThreadComposer({ input, plus, access, spinner, model, modelLabel, effort, send, banner }: { input: ReactNode; plus: El; access: El; spinner: ReactNode; model: El; modelLabel: ReactNode; effort: El; send: ReactNode; banner: ReactNode }) {
+export function ThreadComposer({ input, plus, access, spinner, picker, effort, send, banner }: { input: ReactNode; plus: El; access: El; spinner: ReactNode; picker: ReactNode; effort: El; send: ReactNode; banner: ReactNode }) {
   return (
     <div style={{ boxSizing: 'border-box', paddingInline: '48px', paddingTop: '8px' }}>
       <div style={{ boxSizing: 'border-box', marginLeft: 'auto', marginRight: 'auto', maxWidth: '672px', width: '100%' }}>
@@ -1481,12 +1481,7 @@ export function ThreadComposer({ input, plus, access, spinner, model, modelLabel
                 </div>
                 <div style={{ boxSizing: 'border-box', display: 'inline-block', flexBasis: '0%', flexGrow: '1', minWidth: '8px' }} />
                 {spinner}
-                <div {...model} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', minWidth: '52px', paddingInline: '5px' }}>
-                  <div style={{ backgroundColor: '#0D0D0D', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '16px', width: '16px' }} />
-                  <div style={{ boxSizing: 'border-box', color: '#0D0D0DCC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11.2px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '14px', whiteSpace: 'pre' }}>
-                    {modelLabel}
-                  </div>
-                </div>
+                {picker}
                 <div {...effort} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', paddingInline: '5px' }}>
                   <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ display: 'inline-block', flexShrink: 0 }}>
                     <path d="M22 12C22 17.523 17.523 22 12 22C6.477 22 2 17.523 2 12C2 6.477 6.477 2 12 2C17.523 2 22 6.477 22 12Z" fill="none" stroke="#5D5D5D" strokeWidth="1.75" strokeLinecap="round" />
@@ -1513,6 +1508,18 @@ export function ThreadComposer({ input, plus, access, spinner, model, modelLabel
         </div>
       </div>
       <div style={{ boxSizing: 'border-box', height: '20px' }} />
+    </div>
+  );
+}
+
+/** 1NEM-1 0.0.1.0.1.0.0.0.1.1.3 */
+export function ThreadModelChip({ label, button }: { label: ReactNode; button: El }) {
+  return (
+    <div {...button} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'inline-flex', gap: '6px', height: '28px', minWidth: '52px', paddingInline: '5px' }}>
+      <div style={{ backgroundColor: '#0D0D0D', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'inline-block', flexShrink: 0, height: '16px', width: '16px' }} />
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0DCC', display: 'inline-block', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '11.2px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '14px', whiteSpace: 'pre' }}>
+        {label}
+      </div>
     </div>
   );
 }

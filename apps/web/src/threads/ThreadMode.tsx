@@ -241,7 +241,7 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
             onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit(); } }}
             style={{ color: "#0D0D0D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 14, lineHeight: "22px" }} />}
           plus={plannedProps("attachments")} access={plannedProps("settings-accounts")} spinner={running ? <span data-spin="" style={{ display: "inline-flex" }}><P.ComposerSpinner /></span> : null}
-          model={plannedProps("runtime-picker-change")} modelLabel={card?.engine.modelSelection.model ?? "gpt-6.1-sol"} effort={plannedProps("runtime-picker-change")}
+          picker={<P.ThreadModelChip button={plannedProps("runtime-picker-change")} label={card?.engine.modelSelection.model ?? "gpt-6.1-sol"} />} effort={plannedProps("runtime-picker-change")}
           send={sendButton} />
       </>}
     />

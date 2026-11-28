@@ -308,9 +308,12 @@ P("TlRowFailed", T1, TL + ".6", "Failed bun test", "text: ReactNode", texts={"Fa
 P("TlAnswer", T1, TL + ".7", "The flicker came from", "text: ReactNode", slots={"0.0.0.0": "{text}"})
 P("TlWorking", T1, TL + ".8", "Working for", "label: ReactNode", texts={"Working for 22s": "{label}"})
 P("TlRowRunning", T1, TL + ".9", "Running bun test", "text: ReactNode", texts={"Running bun test sidebar.test.ts": "{text}"})
-P("ThreadComposer", T1, TC, "Ask anything", "input: ReactNode; plus: object; access: object; spinner: ReactNode; model: object; modelLabel: ReactNode; effort: object; send: ReactNode; banner: ReactNode",
-  slots={"0.0.0.0.0": "{input}", "0.0.0.1.1.2": "{spinner}", "0.0.0.1.2": "{send}"}, texts={"GPT-5.5": "{modelLabel}"},
-  attrs={"0.0.0.1.0": "{...plus}", "0.0.0.1.1.0": "{...access}", "0.0.0.1.1.3": "{...model}", "0.0.0.1.1.4": "{...effort}"}, before={"0.0.0": "{banner}"})
+# picker: the model chip node is a slot so the thread view can host v1's ProviderModelPicker (P2-M, board 1QM8-2);
+# ThreadModelChip draws the board's chip until it does.
+P("ThreadComposer", T1, TC, "Ask anything", "input: ReactNode; plus: object; access: object; spinner: ReactNode; picker: ReactNode; effort: object; send: ReactNode; banner: ReactNode",
+  slots={"0.0.0.0.0": "{input}", "0.0.0.1.1.2": "{spinner}", "0.0.0.1.1.3": "{picker}", "0.0.0.1.2": "{send}"},
+  attrs={"0.0.0.1.0": "{...plus}", "0.0.0.1.1.0": "{...access}", "0.0.0.1.1.4": "{...effort}"}, before={"0.0.0": "{banner}"})
+P("ThreadModelChip", T1, TC + ".0.0.0.1.1.3", "GPT-5.5", "label: ReactNode; button: object", texts={"GPT-5.5": "{label}"}, attrs={"": "{...button}"})
 P("ComposerStop", T1, TC + ".0.0.0.1.2", "svg", "button: object", attrs={"0": "{...button}"})
 P("ComposerSpinner", T1, TC + ".0.0.0.1.1.2", "svg")
 P("ThreadHeader", T1, "0.0.2.0", "api-server", "icon: ReactNode; project: ReactNode; title: ReactNode", slots={"0.0.0.0.0": "{icon}"}, texts={"api-server": "{project}", "Refactor billing webhooks": "{title}"})
