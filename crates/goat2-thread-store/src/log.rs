@@ -139,11 +139,18 @@ pub fn scan_back<E: From<io::Error>>(
                 return Ok(());
             }
             None => {
-                let lo = buf_start.saturating_sub(CHUNK).max(start);
-                let mut more = read_range(file, lo, buf_start)?;
-                more.extend_from_slice(&buf);
-                buf = more;
-                buf_start = lo;
+                // A line longer than the buffer: find its start once and read the rest in one go,
+                // so a multi-MiB line (a large checkpoint) costs time linear in its length instead
+                // of re-copying the growing buffer for every 64 KiB chunk.
+                let line_start = rfind_newline(file, start, buf_start)?.map_or(start, |nl| nl + 1);
+                let mut line = read_range(file, line_start, buf_start)?;
+                line.extend_from_slice(&buf[..search_end]);
+                if !f(line_start, &line)? {
+                    return Ok(());
+                }
+                // The bytes before line_start end with the newline at line_start - 1.
+                buf.clear();
+                buf_start = line_start;
             }
         }
     }
@@ -346,4 +353,59 @@ pub fn open_append(path: &Path) -> io::Result<File> {
 /// Open the log for reading.
 pub fn open_read(path: &Path) -> io::Result<File> {
     File::open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn file_with(lines: &[Vec<u8>]) -> (File, Vec<(u64, Vec<u8>)>, u64) {
+        let mut f = tempfile::tempfile().unwrap();
+        let mut at = 0u64;
+        let mut expect = Vec::new();
+        for l in lines {
+            f.write_all(l).unwrap();
+            f.write_all(b"\n").unwrap();
+            expect.push((at, l.clone()));
+            at += l.len() as u64 + 1;
+        }
+        (f, expect, at)
+    }
+
+    fn back(file: &File, start: u64, end: u64, stop_after: usize) -> Vec<(u64, Vec<u8>)> {
+        let mut got = Vec::new();
+        scan_back::<io::Error>(file, start, end, |at, bytes| {
+            got.push((at, bytes.to_vec()));
+            Ok(got.len() < stop_after)
+        })
+        .unwrap();
+        got
+    }
+
+    #[test]
+    fn scan_back_returns_lines_longer_than_many_chunks_whole_and_in_order() {
+        let huge_a = vec![b'a'; 3 * CHUNK as usize + 17];
+        let huge_b = vec![b'b'; 7 * CHUNK as usize + 3];
+        let lines = vec![
+            huge_a.clone(),
+            b"one".to_vec(),
+            huge_b.clone(),
+            b"two".to_vec(),
+            vec![b'c'; CHUNK as usize],
+        ];
+        let (file, expect, end) = file_with(&lines);
+        let mut newest_first = expect.clone();
+        newest_first.reverse();
+        // From the start of the file: the first line has no newline before it.
+        assert_eq!(back(&file, 0, end, usize::MAX), newest_first);
+        // A range that starts inside the file, on a line boundary.
+        let from = expect[1].0;
+        assert_eq!(
+            back(&file, from, end, usize::MAX),
+            newest_first[..4].to_vec()
+        );
+        // Stopping right after a huge line.
+        assert_eq!(back(&file, 0, end, 3), newest_first[..3].to_vec());
+    }
 }

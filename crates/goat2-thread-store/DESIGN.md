@@ -93,9 +93,14 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    `appliedSeq` equal to its own seq.
 4a. Caller events are limited to 64 KiB (`PayloadTooLarge`); the store's own `checkpoint` line is not,
    because it copies the fold: open requests (a runless one can embed its waiting `item`), queued and
-   held inputs. Tail checks, reverse reads and snapshots find line starts by scanning back in 64 KiB
-   chunks and hold one line in memory at a time, so a checkpoint of a few MiB costs only its size
-   (`tests/large_checkpoint.rs`).
+   held inputs. Reading one is linear in its length: the tail check and reverse reads find its start by
+   scanning back in 64 KiB chunks and then read it once, and a refold streams lines forward. Memory is
+   a few copies of that one line while it is read and decoded (a snapshot also parses it as JSON to
+   check the fold keys). Measured with 150 runless requests (~9 MB checkpoint, release build):
+   `read_page` 4.6 ms, a `read` from seq 1 10.5 ms (`tests/large_checkpoint.rs`, ignored timing test).
+   card.json and the index row hold the same full fold, so they grow the same way. A line larger than
+   the 1 MiB page or replay budget is still returned whole: a history page then holds just that line
+   (`has_more` set), and a reader whose replay would include it gets a snapshot instead.
 5. Create: row {dirty=1, creating=1} (FULL) -> mkdir -> goat.jsonl header + `thread.created` (sync) ->
    directory syncs -> card.json + row (creating cleared); the card is announced, with its cardSeq, only
    after that and with the thread lock held. Delete: row dirty=1 -> rename the folder to
