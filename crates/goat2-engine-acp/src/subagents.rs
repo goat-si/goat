@@ -193,12 +193,13 @@ impl SubagentTracker {
         // the agent's work state.
         let extraction = !flavor.follows_agent_work_state() || native_children;
         let Some(active) = turn.as_mut() else {
-            // v1 :3741-3775: after the turn only terminal reports of known subagents apply.
+            // v1 :3741-3775: after the turn only terminal reports of known subagents apply, as a
+            // status update. The report's tool is not kept: v1 has no turn to hold it in, so it
+            // never reaches a later turn (round 7 part 3.1).
             if extraction
                 && let Some(subagent) = flavor.extract_subagent(&normalized)
                 && is_terminal(subagent.status)
             {
-                self.held_tools.insert(id, merged);
                 self.apply(flavor, subagent, turn, out);
             }
             return ToolRoute::Handled;
@@ -249,6 +250,16 @@ impl SubagentTracker {
                     return;
                 }
                 if terminal && existing.written == Some(update.status) {
+                    return;
+                }
+                // v1 updateCarryoverSubagentStatus (adapter.ts:4664-4666) refuses once the status
+                // left running/pending; one terminal status replaces another only inside the
+                // owning turn, in emitSubagent (:1800-1813) (round 7 part 3.2).
+                let owner_active = turn
+                    .as_ref()
+                    .is_some_and(|t| t.turn_id == existing.owner_turn_id);
+                if is_terminal(existing.status) && existing.status != update.status && !owner_active
+                {
                     return;
                 }
                 index
@@ -320,6 +331,17 @@ impl SubagentTracker {
         if let Some((child, (status, result))) = stashed {
             self.child_state(flavor, &child, status, result, turn, out);
         }
+        if turn.is_none() {
+            self.prune();
+        }
+    }
+
+    /// Forget subagents that ended and were written, once no turn owns them (v1's
+    /// `context.subagents` belongs to one turn and its carryover is replaced, round 7 part 3.5).
+    /// Only called with no turn running.
+    fn prune(&mut self) {
+        self.subagents
+            .retain(|s| !(is_terminal(s.status) && (s.written == Some(s.status) || s.quiet)));
     }
 
     /// Bind a child session; replays what it sent before (v1 :1957-1991). Returns a stashed state.
@@ -707,10 +729,12 @@ impl SubagentTracker {
     }
 
     /// Before the turn's projector finishes: held tools that never became subagents are tools.
+    /// The turn's launch ids end with it (v1 `suppressNormalTool` is per turn).
     pub fn release_held_tools(&mut self, projector: &mut TurnProjector) {
         let held = std::mem::take(&mut self.held_tools);
+        let launches = std::mem::take(&mut self.launch_tools);
         for (id, tool) in held {
-            if !self.launch_tools.contains(&id) && projector.tool(&id).is_none() {
+            if !launches.contains(&id) && projector.tool(&id).is_none() {
                 projector.observe_tool_call(&tool_json(&tool));
             }
         }
@@ -730,6 +754,7 @@ impl SubagentTracker {
         out: &mut Vec<EngineEvent>,
     ) {
         if completed {
+            self.prune();
             return;
         }
         if kept_running {
@@ -748,14 +773,17 @@ impl SubagentTracker {
                 self.subagents[index].written = Some(TurnItemStatus::Interrupted);
                 self.subagents[index].quiet = true;
             }
+            self.prune();
             return;
         }
         self.interrupt_where(|s| s.owner_turn_id == turn_id, out);
+        self.prune();
     }
 
     /// The agent process ended: every subagent still running is interrupted.
     pub fn exited(&mut self, out: &mut Vec<EngineEvent>) {
         self.interrupt_where(|_| true, out);
+        self.prune();
         self.pending_child.clear();
         self.child_states.clear();
         self.delegations.clear();
@@ -1045,6 +1073,100 @@ mod tests {
         out.clear();
         tracker.exited(&mut out);
         assert!(out.is_empty(), "an ended subagent is not interrupted again");
+    }
+
+    fn devin_tool(id: &str, key: &str, agent: &str) -> Value {
+        json!({"sessionUpdate": "tool_call", "toolCallId": id, "status": "completed",
+            "_meta": {key: {"agentId": agent, "task": "look", "title": "Look", "summary": "done"}}})
+    }
+
+    /// Start a Devin subagent `a1` on tool `start-1` in turn-1 and settle the turn.
+    fn devin_turn_one(
+        tracker: &mut SubagentTracker,
+        flavor: &RegistryAgentFlavor,
+        completed: bool,
+        out: &mut Vec<EngineEvent>,
+    ) {
+        let mut projector = projector();
+        {
+            let mut turn = Some(TurnRef {
+                turn_id: "turn-1",
+                projector: &mut projector,
+            });
+            let start = devin_tool("start-1", "cognition.ai/subagent_started", "a1");
+            tracker.root_tool(flavor, false, &start, &mut turn, out);
+        }
+        tracker.release_held_tools(&mut projector);
+        tracker.turn_settled("turn-1", completed, false, out);
+    }
+
+    /// v1 adapter.ts:3741-3775 only updates a carried-over subagent's status after the turn; the
+    /// report's tool never reaches a later turn (round 7 part 3.1).
+    #[test]
+    fn a_report_between_turns_is_not_a_tool_of_the_next_turn() {
+        let flavor = flavor("devin");
+        let mut tracker = tracker();
+        let mut out = Vec::new();
+        devin_turn_one(&mut tracker, &flavor, true, &mut out);
+        for (tool, agent) in [("done-1", "a1"), ("done-2", "ghost")] {
+            let done = devin_tool(tool, "cognition.ai/subagent_completed", agent);
+            assert_eq!(
+                tracker.root_tool(&flavor, false, &done, &mut None, &mut out),
+                ToolRoute::Handled
+            );
+        }
+        let mut next = TurnProjector::new(
+            ThreadId::new("thread-1"),
+            "acpRegistry",
+            "root",
+            "turn-2",
+            3,
+        );
+        tracker.release_held_tools(&mut next);
+        assert!(next.tool("done-1").is_none(), "turn-2 got tool done-1");
+        assert!(next.tool("done-2").is_none(), "turn-2 got tool done-2");
+    }
+
+    /// v1 updateCarryoverSubagentStatus (adapter.ts:4664-4666) refuses a change once the status
+    /// is no longer running or pending: a late completion does not rewrite an interrupted
+    /// subagent (round 7 part 3.2).
+    #[test]
+    fn a_late_report_does_not_rewrite_an_interrupted_subagent() {
+        let flavor = flavor("devin");
+        let mut tracker = tracker();
+        let mut out = Vec::new();
+        devin_turn_one(&mut tracker, &flavor, false, &mut out);
+        let written = subagent_items(&out);
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].1.status, TurnItemStatus::Interrupted);
+        out.clear();
+        let done = devin_tool("done-1", "cognition.ai/subagent_completed", "a1");
+        tracker.root_tool(&flavor, false, &done, &mut None, &mut out);
+        assert!(
+            subagent_items(&out).is_empty(),
+            "a late completion rewrote the interrupted subagent: {out:?}"
+        );
+    }
+
+    /// Ended and written subagents and the turn's launch ids are forgotten once their turn has
+    /// settled; a carried-over subagent stays until it ends (round 7 part 3.5).
+    #[test]
+    fn ended_subagents_are_forgotten_after_their_turn() {
+        let flavor = flavor("devin");
+        let mut tracker = tracker();
+        let mut out = Vec::new();
+        devin_turn_one(&mut tracker, &flavor, true, &mut out);
+        assert_eq!(
+            tracker.subagents.len(),
+            1,
+            "the running subagent carries over"
+        );
+        assert!(tracker.launch_tools.is_empty());
+        let done = devin_tool("done-1", "cognition.ai/subagent_completed", "a1");
+        tracker.root_tool(&flavor, false, &done, &mut None, &mut out);
+        assert_eq!(subagent_items(&out).len(), 1);
+        assert!(tracker.subagents.is_empty());
+        assert!(tracker.held_tools.is_empty());
     }
 
     /// v1 adapter.ts:1816-1822: hydration without a known launch does not create a subagent.

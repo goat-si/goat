@@ -46,6 +46,9 @@ pub struct McpOverAcp {
     in_flight: Arc<tokio::sync::Semaphore>,
     /// Bumped by [McpOverAcp::stop_calls]; every call in flight races it (v1 `callsStopped`).
     stop: tokio::sync::watch::Sender<u64>,
+    /// Set by [McpOverAcp::dispose]: the session stopped, nothing connects or calls any more (v1's
+    /// handlers end with the runtime scope, adapter.ts:5547).
+    disposed: AtomicBool,
 }
 
 fn protocol_version(payload: &Value) -> bool {
@@ -74,6 +77,7 @@ impl McpOverAcp {
             next_connection: AtomicU64::new(0),
             stop: tokio::sync::watch::channel(0).0,
             in_flight: Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT)),
+            disposed: AtomicBool::new(false),
         }
     }
 
@@ -84,6 +88,22 @@ impl McpOverAcp {
     }
 
     fn connection(&self, params: &Value) -> Result<Arc<Connection>, String> {
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(Self::unknown(params));
+        }
+        self.open_connection(params)
+    }
+
+    fn unknown(params: &Value) -> String {
+        let id = params
+            .get("connectionId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        format!("Unknown MCP-over-ACP connection \"{id}\".")
+    }
+
+    /// A connection that is not closing, also during [Self::dispose] (which ends them).
+    fn open_connection(&self, params: &Value) -> Result<Arc<Connection>, String> {
         let id = params
             .get("connectionId")
             .and_then(Value::as_str)
@@ -149,6 +169,9 @@ impl McpOverAcp {
         if server != crate::mcp::SERVER_NAME {
             return Err(format!("Unknown ACP MCP server \"{server}\"."));
         }
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err("The MCP-over-ACP session has ended.".into());
+        }
         let mut connections = self.connections.lock().expect("connections");
         if connections.len() >= MAX_CONNECTIONS {
             return Err("Too many MCP-over-ACP connections.".into());
@@ -212,7 +235,14 @@ impl McpOverAcp {
     /// HTTP session, and forget the connection only when that worked; on failure it stays usable
     /// so the agent can retry.
     pub async fn disconnect(&self, params: &Value) -> Result<Value, String> {
-        let connection = self.connection(params)?;
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(Self::unknown(params));
+        }
+        self.end_connection(params).await
+    }
+
+    async fn end_connection(&self, params: &Value) -> Result<Value, String> {
+        let connection = self.open_connection(params)?;
         if connection
             .closing
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -252,7 +282,12 @@ impl McpOverAcp {
     /// "unbounded"`) and forget them all afterwards (`ensuring connections.clear()`). The whole
     /// shutdown has one [DISCONNECT_TIMEOUT] deadline, so the agent process is stopped after at
     /// most that long however many connections hang (final review finding 17).
+    /// Calls in flight end first with "The MCP call was stopped." and later connects and calls
+    /// are refused: v1's handlers are interrupted when the runtime scope closes and their fetch
+    /// is aborted (adapter.ts:5547, mcpOverAcpBridge.ts:121-123; round 7 part 3.3).
     pub async fn dispose(&self) {
+        self.disposed.store(true, Ordering::SeqCst);
+        self.stop_calls();
         let params: Vec<Value> = self
             .connections
             .lock()
@@ -260,7 +295,7 @@ impl McpOverAcp {
             .keys()
             .map(|id| json!({ "connectionId": id }))
             .collect();
-        let all = futures::future::join_all(params.iter().map(|p| self.disconnect(p)));
+        let all = futures::future::join_all(params.iter().map(|p| self.end_connection(p)));
         let _ = tokio::time::timeout(DISCONNECT_TIMEOUT, all).await;
         self.connections.lock().expect("connections").clear();
     }
@@ -486,5 +521,70 @@ mod tests {
         for call in waiting {
             assert!(call.await.unwrap().is_err());
         }
+    }
+
+    /// v1 closes the runtime scope with `dispose` (adapter.ts:5547), which interrupts the request
+    /// handlers and aborts their fetch (mcpOverAcpBridge.ts:121-123): a call in flight ends when
+    /// the session stops, and nothing connects afterwards (round 7 part 3.3).
+    #[tokio::test]
+    async fn dispose_stops_calls_in_flight_and_later_connects() {
+        // Opens a session on initialize, then holds every other request and the DELETE.
+        let endpoint = Endpoint::serve(|mut stream, held| {
+            let (request_line, body) = read_request(&stream);
+            let message: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            if request_line.is_empty() {
+                return;
+            }
+            if request_line.starts_with("DELETE") || message["method"] != "initialize" {
+                held.push(stream);
+                return;
+            }
+            let reply = json!({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "goat", "version": "0"}}}).to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nmcp-session-id: s-1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        });
+        let bridge = Arc::new(McpOverAcp::new(endpoint.url.clone(), "Bearer t"));
+        let connected = bridge
+            .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
+            .unwrap();
+        let id = connected["connectionId"].as_str().unwrap().to_owned();
+        bridge
+            .message(&json!({"connectionId": id, "method": "initialize", "params": {}}))
+            .await
+            .unwrap();
+        let call = {
+            let bridge = Arc::clone(&bridge);
+            tokio::spawn(async move {
+                bridge
+                    .message(&json!({"connectionId": id, "method": "tools/call"}))
+                    .await
+            })
+        };
+        // Single-threaded test runtime: the call runs to its first wait, inside the relay.
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        // Virtual time from here: the DELETE of the never-answering endpoint waits out its timeout.
+        tokio::time::pause();
+        let started = tokio::time::Instant::now();
+        bridge.dispose().await;
+        assert!(
+            started.elapsed() >= DISCONNECT_TIMEOUT,
+            "dispose did not wait for the session's DELETE"
+        );
+        let result = tokio::time::timeout(Duration::from_secs(1), call)
+            .await
+            .expect("the call ended when the session was disposed")
+            .unwrap();
+        assert_eq!(result.unwrap_err(), "The MCP call was stopped.");
+        assert!(
+            bridge
+                .connect(&json!({"serverId": crate::mcp::SERVER_NAME}))
+                .is_err(),
+            "a connect after dispose was accepted"
+        );
     }
 }
