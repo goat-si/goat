@@ -32,6 +32,7 @@ pub struct FsStore {
     root: PathBuf,
     index_epoch: Epoch,
     card_seq: AtomicU64,
+    last_deletion: AtomicU64,
     threads: RwLock<HashMap<ThreadId, Arc<Mutex<ThreadFile>>>>,
 }
 
@@ -45,6 +46,7 @@ impl FsStore {
             root,
             index_epoch: Epoch::new(uuid::Uuid::new_v4().to_string()),
             card_seq: AtomicU64::new(0),
+            last_deletion: AtomicU64::new(0),
             threads: RwLock::new(HashMap::new()),
         };
         let mut loaded = Vec::new();
@@ -324,7 +326,13 @@ impl ThreadStore for FsStore {
             return Err(StoreError::NotFound(id.clone()));
         }
         fs::remove_dir_all(self.root.join(id.as_str()))?;
-        Ok(self.card_seq.fetch_add(1, Ordering::SeqCst) + 1)
+        let seq = self.card_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        self.last_deletion.fetch_max(seq, Ordering::SeqCst);
+        Ok(seq)
+    }
+
+    fn last_deletion_card_seq(&self) -> u64 {
+        self.last_deletion.load(Ordering::SeqCst)
     }
 
     fn thread_epoch(&self, id: &ThreadId) -> Option<Epoch> {

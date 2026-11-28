@@ -180,17 +180,24 @@ async fn cards(host: Arc<dyn WsHost>, tx: Tx, sub_id: String, after: Option<Card
     let cards = store.cards();
     let mut last = 0;
     if let Some(cursor) = after {
-        if cursor.epoch != epoch {
-            send(
+        // A deletion after the cursor cannot be sent as a delta (no tombstones): reset.
+        let reason = if cursor.epoch != epoch {
+            Some(ResetReason::EpochChanged)
+        } else if store.last_deletion_card_seq() > cursor.card_seq {
+            Some(ResetReason::InvalidCursor)
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => send(
                 &tx,
                 HostFrame::CardsReset {
                     sub_id: sub_id.clone(),
-                    reason: ResetReason::EpochChanged,
+                    reason,
                     epoch: epoch.clone(),
                 },
-            );
-        } else {
-            last = cursor.card_seq;
+            ),
+            None => last = cursor.card_seq,
         }
     }
     for card in cards {
@@ -749,6 +756,16 @@ mod tests {
             })
             .unwrap();
         assert_eq!(read(&mut ws).await["type"], "card_removed");
+        // Reconnecting with a cursor from before the deletion resets instead of a delta.
+        let mut again = connect(&url).await;
+        write(
+            &mut again,
+            json!({"type":"subscribe_cards","subId":"c2","after":{"epoch":host.store.index_epoch(),"cardSeq":1}}),
+        )
+        .await;
+        let reset = read(&mut again).await;
+        assert_eq!(reset["type"], "cards_reset");
+        assert_eq!(reset["reason"], "invalid_cursor");
     }
     #[tokio::test]
     async fn thread_replay_cursors_stream_resync_and_page() {

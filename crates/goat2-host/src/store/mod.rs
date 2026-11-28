@@ -60,8 +60,11 @@ pub trait ThreadStore: Send + Sync + 'static {
     fn fold(&self, id: &ThreadId) -> Option<Fold>;
     /// Every card, ordered by `cardSeq`.
     fn cards(&self) -> Vec<ThreadCard>;
-    /// Remove a thread folder.
+    /// Remove a thread folder. Returns the deletion's `cardSeq`.
     fn delete(&self, id: &ThreadId) -> StoreResult<u64>;
+    /// `cardSeq` of the last deletion in this index epoch (0 = none). A `subscribe_cards` cursor
+    /// older than this gets `cards_reset` (owner 2026-11-28; no tombstones in Part 1).
+    fn last_deletion_card_seq(&self) -> u64;
     fn thread_epoch(&self, id: &ThreadId) -> Option<Epoch>;
     /// Last written seq.
     fn last_seq(&self, id: &ThreadId) -> Option<u64>;
