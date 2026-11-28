@@ -49,7 +49,6 @@ import * as Stream from "effect/Stream";
 
 import { openAssetClaims, sealAssetClaims } from "./assetClaimsSeal.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
@@ -69,6 +68,7 @@ import {
   resolveCanonicalWorkspaceFile,
   resolveCanonicalWorkspaceFileForRequest,
 } from "./workspaceAssetFile.ts";
+import { resolveCanonicalFile } from "./resolveCanonicalFile.ts";
 import { isPreviewDependencyPath } from "./previewAssetExtensions.ts";
 
 export const ASSET_ROUTE_PREFIX = "/api/assets";
@@ -249,19 +249,6 @@ const projectFaviconAsset = Effect.fn("AssetAccess.projectFaviconAsset")(functio
   return png
     ? ({ kind: "bytes", bytes: png, mimeType: "image/png" } satisfies ResolvedAsset)
     : null;
-});
-
-const resolveCanonicalFile = Effect.fn("AssetAccess.resolveCanonicalFile")(function* (
-  filePath: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const canonicalFile = yield* optionOnNotFound(fileSystem.realPath(filePath));
-  if (Option.isNone(canonicalFile)) return null;
-
-  const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
-  if (Option.isNone(info) || info.value.type !== "File") return null;
-  const isServerInternalPath = yield* makeIsServerInternalPath;
-  return (yield* isServerInternalPath(canonicalFile.value)) ? null : canonicalFile.value;
 });
 
 const HEADER_IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);

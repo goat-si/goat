@@ -46,6 +46,9 @@ const realpathLikeFileSystem = (filePath: string) =>
     NodeFS.realpath(filePath, (error, resolved) => (error ? reject(error) : resolve(resolved)));
   });
 
+export const realPathWithoutNativeResolver = (filePath: string) =>
+  Effect.promise(() => realpathLikeFileSystem(filePath).catch(() => null));
+
 const workspaceAncestors = async (filePath: string, root: string) => {
   const relative = NodePath.relative(root, filePath);
   if (
