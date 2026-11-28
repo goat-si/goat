@@ -27,10 +27,12 @@ export class OpenCode2Projection {
   constructor(host: EngineHost, turnId: string) { this.host = host; this.turnId = turnId; }
   private base(id: string) { return { id, nativeId: id, turnId: this.turnId, driver: "opencode", now: this.host.now() }; }
   private emitText(id: string, state: TextState) {
-    if (state.kind !== "text" || state.completed) return;
+    if (state.completed) return;
     if (!state.text.startsWith(state.sent)) throw new Error("OpenCode text changed after streaming");
     const suffix = state.text.slice(state.sent.length);
-    if (suffix) this.host.emit({ type: "text_delta", turnId: this.turnId, itemId: id, text: suffix });
+    if (suffix) this.host.emit(state.kind === "text"
+      ? { type: "text_delta", turnId: this.turnId, itemId: id, text: suffix }
+      : { type: "content_delta", turnId: this.turnId, itemId: id, streamKind: "reasoning_text", text: suffix });
     state.sent = state.text;
   }
   private completeText(id: string, state: TextState) {

@@ -92,6 +92,59 @@ async fn opencode_turn_projects_valid_items() {
         }
     }
     assert!(text && tool, "validated message and tool items received");
+    assert!(matches!(
+        handle
+            .session
+            .start_turn(
+                vec![EngineInput {
+                    input_id: InputId::from("reasoning"),
+                    text: "reasoning-turn".into(),
+                    attachments: vec![]
+                }],
+                &settings,
+            )
+            .await,
+        TurnStartResult::Accepted { .. }
+    ));
+    let mut streamed = String::new();
+    let mut reasoning_id = None;
+    let mut completed = false;
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event stream closed");
+        match event {
+            EngineEvent::ContentDelta {
+                item_id,
+                stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+                text,
+                ..
+            } => {
+                assert!(!completed, "reasoning deltas precede completion");
+                if let Some(id) = &reasoning_id {
+                    assert_eq!(id, &item_id);
+                } else {
+                    reasoning_id = Some(item_id);
+                }
+                streamed.push_str(&text);
+            }
+            EngineEvent::ItemCompleted { item, .. }
+                if matches!(item.body, TurnItemBody::Reasoning { .. }) =>
+            {
+                assert_eq!(reasoning_id.as_ref(), Some(&item.id));
+                completed = true;
+            }
+            EngineEvent::TurnFinished { outcome, .. } => {
+                assert!(matches!(outcome, TurnOutcome::Done));
+                break;
+            }
+            EngineEvent::Exited { reason } => panic!("helper exited: {reason}"),
+            _ => {}
+        }
+    }
+    assert!(completed);
+    assert_eq!(streamed, "Thinking carefully");
     handle.session.shutdown().await;
 }
 

@@ -640,6 +640,27 @@ test("model-only configuration is accepted and a mode change applies nothing", a
   } finally { await session.shutdown(); }
 });
 
+test("reasoning streams on its completed item id, only after assistant role is known", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+    await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: { id: "r", sessionID: session.engineRef, messageID: "assistant", type: "reasoning", text: "Think" } });
+    assert.equal(events.some((event) => event.type === "content_delta"), false);
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant", sessionID: session.engineRef, role: "assistant", time: {} } });
+    await fake.sendEvent("message.part.delta", { sessionID: session.engineRef, messageID: "assistant", partID: "r", field: "text", delta: " more" });
+    await fake.sendEvent("message.updated", { sessionID: session.engineRef, info: { id: "assistant", sessionID: session.engineRef, role: "assistant", time: { completed: 2 } } });
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+    const deltas = events.filter((event) => event.type === "content_delta");
+    assert.ok(deltas.length > 0 && deltas.every((event) => event.type === "content_delta" && event.itemId === "r" && event.streamKind === "reasoning_text"));
+    assert.equal(deltas.map((event) => event.type === "content_delta" ? event.text : "").join(""), "Think more");
+    const completed = events.findIndex((event) => event.type === "item_completed" && event.item.id === "r");
+    assert.ok(completed > events.indexOf(deltas.at(-1)!));
+  } finally { await session.shutdown(); }
+});
+
 test("a user part arriving before its role never becomes assistant output", async () => {
   fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

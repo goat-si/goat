@@ -86,9 +86,13 @@ export function createOpencodeClient() {
     }
   }
   const data = <T>(value: T) => ({ data: value });
-  const emitFinish = (sessionID: string, messageID: string, customText?: string) => {
+  const emitFinish = (sessionID: string, messageID: string, customText?: string, includeReasoning = false) => {
     const assistant = `assistant-${messageID}`; const partID = `part-${messageID}`;
     push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: {} } });
+    if (includeReasoning) {
+      push("message.part.updated", { sessionID, part: { id: `reason-${messageID}`, sessionID, messageID: assistant, type: "reasoning", text: "Thinking" } });
+      push("message.part.delta", { sessionID, messageID: assistant, partID: `reason-${messageID}`, field: "text", delta: " carefully" });
+    }
     push("message.part.updated", { sessionID, part: { id: partID, sessionID, messageID: assistant, type: "text", text: customText ?? "Hello" } });
     if (customText === undefined) push("message.part.delta", { sessionID, messageID: assistant, partID, field: "text", delta: " world" });
     push("message.part.updated", { sessionID, part: { id: `tool-${messageID}`, sessionID, messageID: assistant, type: "tool", callID: `call-${messageID}`, tool: "bash", state: { status: "completed", input: { command: "pwd" }, output: "", title: "Working directory", time: { start: 1, end: 2 } } } });
@@ -129,7 +133,7 @@ export function createOpencodeClient() {
           }
           else if (!text.includes("hold")) {
             if (text.includes("compact-turn")) push("session.compacted", { sessionID });
-            emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined);
+            emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined, text.includes("reasoning-turn"));
           }
         });
         return data(undefined);

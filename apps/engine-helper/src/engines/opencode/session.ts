@@ -244,7 +244,7 @@ export class OpenCodeSession implements EngineSession {
           turn.parts.set(part.id, part); turn.earlyDeltaBytes -= Buffer.byteLength(early.text); turn.earlyDeltas.delete(part.id);
         }
       }
-      for (const part of turn.parts.values()) if (part.type === "text") this.emitText(turn, part);
+      for (const part of turn.parts.values()) if (part.type === "text" || part.type === "reasoning") this.emitText(turn, part);
       if (turn.earlyDeltas.size || this.hasUnknownRoles(turn)) throw new Error("unresolved message");
       turn.reconciling = false;
       if (turn.interrupted) {
@@ -270,11 +270,13 @@ export class OpenCodeSession implements EngineSession {
     else if (part.type === "reasoning") this.completed(turn, part.id, reasoning(base, part.text));
     else if (part.type === "tool" && part.tool.toLowerCase() !== "question" && ![...this.detachedChildren.values()].some((child) => child.id === part.id) && (part.state.status === "completed" || part.state.status === "error")) this.completed(turn, part.id, projectTool(part, turn.id, this.host, turn.settings.modelSelection.instanceId));
   }
-  private emitText(turn: Turn, part: Extract<Part, { type: "text" }>) {
-    if (turn.earlyDeltas.has(part.id) || turn.roles.get(part.messageID) !== "assistant" || part.ignored || part.synthetic) return;
+  private emitText(turn: Turn, part: Extract<Part, { type: "text" | "reasoning" }>) {
+    if (turn.earlyDeltas.has(part.id) || turn.roles.get(part.messageID) !== "assistant" || (part.type === "text" && (part.ignored || part.synthetic))) return;
     const before = turn.sentText.get(part.id) ?? "";
     if (part.text.startsWith(before) && part.text.length > before.length) {
-      this.host.emit({ type: "text_delta", turnId: turn.id, itemId: part.id, text: part.text.slice(before.length) });
+      const text = part.text.slice(before.length);
+      if (part.type === "reasoning") this.host.emit({ type: "content_delta", turnId: turn.id, itemId: part.id, streamKind: "reasoning_text", text });
+      else this.host.emit({ type: "text_delta", turnId: turn.id, itemId: part.id, text });
       turn.sentText.set(part.id, part.text);
     }
   }
@@ -355,7 +357,7 @@ export class OpenCodeSession implements EngineSession {
           turn.usagePending.delete(msg.id);
         }
         if (msg.role === "user") { const receipt = turn.steers.get(msg.id); if (receipt) { receipt.observed = true; if (receipt.ready) this.settleSteer(turn, msg.id, true); } }
-        if (msg.role === "assistant") for (const part of turn.parts.values()) if (part.messageID === msg.id && part.type === "text") this.emitText(turn, part);
+        if (msg.role === "assistant") for (const part of turn.parts.values()) if (part.messageID === msg.id && (part.type === "text" || part.type === "reasoning")) this.emitText(turn, part);
         if (msg.role === "user" && msg.id === turn.admission.id) void this.admission(turn, "observed").catch(() => this.broken("OpenCode admission status could not be reconciled"));
         if (msg.role === "assistant" && msg.time.completed !== undefined) {
           void this.admission(turn, "completed").catch(() => this.broken("OpenCode admission status could not be reconciled"));
@@ -379,7 +381,7 @@ export class OpenCodeSession implements EngineSession {
           if (early.messageId !== part.messageID || (part.type !== "text" && part.type !== "reasoning")) { this.broken("OpenCode event stream contained an inconsistent message part"); return; }
         }
         turn.parts.set(part.id, part);
-        if (part.type === "text") this.emitText(turn, part);
+        if (part.type === "text" || part.type === "reasoning") this.emitText(turn, part);
         if (part.type === "tool" && part.tool.toLowerCase() === "task") {
           const meta = "metadata" in part.state ? part.state.metadata : undefined;
           const child = meta && typeof meta.sessionId === "string" ? meta.sessionId : part.id;
@@ -405,7 +407,7 @@ export class OpenCodeSession implements EngineSession {
         if (p.field === "text" && part && (part.type === "text" || part.type === "reasoning")) {
           const updated = { ...part, text: part.text + p.delta };
           turn.parts.set(part.id, updated);
-          if (updated.type === "text") this.emitText(turn, updated);
+          this.emitText(turn, updated);
         }
         return;
       }

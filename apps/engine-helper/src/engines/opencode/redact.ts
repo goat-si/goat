@@ -1,5 +1,5 @@
 import type { EngineHost } from "../../engine.ts";
-import type { InitializeParams } from "../../protocol.ts";
+import type { EngineEvent, InitializeParams } from "../../protocol.ts";
 
 // Redact known credentials before any engine-produced text reaches the host.
 export function safeHost(host: EngineHost, params: InitializeParams): EngineHost {
@@ -19,7 +19,7 @@ export function safeHost(host: EngineHost, params: InitializeParams): EngineHost
     return value;
   };
   // Retain a suffix across deltas so a credential split between chunks cannot escape.
-  const pending = new Map<string, { turnId: string; text: string }>();
+  const pending = new Map<string, { turnId: string; text: string; streamKind?: Extract<EngineEvent, { type: "content_delta" }>["streamKind"] }>();
   const max = Math.max(1, ...Array.from(secrets, (secret) => secret.length));
   const flush = (id: string, final: boolean) => {
     const entry = pending.get(id); if (!entry) return;
@@ -35,12 +35,14 @@ export function safeHost(host: EngineHost, params: InitializeParams): EngineHost
     }
     const prefix = entry.text.slice(0, limit);
     entry.text = entry.text.slice(limit);
-    if (prefix) host.emit({ type: "text_delta", turnId: entry.turnId, itemId: id, text: clean(prefix) as string });
+    if (prefix) host.emit(entry.streamKind === undefined
+      ? { type: "text_delta", turnId: entry.turnId, itemId: id, text: clean(prefix) as string }
+      : { type: "content_delta", turnId: entry.turnId, itemId: id, streamKind: entry.streamKind, text: clean(prefix) as string });
     if (final) pending.delete(id);
   };
   return { now: () => host.now(), emit: (event) => {
-    if (event.type === "text_delta") {
-      const entry = pending.get(event.itemId) ?? { turnId: event.turnId, text: "" };
+    if (event.type === "text_delta" || event.type === "content_delta") {
+      const entry = pending.get(event.itemId) ?? { turnId: event.turnId, text: "", ...(event.type === "content_delta" ? { streamKind: event.streamKind } : {}) };
       entry.text += event.text; pending.set(event.itemId, entry); flush(event.itemId, false); return;
     }
     if (event.type === "item_completed") flush(event.item.id, true);
