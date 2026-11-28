@@ -107,7 +107,9 @@ export function demoWorld(): FakeWorld {
     [at(15, 40, 38), { type: "run.started", runId: "run-b2", inputIds: [], generation: 1, engineRef: null }],
     [at(15, 40, 40), cmd("b2-1", at(15, 40, 40), "bun test sidebar.test.ts", false, "running")],
   ]));
-  add(thread(user("t-auth", "Fix flaky auth redirect test", "web-dashboard", { status: "needs_you", needsYou: { kind: "approval", summary: "Run the e2e suite?" } }, at(15, 38)), []));
+  add(thread(user("t-auth", "Fix flaky auth redirect test", "web-dashboard", { status: "needs_you", needsYou: { kind: "approval", summary: "Run the e2e suite?" } }, at(15, 38)), [
+    [at(15, 38), { type: "request.opened", requestId: "req-e2e", runId: null, itemId: null, kind: "approval", summary: "Run the e2e suite?\nIt takes about 12 minutes on this machine." }],
+  ]));
   add(thread(user("t-csv", "Add CSV export to reports", "web-dashboard", { status: "needs_you", needsYou: { kind: "question", summary: "Which columns?" } }, at(15, 36)), []));
   add(thread(user("t-cron", "Migrate cron jobs to queue", "api-server", { status: "failed" }, at(15, 20)), []));
   add(thread(user("t-copy", "Update onboarding copy", "web-dashboard", {}, at(15, 10)), []));

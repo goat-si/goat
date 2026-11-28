@@ -11,6 +11,7 @@ import type { TranscriptEntry, WorkStep } from "../host/store.ts";
 import { plannedProps } from "../planned/Planned.tsx";
 import type { UiState } from "../ui-state/uiState.ts";
 import { duration } from "../lib/format.ts";
+import { RequestCard } from "../App.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -78,7 +79,7 @@ export function ThreadMode({ ui, setUi, rail, lights, stamp, toggleSidebar }: {
       toggle={btn("Toggle main sidebar (⌘B)", toggleSidebar, { title: "Toggle main sidebar (⌘B)" })}
       menu={plannedProps("thread-filters")} bottom={plannedProps("terminal-lens")} panel={plannedProps("multiplexer")}
       header={selected ? <P.ThreadHeader icon={<ProviderGlyph driver="codex" size={12} />} project={project(selected)} title={selected.title} /> : null}
-      main={<ThreadColumn card={selected} onStarted={(id) => open(id)} />} />
+      main={<ThreadColumn key={selected?.id ?? "new"} card={selected} onStarted={(id) => open(id)} />} />
   );
 }
 
@@ -135,6 +136,11 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
   const running = thread.activeRunId !== null;
   useTicker(running);
   const scroller = useRef<HTMLDivElement>(null);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+  const snap = useHost();
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const outbox = card ? snap.outbox.filter((o) => o.target.threadId === card.id) : [];
   useEffect(() => { scroller.current?.scrollTo({ top: scroller.current.scrollHeight }); }, [thread.entries.length]);
   const run = async (body: Parameters<typeof client.command>[0]) => {
     setError(null);
@@ -152,13 +158,14 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
     }
     if (card) { client.sendMessage({ threadId: card.id }, text, card.followUpMode === "followup" ? "followup" : "steer"); setDraft(""); return; }
     const r = await run({ type: "start_thread", kind: "user", title: text.slice(0, 80), modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" }, runtimeMode: "full-access", text });
-    if (r.ok && r.value?.threadId) { setDraft(""); onStarted(r.value.threadId); }
+    // The person may have opened another thread while this one was being created.
+    if (r.ok && r.value?.threadId && mounted.current) { setDraft(""); onStarted(r.value.threadId); }
   };
   const queued = card ? thread.queued : [];
   const banner = queued.length > 0 ? (
     <P.QueueBanner count={queued.length} header={btn(queueOpen ? "Collapse queued messages" : "Expand queued messages", () => setQueueOpen((v) => !v), { "aria-expanded": queueOpen })}
       rows={queueOpen ? queued.map((q, i) => (
-        <P.QueueRow key={q.inputId} text={q.text} steerLabel={running ? "Steer" : "Send now"}
+        <P.QueueRow key={q.inputId} text={q.text} steerLabel={running ? "Steer" : i === 0 ? "Send now" : null}
           grip={{ "aria-label": "Reorder queued message (arrow keys)", tabIndex: 0, role: "button", onKeyDown: (e) => {
             const ids = queued.map((x) => x.inputId);
             const j = e.key === "ArrowUp" ? i - 1 : e.key === "ArrowDown" ? i + 1 : -1;
@@ -167,7 +174,9 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
             void run({ type: "reorder_queued", threadId: card.id, inputIds: ids });
           } }}
           edit={btn("Edit queued message", () => { setEditing(q.inputId); setDraft(q.text); })}
-          steer={btn(running ? "Steer now" : "Send now", () => card && void run(running ? { type: "promote_to_steer", threadId: card.id, inputId: q.inputId } : { type: "resume_queue", threadId: card.id }))}
+          steer={running || i === 0
+            ? btn(running ? "Steer now" : "Send now (the queue resumes from the first message)", () => card && void run(running ? { type: "promote_to_steer", threadId: card.id, inputId: q.inputId } : { type: "resume_queue", threadId: card.id }))
+            : { "aria-hidden": true, "data-hidden": true }}
           remove={btn("Delete queued message", () => card && void run({ type: "cancel_queued", threadId: card.id, inputId: q.inputId }))} />
       )) : null} />
   ) : null;
@@ -179,9 +188,27 @@ function ThreadColumn({ card, onStarted }: { card: ThreadCard | null; onStarted:
       </div>;
   return (
     <P.ThreadMain
-      timeline={<div ref={scroller} style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      timeline={<div ref={scroller} style={{ flex: 1, minHeight: 0, overflow: "auto" }}
+        onScroll={(e) => { if (card && thread.hasOlder && e.currentTarget.scrollTop < 40) client.readOlder(card.id); }}>
         {card ? <P.Timeline root={{ "data-timeline": card.id }}>
+          {thread.hasOlder && <div {...(btn("Load earlier messages", () => client.readOlder(card.id)) as object)} data-load-older=""
+            style={{ color: "#5D5D5DD9", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12.5, padding: "0 0 12px", textAlign: "center" }}>Load earlier messages</div>}
           <TimelineEntries entries={thread.entries} activeRunStartedAt={thread.activeRunStartedAt} nowIso={now().toISOString()} />
+          {thread.openRequests.filter((rq) => !hidden.has(rq.requestId)).map((rq) => (
+            <div key={rq.requestId} style={{ paddingBottom: 12 }}><RequestCard threadId={card.id} request={rq} onHide={() => setHidden((h) => new Set(h).add(rq.requestId))} /></div>
+          ))}
+          {outbox.map((o) => (
+            <div key={o.clientRequestId} data-outbox={o.status}>
+              <P.TlUser text={o.text} />
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: -12, paddingBottom: 12, color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12, lineHeight: "16px" }}>
+                <span>{o.status === "unconfirmed" ? "Not confirmed" : o.status === "failed" ? "Not sent · " + (o.error ?? "") : snap.connection === "open" ? "Sent" : "Sent · starts when the host connects"}</span>
+                {(o.status === "unconfirmed" || o.status === "failed") && <>
+                  <span {...(btn("Resend", () => client.resend(o.clientRequestId)) as object)} style={{ textDecoration: "underline" }}>Resend</span>
+                  <span {...(btn("Delete", () => client.discard(o.clientRequestId)) as object)} style={{ textDecoration: "underline" }}>Delete</span>
+                </>}
+              </div>
+            </div>
+          ))}
         </P.Timeline> : null}
       </div>}
       composer={<>

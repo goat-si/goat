@@ -291,7 +291,7 @@ function UserBubble({ text }: { text: string }) {
   return <P.SentMessage text={text} face={null} status={null} actions={null} />;
 }
 
-function RequestCard({ threadId, request, onHide }: { threadId: string; request: RequestOpened; onHide: () => void }) {
+export function RequestCard({ threadId, request, onHide }: { threadId: string; request: RequestOpened; onHide: () => void }) {
   const client = useClient();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

@@ -14,7 +14,7 @@ export function Frame({ top, rail, sidebar, main }: { top: ReactNode; rail: Reac
         {top}
         <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minHeight: '0px' }}>
           {rail}
-          <div data-card="" style={{ backgroundColor: '#FFFFFF', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
+          <div data-card="" style={{ backgroundColor: '#FFFFFF', borderBottomLeftRadius: '14px', borderLeftColor: '#E2E2E2', borderLeftStyle: 'solid', borderLeftWidth: '0.5px', borderTopColor: '#E2E2E2', borderTopLeftRadius: '14px', borderTopStyle: 'solid', borderTopWidth: '0.5px', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexGrow: '1', minWidth: '0px', overflow: 'clip' }}>
             {sidebar}
             {main}
           </div>
@@ -1136,7 +1136,7 @@ export function ThreadFrame({ rail, main, header, lights, sidebar, toggle, menu,
         </div>
         {lights}
         <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', height: '900px', left: '44px', position: 'absolute', top: '0px', width: '256px' }}>
-          <div style={{ backgroundColor: '#F7F7F7', borderTopLeftRadius: '12px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
+          <div data-workspace-bg="" style={{ backgroundColor: '#F7F7F7', borderTopLeftRadius: '12px', bottom: '0px', boxSizing: 'border-box', left: '0px', position: 'absolute', right: '0px', top: '39px' }} />
           {sidebar}
         </div>
         <div data-overlay="" style={{ borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', borderTopColor: '#ECECEC', borderTopLeftRadius: '12px', borderTopStyle: 'solid', borderTopWidth: '1px', bottom: '0px', boxSizing: 'border-box', left: '44px', position: 'absolute', right: '0px', top: '39px' }} />

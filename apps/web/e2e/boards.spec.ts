@@ -158,3 +158,19 @@ test("25D-0 worker thread in the right panel: open, go to thread, back", async (
   await page.getByLabel("Go to thread").click();
   await expect(page.locator("[data-timeline=t-review-7712]")).toBeVisible();
 });
+
+test("thread view: reorder queued with arrow keys; edit state resets when switching threads; requests show", async ({ page }) => {
+  await open(page, "1OXX-1");
+  await page.getByLabel("Message", { exact: true }).fill("second queued");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.getByText("second queued")).toBeVisible();
+  const rows = page.getByLabel("Reorder queued message (arrow keys)");
+  await rows.first().focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("[data-timeline] ~ * , body").getByText(/regression test|second queued/).first()).toHaveText("second queued");
+  await page.getByLabel("Edit queued message").first().click();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("second queued");
+  await page.locator("[data-thread-row=t-auth]").click();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
+  await expect(page.getByText("Run the e2e suite?")).toBeVisible();
+});
