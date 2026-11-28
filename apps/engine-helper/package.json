@@ -1,0 +1,21 @@
+{
+  "name": "@goat2/engine-helper",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runs SDK-only GOAT engines (Cursor, OpenCode, Muse) behind one stdio JSONL shape for goat2-engine-sdk.",
+  "exports": { ".": "./src/main.ts" },
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@goat2/contracts-rs": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:"
+  }
+}
