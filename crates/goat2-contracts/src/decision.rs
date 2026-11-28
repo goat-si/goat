@@ -127,6 +127,8 @@ pub struct DecisionItem {
 pub struct DecisionRequestInput {
     pub title: String,
     pub context: String,
+    /// 1 to 20 options (v1); enforced in serde and the JSON Schema.
+    #[serde(deserialize_with = "decision_options")]
     #[schemars(length(min = 1, max = 20))]
     pub options: Vec<DecisionOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,7 +163,13 @@ pub struct DecisionAnswerInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub decision: Option<DecisionApprovalAnswer>,
-    #[schemars(length(min = 1, max = 2000))]
+    /// v1 `TrimmedNonEmptyString.check(isMaxLength(2000))`: trimmed of ECMAScript whitespace
+    /// (JavaScript `trim`), then 1 to 2000 UTF-16 code units (JavaScript `length`). Serde trims and
+    /// returns the trimmed reason. The schema describes that trimmed form: its `maxLength` counts
+    /// code points (the closest bound JSON Schema can express, looser only outside the BMP) and it
+    /// does not trim, so padded input near the limit passes only serde.
+    #[serde(deserialize_with = "decision_reason")]
+    #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
 }
 
@@ -170,6 +178,63 @@ pub struct DecisionAnswerInput {
 #[serde(rename_all = "camelCase")]
 pub struct DecisionEscalateInput {
     pub id: String,
-    #[schemars(length(min = 1, max = 2000))]
+    /// Trimmed, then 1 to 2000 UTF-16 code units (as `DecisionAnswerInput.reason`).
+    #[serde(deserialize_with = "decision_reason")]
+    #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
+}
+
+const DECISION_OPTIONS_MAX: usize = 20;
+/// v1 `maxLength(2000)` on a JavaScript string: UTF-16 code units.
+pub const DECISION_REASON_MAX_UTF16: usize = 2000;
+
+fn decision_options<'de, D>(deserializer: D) -> Result<Vec<DecisionOption>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let options = Vec::<DecisionOption>::deserialize(deserializer)?;
+    if options.is_empty() || options.len() > DECISION_OPTIONS_MAX {
+        return Err(serde::de::Error::custom(format!(
+            "a decision needs 1 to {DECISION_OPTIONS_MAX} options, got {}",
+            options.len()
+        )));
+    }
+    Ok(options)
+}
+
+fn decision_reason<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    // v1 trims first (JavaScript `trim`: ECMAScript whitespace, the set the schema's `\S` pattern
+    // uses), then counts UTF-16 code units (JavaScript `length`).
+    let trimmed = reason.trim_matches(is_ecmascript_whitespace);
+    let units = trimmed.encode_utf16().count();
+    if units == 0 || units > DECISION_REASON_MAX_UTF16 {
+        return Err(serde::de::Error::custom(format!(
+            "reason must be 1 to {DECISION_REASON_MAX_UTF16} UTF-16 code units and not blank"
+        )));
+    }
+    Ok(if trimmed.len() == reason.len() {
+        reason
+    } else {
+        trimmed.to_owned()
+    })
+}
+
+/// ECMAScript `\s` (WhiteSpace and LineTerminator, ECMA-262), so serde and JSON Schema `\S` agree.
+/// It differs from `char::is_whitespace`: it includes U+FEFF and excludes U+0085.
+fn is_ecmascript_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\u{9}' | '\u{a}' | '\u{b}' | '\u{c}' | '\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
 }

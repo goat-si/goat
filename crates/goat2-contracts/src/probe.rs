@@ -36,6 +36,25 @@ pub enum ServerProviderCli {
     None,
 }
 
+/// v1 `AcpRegistryUrlAuthAction` (`acpRegistry.ts`): the sign-in URL an ACP registry agent asked the
+/// person to open, answered by its elicitation id.
+///
+/// v1's length checks on these strings are not carried: the registry driver bounds what it reads,
+/// and serde and the JSON Schema accept the same values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRegistryUrlAuthAction {
+    pub elicitation_id: String,
+    pub url: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub expires_at: Option<String>,
+}
+
 /// v1 `ServerProviderAuth`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +69,10 @@ pub struct ServerProviderAuth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub email: Option<String>,
+    /// Pending ACP registry sign-in (v1 `action`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action: Option<AcpRegistryUrlAuthAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub can_logout: Option<bool>,

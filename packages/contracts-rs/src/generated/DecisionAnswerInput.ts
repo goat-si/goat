@@ -6,4 +6,12 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  * v1 `DecisionAnswerInput` (MCP `decision.answer`): `optionId` for a durable decision,
  * `answers` or `decision` for a projected request; `reason` is required.
  */
-export type DecisionAnswerInput = { id: string, optionId?: string, answers?: { [key in string]: JsonValue }, decision?: DecisionApprovalAnswer, reason: string, };
+export type DecisionAnswerInput = { id: string, optionId?: string, answers?: { [key in string]: JsonValue }, decision?: DecisionApprovalAnswer, 
+/**
+ * v1 `TrimmedNonEmptyString.check(isMaxLength(2000))`: trimmed of ECMAScript whitespace
+ * (JavaScript `trim`), then 1 to 2000 UTF-16 code units (JavaScript `length`). Serde trims and
+ * returns the trimmed reason. The schema describes that trimmed form: its `maxLength` counts
+ * code points (the closest bound JSON Schema can express, looser only outside the BMP) and it
+ * does not trim, so padded input near the limit passes only serde.
+ */
+reason: string, };

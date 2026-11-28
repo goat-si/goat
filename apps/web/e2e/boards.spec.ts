@@ -240,3 +240,25 @@ test("thread mode guards: one thread per submit, send while running, one answer 
   await expect(page.getByRole("alert")).toHaveCount(0);
   await expect(page.getByText("Run the e2e suite?")).toHaveCount(0);
 });
+
+test("a slow host still gets one start_thread and one resolve_request per action", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?fake=1NEM-1&latency=600");
+  await expect(page.getByText("Priority (2)")).toBeVisible({ timeout: 10000 });
+  const count = (type: string) => page.evaluate((t) => ((window as unknown as { __goat2Fake: { received: Array<{ type: string }> } }).__goat2Fake.received.filter((f) => f.type === t).length), type);
+  await page.getByLabel("New thread").click();
+  const box = page.getByLabel("Message", { exact: true });
+  await box.fill("Slow host thread");
+  await box.press("Enter");
+  await box.press("Enter");
+  await page.locator("[data-send]").click({ force: true });
+  await expect(page.locator("[data-timeline]")).toContainText("Slow host thread", { timeout: 10000 });
+  expect(await count("start_thread")).toBe(1);
+  await page.locator("[data-thread-row=t-auth]").click();
+  await expect(page.locator("[data-option=accept]")).toBeVisible({ timeout: 10000 });
+  await page.locator("[data-option=accept]").click();
+  await page.locator("[data-option=decline]").click({ force: true });
+  await page.locator("[data-option=accept]").click({ force: true });
+  await expect(page.getByText("Run the e2e suite?")).toHaveCount(0, { timeout: 10000 });
+  expect(await count("resolve_request")).toBe(1);
+});

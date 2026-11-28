@@ -83,18 +83,29 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
 ## Delivery (owner rule 2026-11-28: merge locally now, remote CI later)
 - Commit on `goat2_<lane>` and push it. When green locally, merge into `goat2` **locally**, one merger at a time:
   ```sh
-  until mkdir /tmp/goat2-merge.lock 2>/dev/null; do sleep 5; done
+  L=/tmp/goat2-merge.lock; ME="goat2_<lane> $$"
+  until mkdir "$L" 2>/dev/null; do sleep 5; done; echo "$ME" > "$L/owner"
+  release() { [ "$(cat "$L/owner" 2>/dev/null)" = "$ME" ] && rm -rf "$L"; }   # only ever remove YOUR lock
   cd ~/Developer/goat2
-  cleanup() { git merge --abort 2>/dev/null; git reset -q --hard origin/goat2; rmdir /tmp/goat2-merge.lock; }
+  cleanup() { git merge --abort 2>/dev/null; git reset -q --hard origin/goat2; release; }
   trap cleanup ERR                       # any failure: drop the local merge BEFORE releasing the lock
   git fetch -q origin goat2 && git reset -q --hard origin/goat2
   git merge --no-ff goat2_<lane> -m "merge goat2_<lane>: <what>"
   cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
   pnpm -r typecheck                      # the TS side must stay green too
   ! git grep -n -E '^(<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)( |$)' -- . ':!design'   # no conflict markers (diff3 too)
-  git push --force-with-lease origin goat2
-  trap - ERR; rmdir /tmp/goat2-merge.lock
+  git push origin goat2                  # plain push, NEVER force: a rejection means another lane (maybe on
+                                         # another machine) merged first -> cleanup, then redo merge + gates
+  trap - ERR; release
   ```
+- **Lanes run on several machines (owner rule 2026-11-28 ~23:45 KST):** this Mac was overloaded (load 57 on 18
+  cores), so lanes are spread over `mac-studio` and `macbookpro2` (both have `~/Developer/goat2`,
+  `~/Developer/goat2-design`, `~/Developer/goat` with v1 `916b5ccc`). Each machine merges in its own
+  `~/Developer/goat2` checkout under its own `/tmp/goat2-merge.lock`; across machines the **non-force push** is the
+  lock (GitHub accepts only a fast-forward of `goat2`). Never `--force`/`--force-with-lease` on `goat2`.
+  Heavy commands (cargo test --workspace, pnpm build, Playwright) run on the lane's own machine only.
+- The lock is a directory with an `owner` file. **Never `rmdir`/`rm` a lock you did not create** (a failed `mkdir`
+  means someone else holds it). Builds never run in `~/Developer/goat2`; lane G builds in its own detached worktree.
 - Never leave an unpushed merge in `~/Developer/goat2` when you release the lock (a later lane would push it
   under its own name). Informational steps go before taking the lock, never under the lock with `set -e`.
 - Merge only after a **fresh independent review passes** on the exact lane head (findings fixed or rebutted with

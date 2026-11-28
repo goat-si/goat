@@ -23,3 +23,6 @@ flowchart BT
 - `apps/desktop` knows the host only as a binary path + env (data dir, port, token).
 - Root `Cargo.toml`: no `[patch]`. Keep trees small; `libc` only under `cfg(unix)`.
 - One shared build cache (kache) for every worktree.
+
+- Part 2 (planned): `goat2-engine-sdk` -> `goat2-engine-api`, `goat2-contracts`; `goat2-host` -> `goat2-engine-sdk` (via the factory registry). Drivers never depend on `goat2-host`.
+- Part 2 (planned): `goat2-engine-acp` -> `goat2-engine-api`, `goat2-contracts`; it spawns `goat2-acp-mcp-bridge` as a separate binary (found beside the running exe or `$GOAT2_ACP_MCP_BRIDGE`), not a crate dependency. `goat2-acp-mcp-bridge` depends on no goat2-* crate.

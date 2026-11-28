@@ -159,3 +159,51 @@ fn max_safe_integer_survives_wire_round_trip() {
     assert!(validator("log_line").is_valid(&serialized));
     assert_eq!(serde_json::from_value::<LogLine>(serialized).unwrap(), line);
 }
+
+/// v1 limits a decision reason to 2000 UTF-16 code units (JavaScript `length`). Serde enforces
+/// exactly that; JSON Schema `maxLength` counts code points, so the schema bound is the same for
+/// BMP text and looser outside it.
+#[test]
+fn decision_reason_counts_utf16_units_like_v1() {
+    let answer =
+        |reason: String| serde_json::json!({"id": "decision:1", "optionId": "a", "reason": reason});
+    let escalate = |reason: String| serde_json::json!({"id": "decision:1", "reason": reason});
+    let emoji = |n: usize| "\u{1F600}".repeat(n);
+    let bmp = |n: usize| "é".repeat(n);
+    for (make, root) in [
+        (&answer as &dyn Fn(String) -> Value, "decision_answer_input"),
+        (&escalate, "decision_escalate_input"),
+    ] {
+        // At the limit: both accept.
+        for reason in [emoji(1000), bmp(DECISION_REASON_MAX_UTF16)] {
+            let value = make(reason);
+            assert!(decode(root, value.clone()).is_ok(), "{root}");
+            assert!(validator(root).is_valid(&value), "{root}");
+        }
+        // One BMP character over: both reject.
+        let value = make(bmp(DECISION_REASON_MAX_UTF16 + 1));
+        assert!(decode(root, value.clone()).is_err(), "{root}");
+        assert!(!validator(root).is_valid(&value), "{root}");
+        // 1001 emoji = 1001 code points but 2002 UTF-16 units: v1 and serde reject; the
+        // code-point schema bound cannot see it.
+        let value = make(emoji(1001));
+        assert!(decode(root, value.clone()).is_err(), "{root}");
+        assert!(validator(root).is_valid(&value), "{root}");
+        // v1 trims before counting: padding around a reason at the limit is accepted and
+        // removed (the untrimming schema sees 2002 characters).
+        let padded = format!(" {}\u{3000}", bmp(DECISION_REASON_MAX_UTF16));
+        let decoded = decode(root, make(padded)).unwrap();
+        assert_eq!(
+            decoded["reason"],
+            Value::from(bmp(DECISION_REASON_MAX_UTF16)),
+            "{root}"
+        );
+        assert!(
+            decode(
+                root,
+                make(format!(" {} ", bmp(DECISION_REASON_MAX_UTF16 + 1)))
+            )
+            .is_err()
+        );
+    }
+}

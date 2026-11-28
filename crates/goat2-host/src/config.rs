@@ -1,0 +1,80 @@
+//! Launch contract with lane G (owner 2026-11-28).
+//!
+//! Env: `GOAT2_DATA_DIR` (default `~/.goat2`), `GOAT2_HOST_PORT` (0 = pick a free port),
+//! `GOAT2_HOST_TOKEN` (UI token; when absent one is generated and written to `host.json` with
+//! mode 0600, for manual runs). `--data-dir` / `--port` are aliases for manual runs only.
+//! `GOAT2_ENGINE=fake` runs the scripted fake engine (UI work without Codex).
+
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineChoice {
+    Codex,
+    Fake,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostConfig {
+    pub data_dir: PathBuf,
+    pub port: u16,
+    /// Token from the environment; `None` = generate and write to `host.json`.
+    pub ui_token: Option<String>,
+    pub engine: EngineChoice,
+    /// Exit when stdin closes (the parent died). Off for tests.
+    pub exit_on_stdin_close: bool,
+}
+
+impl HostConfig {
+    pub fn from_env_and_args(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
+        let mut data_dir = std::env::var_os("GOAT2_DATA_DIR").map(PathBuf::from);
+        let mut port = match std::env::var("GOAT2_HOST_PORT") {
+            Ok(p) => Some(
+                p.parse::<u16>()
+                    .map_err(|e| format!("GOAT2_HOST_PORT: {e}"))?,
+            ),
+            Err(_) => None,
+        };
+        let ui_token = std::env::var("GOAT2_HOST_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty());
+        let engine = match std::env::var("GOAT2_ENGINE").as_deref() {
+            Ok("fake") => EngineChoice::Fake,
+            Ok("codex") | Err(_) => EngineChoice::Codex,
+            Ok(other) => return Err(format!("GOAT2_ENGINE: unknown engine {other}")),
+        };
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--data-dir" => {
+                    data_dir = Some(args.next().ok_or("--data-dir needs a value")?.into())
+                }
+                "--port" => {
+                    port = Some(
+                        args.next()
+                            .ok_or("--port needs a value")?
+                            .parse()
+                            .map_err(|e| format!("--port: {e}"))?,
+                    )
+                }
+                other => return Err(format!("unknown argument {other}")),
+            }
+        }
+        let data_dir = match data_dir {
+            Some(d) => d,
+            None => home_dir()
+                .ok_or("no HOME for the default data dir")?
+                .join(".goat2"),
+        };
+        Ok(Self {
+            data_dir,
+            port: port.unwrap_or(0),
+            ui_token,
+            engine,
+            exit_on_stdin_close: true,
+        })
+    }
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}

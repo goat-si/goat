@@ -20,6 +20,7 @@ use crate::fsutil::{
 use crate::index::{self, INDEX_FILE, Index, RebuildReason};
 use crate::line::{self, Parsed};
 use crate::log::{self, LOG_FILE, Repair, Tail, TailError};
+use crate::syncgroup::SyncGroup;
 
 const THREADS_DIR: &str = "threads";
 const CARD_FILE: &str = "card.json";
@@ -349,9 +350,12 @@ pub struct Store {
     /// Test hook: `delete_thread` waits on barriers 0,1 after taking the thread lock and on 2,3
     /// after removing the thread from the map, still holding the lock.
     delete_pause: Mutex<Option<[Arc<std::sync::Barrier>; 4]>>,
-    /// Ids with a `create_thread` in progress: a second create of the same id loses at once with
-    /// ThreadExists instead of racing the first one's creation intent and folder.
+    /// Ids with a `create_thread` in progress. A second create of the same id waits for the first
+    /// to finish, then sees the thread (ThreadExists) or, if the first failed, creates it itself.
     creating: Mutex<HashSet<ThreadId>>,
+    creating_done: std::sync::Condvar,
+    /// Log syncs share drive cache flushes across threads (Apple group commit).
+    sync_group: SyncGroup,
 }
 
 fn ms(since: Instant) -> f64 {
@@ -360,6 +364,37 @@ fn ms(since: Instant) -> f64 {
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// True when an item is done: a terminal status and no body still marked `streaming`.
+fn item_is_finished(item: &TurnItem) -> bool {
+    let streaming = match &item.body {
+        TurnItemBody::AssistantMessage { streaming, .. }
+        | TurnItemBody::Reasoning { streaming, .. }
+        | TurnItemBody::ProposedPlan { streaming, .. } => *streaming,
+        _ => false,
+    };
+    !streaming
+        && !matches!(
+            item.status,
+            TurnItemStatus::Idle
+                | TurnItemStatus::Pending
+                | TurnItemStatus::Running
+                | TurnItemStatus::Waiting
+        )
+}
+
+/// Holds one id in `Store::creating`; dropping it releases the id and wakes waiting creates.
+struct CreateReservation<'a> {
+    store: &'a Store,
+    id: ThreadId,
+}
+
+impl Drop for CreateReservation<'_> {
+    fn drop(&mut self) {
+        lock(&self.store.creating).remove(&self.id);
+        self.store.creating_done.notify_all();
+    }
 }
 
 fn tail_problem(err: TailError) -> std::result::Result<String, StoreError> {
@@ -460,6 +495,8 @@ impl Store {
             create_pause: Mutex::new(None),
             delete_pause: Mutex::new(None),
             creating: Mutex::new(HashSet::new()),
+            creating_done: std::sync::Condvar::new(),
+            sync_group: SyncGroup::default(),
         };
         let mut report = StartupReport {
             threads: 0,
@@ -625,7 +662,7 @@ impl Store {
         if self.faults().fail_log_syncs {
             return Err(injected("log sync"));
         }
-        file.sync_data()
+        self.sync_group.sync(file)
     }
 
     /// False when the last index rebuild could not index every folder: the card list is degraded
@@ -1337,12 +1374,25 @@ impl Store {
     ) -> Result<ThreadCard> {
         let id = id.unwrap_or_else(|| ThreadId::new(new_uuid()));
         validate_thread_id(id.as_str())?;
-        if !lock(&self.creating).insert(id.clone()) {
-            return Err(StoreError::ThreadExists(id.to_string()));
+        let _reservation = self.reserve_create(&id);
+        self.create_reserved(id, created, stop_after)
+    }
+
+    /// Wait until no other create of `id` runs, then hold the id until the guard drops (also on
+    /// panic).
+    fn reserve_create(&self, id: &ThreadId) -> CreateReservation<'_> {
+        let mut creating = lock(&self.creating);
+        while creating.contains(id) {
+            creating = self
+                .creating_done
+                .wait(creating)
+                .unwrap_or_else(|p| p.into_inner());
         }
-        let result = self.create_reserved(id.clone(), created, stop_after);
-        lock(&self.creating).remove(&id);
-        result
+        creating.insert(id.clone());
+        CreateReservation {
+            store: self,
+            id: id.clone(),
+        }
     }
 
     fn create_reserved(
@@ -1429,7 +1479,8 @@ impl Store {
 
     /// Append events to a thread. Assigns seq and time, validates, moves large item fields to
     /// blobs, folds, writes all lines with one write, adds a checkpoint after `run.finished`, and
-    /// syncs before returning when the batch contains a send boundary or mailbox event.
+    /// syncs every batch before anything is published or the call returns. `item.completed` must
+    /// carry a finished item (terminal status, not streaming).
     pub fn append(&self, id: &ThreadId, events: Vec<LogEvent>) -> Result<Appended> {
         let slot = self
             .slot(id)
@@ -1533,7 +1584,17 @@ impl Store {
             LogEvent::ChildReported(e) => {
                 e.summary = clamp_bytes(&e.summary, CHILD_SUMMARY_MAX_BYTES);
             }
-            LogEvent::ItemCompleted(item) => return blob::prepare_item(item),
+            LogEvent::ItemCompleted(item) => {
+                // Only finished items reach the log; streaming deltas go to subscribers from
+                // memory (storage.md rule 2), so a fast stream never turns into per-token syncs.
+                if !item_is_finished(&item.item) {
+                    return Err(StoreError::InvalidEvent(format!(
+                        "item.completed for item {} that is still streaming or not finished",
+                        item.item.id
+                    )));
+                }
+                return blob::prepare_item(item);
+            }
             _ => {}
         }
         Ok(None)
@@ -1612,7 +1673,7 @@ impl Store {
         // pass lines a power loss could drop: startup settlement would reuse those seqs under the
         // same epoch, and the reader would resume with no reset. A failure poisons the thread and
         // nothing is published.
-        if let Err(e) = self.write_log(slot, &bytes, true) {
+        if let Err(e) = self.write_log(slot, &bytes) {
             slot.health = Health::Poisoned(e.to_string());
             slot.writer = None;
             return Err(e);
@@ -1658,22 +1719,19 @@ impl Store {
         })
     }
 
-    fn write_log(&self, slot: &mut Slot, bytes: &[u8], sync: bool) -> Result<()> {
+    /// Append `bytes` and make them durable (group commit on Apple, see `syncgroup`).
+    fn write_log(&self, slot: &mut Slot, bytes: &[u8]) -> Result<()> {
         if slot.writer.is_none() {
             slot.writer = Some(log::open_append(&slot.log_path())?);
         }
         let writer = slot.writer.as_mut().expect("writer opened above");
         writer.write_all(bytes)?;
         slot.len += bytes.len() as u64;
-        if sync && self.opts.fsync {
-            if self.faults().fail_log_syncs {
-                return Err(StoreError::Io(injected("log sync")));
-            }
-            writer.sync_data()?;
-            slot.synced_len = slot.len;
-        } else if !self.opts.fsync {
-            slot.synced_len = slot.len;
+        if self.opts.fsync {
+            let writer = slot.writer.as_ref().expect("writer opened above");
+            self.sync_file(writer)?;
         }
+        slot.synced_len = slot.len;
         Ok(())
     }
 
@@ -2058,6 +2116,14 @@ impl Store {
         let slot = lock(&slot);
         if slot.is_deleted() {
             return Err(StoreError::ThreadMissing(id.to_string()));
+        }
+        // Raw access works on threads with unsupported events, but not past a failed sync: those
+        // bytes may not survive a power loss.
+        if let Health::Poisoned(detail) = &slot.health {
+            return Err(StoreError::Poisoned {
+                thread: slot.id.to_string(),
+                detail: detail.clone(),
+            });
         }
         let file = self.open_log_read(&slot.log_path())?;
         let len = file.metadata()?.len();

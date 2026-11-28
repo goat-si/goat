@@ -4,7 +4,11 @@ import type { DecisionOption } from "./DecisionOption.ts";
 /**
  * v1 `DecisionRequestInput` (MCP `decision.request`): 1 to 20 options with distinct ids.
  */
-export type DecisionRequestInput = { title: string, context: string, options: Array<DecisionOption>, recommended?: string, 
+export type DecisionRequestInput = { title: string, context: string, 
+/**
+ * 1 to 20 options (v1); enforced in serde and the JSON Schema.
+ */
+options: Array<DecisionOption>, recommended?: string, 
 /**
  * Expiry closes the request unanswered; it never approves.
  */
