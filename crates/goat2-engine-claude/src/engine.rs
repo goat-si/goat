@@ -88,7 +88,14 @@ pub struct ClaudeEngineOptions {
     /// received and before it is applied, so tests can hold a frame across a generation change.
     #[doc(hidden)]
     pub frame_hook: Option<FrameHook>,
+    /// Test seam: called with each line after it is written to stdin and before the write is
+    /// acknowledged, so tests can hold an acknowledgement while Claude's answer is read.
+    #[doc(hidden)]
+    pub write_hook: Option<WriteHook>,
 }
+
+/// See [ClaudeEngineOptions::write_hook].
+pub type WriteHook = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// See [ClaudeEngineOptions::frame_hook].
 pub type FrameHook = Arc<dyn Fn(u64, &str) + Send + Sync>;
@@ -105,6 +112,7 @@ impl Default for ClaudeEngineOptions {
             mcp_tool_timeout_ms: 65 * 60 * 1000,
             attachments: None,
             frame_hook: None,
+            write_hook: None,
         }
     }
 }
@@ -525,6 +533,12 @@ impl Inner {
                 .await;
                 match written {
                     Ok(()) => {
+                        if let Some(hook) = owner
+                            .upgrade()
+                            .and_then(|inner| inner.options.write_hook.clone())
+                        {
+                            hook(&line);
+                        }
                         if let Some(ack) = ack {
                             let _ = ack.send(Ok(()));
                         }

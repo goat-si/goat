@@ -1182,3 +1182,113 @@ async fn a_written_steer_without_a_verdict_at_exit_is_unknown() {
     );
     handle.session.shutdown().await;
 }
+
+/// Final review finding 1 (v1 `ClaudeAdapterV2.ts:8918-8926`,
+/// `ClaudeBackgroundWorkBlocksQueryReplacementError`): a settings change that needs a new process
+/// is refused while a background subagent runs, and the subagent goes on to finish.
+#[tokio::test]
+async fn a_reopen_is_refused_while_a_background_subagent_runs() {
+    let run = Run::new("wire/background_subagent_blocks_reopen.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    turn(
+        &handle,
+        "Research in the background.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    let reopen = handle
+        .session
+        .start_turn(input("Next."), &settings(MODEL, RuntimeMode::FullAccess))
+        .await;
+    match &reopen {
+        TurnStartResult::Declined { reason } => {
+            assert!(reason.contains("background agents"), "{reason}")
+        }
+        other => panic!("a reopen ran over a background subagent: {other:?}"),
+    }
+    let later = until(&mut handle, |e| {
+        matches!(e, EngineEvent::ItemCompleted { .. })
+    })
+    .await;
+    let Some(EngineEvent::ItemCompleted { item, .. }) = later.last() else {
+        unreachable!()
+    };
+    assert_eq!(item.status, TurnItemStatus::Completed);
+    assert_eq!(run.starts().len(), 1, "no new Claude process");
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Final review finding 2: Claude answers the turn before its write is acknowledged; the start
+/// still answers Accepted with the turn the TurnFinished names.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_result_before_the_start_ack_still_accepts_the_turn() {
+    let run = Run::new("wire/result_before_start_ack.ndjson");
+    let mut factory = run.factory();
+    let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+    let go_rx = std::sync::Mutex::new(go_rx);
+    factory.options.write_hook = Some(std::sync::Arc::new(move |line: &str| {
+        if line.contains("Fast.") {
+            let _ = go_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(10));
+        }
+    }));
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::FullAccess, None),
+    )
+    .await
+    .unwrap();
+    let EngineHandle {
+        session, events, ..
+    } = &mut handle;
+    let full_access = settings(MODEL, RuntimeMode::FullAccess);
+    let start = session.start_turn(input("Fast."), &full_access);
+    let finished_turn = async {
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+                .await
+                .expect("event within 10 s")
+                .expect("events open");
+            if let EngineEvent::TurnFinished { turn_id, .. } = event {
+                go_tx.send(()).unwrap();
+                return turn_id;
+            }
+        }
+    };
+    let (started, finished_id) = tokio::join!(start, finished_turn);
+    assert_eq!(
+        started,
+        TurnStartResult::Accepted {
+            turn_id: finished_id
+        }
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Final review finding 3: `set_config` cannot change effort, thinking or fast mode on a live
+/// process, so it says so instead of reporting success.
+#[tokio::test]
+async fn set_config_refuses_option_changes_it_cannot_apply() {
+    let run = Run::new("wire/result_before_start_ack.ndjson");
+    let handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let mut changed = settings(MODEL, RuntimeMode::FullAccess);
+    changed.model_selection.options = Some(vec![goat2_contracts::ProviderOptionSelection {
+        id: "effort".into(),
+        value: goat2_contracts::ProviderOptionSelectionValue::Text("high".into()),
+    }]);
+    let result = handle.session.set_config(&changed).await;
+    assert!(
+        matches!(result, Err(goat2_engine_api::EngineError::Unsupported(_))),
+        "{result:?}"
+    );
+    handle.session.shutdown().await;
+}
