@@ -125,6 +125,7 @@ pub fn request(id: &str, run: Option<&str>, kind: RequestKind) -> LogEvent {
         summary: format!("request {id}"),
         options: None,
         recommended: None,
+        context: None,
     })
 }
 
