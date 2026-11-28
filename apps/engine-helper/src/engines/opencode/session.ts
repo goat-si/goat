@@ -16,7 +16,7 @@ type ChildSnapshot = { id: string; permission: PermissionRuleset; metadata: Reco
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
 type SteerReceipt = { inputIds: string[]; accepted: boolean; ready: boolean; observed: boolean };
 type OrderedUsage = { usage: Usage; order: number };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; promptIds: Set<string>; usageOwners: Map<string, boolean>; usagePending: Map<string, Map<string, OrderedUsage>>; usagePartIds: Set<string>; usageOrder: number; lastUsage?: OrderedUsage; usageLookup?: boolean; usageLookupDone?: boolean; maxTokens?: number; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; reconciliationFailure?: string; heldOutcome?: TurnOutcome; steers: Map<string, SteerReceipt>; promptIds: Set<string>; usageOwners: Map<string, boolean>; usagePending: Map<string, Map<string, OrderedUsage>>; usagePartIds: Set<string>; usageOrder: number; lastUsage?: OrderedUsage; usageLookup?: object; usageLookupDone?: boolean; maxTokens?: number; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -172,9 +172,9 @@ export class OpenCodeSession implements EngineSession {
     if (usage && outcome.type === "done" && !turn.usageLookupDone) {
       turn.heldOutcome = outcome;
       if (!turn.usageLookup) {
-        turn.usageLookup = true;
+        const lookup = {}; turn.usageLookup = lookup;
         void this.contextLimit(turn).then((maxTokens) => {
-          if (this.active !== turn) return;
+          if (this.active !== turn || turn.usageLookup !== lookup) return;
           turn.usageLookupDone = true; if (maxTokens !== undefined) turn.maxTokens = maxTokens;
           const final = turn.heldOutcome ?? outcome; delete turn.heldOutcome; this.finish(turn, final);
         });
@@ -410,7 +410,14 @@ export class OpenCodeSession implements EngineSession {
       }
       case "session.status":
         if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
-        else { turn.admission.idle = false; await this.admission(turn, "observed"); }
+        else {
+          turn.admission.idle = false;
+          if (turn.usageLookup && !turn.interrupted) {
+            delete turn.usageLookup; delete turn.usageLookupDone; delete turn.maxTokens;
+            if (turn.heldOutcome?.type === "done") delete turn.heldOutcome;
+          }
+          await this.admission(turn, "observed");
+        }
         return;
       case "session.idle":
         if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
