@@ -9,6 +9,7 @@ pub mod attachments;
 pub mod capabilities;
 pub mod contract;
 pub mod engine;
+pub mod home_layout;
 pub mod items;
 pub mod probe;
 pub mod process;
