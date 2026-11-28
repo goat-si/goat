@@ -1,0 +1,114 @@
+{
+  "v": 1,
+  "name": "steer_refused_at_admission",
+  "summary": "steer refused at admission",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_output.ts:20",
+    "apps/server/src/orchestration-v2/ThreadManagementService.ts:1417-1449",
+    "apps/server/src/mcp/OrchestratorMcpService.ts:222-226"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/simple/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e",
+        "sha256": "c82c1fc6f08764155e16ea83b28e336bd4912349adf6d263b2654a115209183e"
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with the following text: fixture simple ok",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "idle",
+      "thread": "t1",
+      "until": "idle"
+    },
+    {
+      "do": "send",
+      "id": "send2",
+      "thread": "t1",
+      "input": "i2",
+      "text": "steer after completion",
+      "mode": "steer",
+      "run": "r1"
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "input.refused",
+      "run.finished",
+      "run.started"
+    ],
+    "threads": {
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with the following text: fixture simple ok"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "done"
+        },
+        {
+          "id": "e4",
+          "kind": "input.refused",
+          "thread": "t1",
+          "input": "i2",
+          "code": "thread_not_sendable"
+        }
+      ]
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}

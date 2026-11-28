@@ -1,0 +1,1153 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Engine": {
+      "enum": [
+        "codex"
+      ],
+      "type": "string"
+    },
+    "Expect": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "exhaustive": {
+          "items": {
+            "$ref": "#/definitions/TraceKind"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "happensBefore": {
+          "items": {
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "threads": {
+          "additionalProperties": {
+            "items": {
+              "$ref": "#/definitions/ExpectedEvent"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "complete",
+        "exhaustive",
+        "happensBefore",
+        "threads"
+      ],
+      "type": "object"
+    },
+    "ExpectedEvent": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "$ref": "#/definitions/Origin"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "input.accepted"
+              ],
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/definitions/SendMode"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "id",
+            "input",
+            "kind",
+            "mode",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "input.refused"
+              ],
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "id",
+            "input",
+            "kind",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "queue.changed"
+              ],
+              "type": "string"
+            },
+            "op": {
+              "$ref": "#/definitions/QueueOp"
+            },
+            "position": {
+              "format": "uint32",
+              "minimum": 0.0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "input",
+            "kind",
+            "op",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "inputs": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "enum": [
+                "run.started"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "inputs",
+            "kind",
+            "run",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "steer.applied"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "input",
+            "kind",
+            "run",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cause": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "run.finished"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/RunEnd"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "run",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "child.started"
+              ],
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "id",
+            "kind",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "child.reported"
+              ],
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "id",
+            "kind",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "child": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "parent.woken"
+              ],
+              "type": "string"
+            },
+            "run": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/definitions/WakeState"
+            },
+            "thread": {
+              "type": "string"
+            },
+            "wake": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "child",
+            "id",
+            "kind",
+            "state",
+            "thread",
+            "wake"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "call": {
+              "type": "string"
+            },
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "tool.result"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/definitions/ToolStatus"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "call",
+            "id",
+            "kind",
+            "path",
+            "status",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "host.restarted"
+              ],
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "kind",
+            "thread"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Origin": {
+      "enum": [
+        "user",
+        "child",
+        "system",
+        "agent"
+      ],
+      "type": "string"
+    },
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "commit": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "sourceSha256": {
+          "type": "string"
+        },
+        "transform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "commit",
+        "sha256",
+        "source",
+        "sourceSha256"
+      ],
+      "type": "object"
+    },
+    "QueueOp": {
+      "enum": [
+        "enqueued",
+        "edited",
+        "promoted",
+        "cancelled",
+        "reordered",
+        "held",
+        "released"
+      ],
+      "type": "string"
+    },
+    "RunEnd": {
+      "enum": [
+        "done",
+        "failed",
+        "interrupted",
+        "cancelled",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "SendMode": {
+      "enum": [
+        "start",
+        "steer",
+        "queue",
+        "interrupt"
+      ],
+      "type": "string"
+    },
+    "Step": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "send"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "mode": {
+              "$ref": "#/definitions/SendMode"
+            },
+            "run": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "input",
+            "mode",
+            "text",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "enum": [
+                    "await"
+                  ],
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "thread": {
+                  "type": "string"
+                },
+                "until": {
+                  "enum": [
+                    "run_status"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "do",
+                "id",
+                "run",
+                "status",
+                "thread",
+                "until"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "enum": [
+                    "await"
+                  ],
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "thread": {
+                  "type": "string"
+                },
+                "until": {
+                  "enum": [
+                    "idle"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "do",
+                "id",
+                "thread",
+                "until"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "do": {
+                  "enum": [
+                    "await"
+                  ],
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "run": {
+                  "type": "string"
+                },
+                "thread": {
+                  "type": "string"
+                },
+                "until": {
+                  "enum": [
+                    "steerable"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "do",
+                "id",
+                "run",
+                "thread",
+                "until"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "do": {
+              "enum": [
+                "await"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "interrupt"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "run": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "run",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "queue_edit"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "input",
+            "text",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "queue_reorder"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "order": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "order",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "queue_cancel"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "input",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "queue_promote"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "input": {
+              "type": "string"
+            },
+            "thread": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "input",
+            "thread"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "args": true,
+            "call": {
+              "type": "string"
+            },
+            "caller": {
+              "type": "string"
+            },
+            "do": {
+              "enum": [
+                "mcp"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "wait": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "args",
+            "call",
+            "caller",
+            "do",
+            "id",
+            "path",
+            "wait"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "call": {
+              "type": "string"
+            },
+            "do": {
+              "enum": [
+                "await_call"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "timeoutMs": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "call",
+            "do",
+            "id",
+            "timeoutMs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "restart_host"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "advance_clock"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ms": {
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "do": {
+              "enum": [
+                "release_gate"
+              ],
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "do",
+            "id",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Stream": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "$ref": "#/definitions/Engine"
+        },
+        "provenance": {
+          "$ref": "#/definitions/Provenance"
+        },
+        "transcript": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "engine",
+        "provenance",
+        "transcript"
+      ],
+      "type": "object"
+    },
+    "SupportStatus": {
+      "enum": [
+        "supported",
+        "unsupported",
+        "pending"
+      ],
+      "type": "string"
+    },
+    "TargetSupport": {
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expect": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Expect"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/SupportStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "ThreadDecl": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/ThreadKind"
+        },
+        "parent": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stream": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "stream"
+      ],
+      "type": "object"
+    },
+    "ThreadKind": {
+      "enum": [
+        "user",
+        "bot",
+        "worker"
+      ],
+      "type": "string"
+    },
+    "ToolStatus": {
+      "enum": [
+        "ok",
+        "error",
+        "needs_human"
+      ],
+      "type": "string"
+    },
+    "TraceKind": {
+      "enum": [
+        "input.accepted",
+        "input.refused",
+        "queue.changed",
+        "run.started",
+        "steer.applied",
+        "run.finished",
+        "child.started",
+        "child.reported",
+        "parent.woken",
+        "tool.result",
+        "host.restarted"
+      ],
+      "type": "string"
+    },
+    "WakeState": {
+      "enum": [
+        "queued",
+        "started",
+        "steered",
+        "cancelled"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "expect": {
+      "$ref": "#/definitions/Expect"
+    },
+    "name": {
+      "type": "string"
+    },
+    "spec": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "steps": {
+      "items": {
+        "$ref": "#/definitions/Step"
+      },
+      "type": "array"
+    },
+    "streams": {
+      "additionalProperties": {
+        "$ref": "#/definitions/Stream"
+      },
+      "type": "object"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "targets": {
+      "additionalProperties": {
+        "$ref": "#/definitions/TargetSupport"
+      },
+      "type": "object"
+    },
+    "threads": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ThreadDecl"
+      },
+      "type": "object"
+    },
+    "v": {
+      "format": "uint32",
+      "maximum": 1.0,
+      "minimum": 1.0,
+      "type": "integer"
+    },
+    "v1Refs": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "expect",
+    "name",
+    "spec",
+    "steps",
+    "streams",
+    "summary",
+    "targets",
+    "threads",
+    "v",
+    "v1Refs"
+  ],
+  "title": "Scenario",
+  "type": "object"
+}

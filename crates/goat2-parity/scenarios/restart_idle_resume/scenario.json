@@ -1,0 +1,138 @@
+{
+  "v": 1,
+  "name": "restart_idle_resume",
+  "summary": "restart idle resume",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/input.ts:1"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/provider_thread_resume/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "95ccd5737d1d7b32e1649ef184586ee6f4b8223435e609647a99a0d34c6b494f",
+        "sha256": "95ccd5737d1d7b32e1649ef184586ee6f4b8223435e609647a99a0d34c6b494f"
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with exactly: provider thread resume fixture first turn complete",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "idle",
+      "thread": "t1",
+      "until": "idle"
+    },
+    {
+      "do": "restart_host",
+      "id": "restart"
+    },
+    {
+      "do": "send",
+      "id": "send2",
+      "thread": "t1",
+      "input": "i2",
+      "text": "Using the conversation history available in this resumed thread, first repeat the exact final answer you gave in the previous turn. Then on a new line write exactly: provider thread resume fixture second turn complete",
+      "mode": "start"
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "host.restarted",
+      "input.accepted",
+      "run.finished",
+      "run.started"
+    ],
+    "threads": {
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with exactly: provider thread resume fixture first turn complete"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "done"
+        },
+        {
+          "id": "e4",
+          "kind": "host.restarted",
+          "thread": "t1"
+        },
+        {
+          "id": "e5",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i2",
+          "from": "user",
+          "mode": "start",
+          "text": "Using the conversation history available in this resumed thread, first repeat the exact final answer you gave in the previous turn. Then on a new line write exactly: provider thread resume fixture second turn complete"
+        },
+        {
+          "id": "e6",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r2",
+          "inputs": [
+            "i2"
+          ]
+        },
+        {
+          "id": "e7",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r2",
+          "status": "done"
+        }
+      ]
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}

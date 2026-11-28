@@ -51,7 +51,7 @@ may emit the event.
 |---|---|---|---|
 | input.accepted | thread, input, from, mode, text? | successful dispatch receipt + message id | log `input.accepted` |
 | input.refused | thread, input, code | command / MCP error at the call | `command_result` error or MCP envelope error |
-| queue.changed | thread, input, op, text? | run/message queue field changes | log `input.changed` (owner 2026-11-28; lane C pending) |
+| queue.changed | thread, input, op, text?, position? | run/message queue field changes | log `input.changed` for edited / reordered / promoted / cancelled (`goat2/crates/goat2-contracts/src/log.rs:234-255`); enqueued has no GOAT 2 evidence and stays pending |
 | run.started / run.finished | thread, run, inputs / status, cause? | run status transitions | log `run.started` / `run.finished` |
 | steer.applied | thread, run, input | provider acceptance of the steer, proven against the decline case | log `input.delivered {as: steer, outcome: accepted}` |
 | child.started / child.reported | thread, child, status | subagent / delegated task records | log `child.started` / `child.reported` |

@@ -1,0 +1,137 @@
+{
+  "v": 1,
+  "name": "queue_cancel_while_active",
+  "summary": "queue cancel while active",
+  "spec": [
+    "docs/parity/README.md"
+  ],
+  "v1Refs": [
+    "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/codex_transcript.ndjson:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/input.ts:1",
+    "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/codex_output.ts:20",
+    "apps/server/src/orchestration-v2/Orchestrator.ts:8811-8856"
+  ],
+  "streams": {
+    "codex": {
+      "engine": "codex",
+      "transcript": "transcripts/codex.ndjson",
+      "provenance": {
+        "source": "apps/server/src/orchestration-v2/testkit/fixtures/queued_turn/codex_transcript.ndjson",
+        "commit": "916b5ccc1b2b6d4ecd991ab1573172bab8fb1cc4",
+        "sourceSha256": "dc8e1eec4ece4b46d44ba354de926febf3daa6e837dc4d599b11892d6668ebad",
+        "sha256": "c6c52e2a3d2690c743449b2d20744215ad7e997fb3acb3e430a0840abc49437b",
+        "transform": "Keep lines 1-32 and append successful runtime_exit."
+      }
+    }
+  },
+  "threads": {
+    "t1": {
+      "kind": "user",
+      "stream": "codex"
+    }
+  },
+  "steps": [
+    {
+      "do": "send",
+      "id": "send1",
+      "thread": "t1",
+      "input": "i1",
+      "text": "Respond with exactly: first fixture turn complete",
+      "mode": "start"
+    },
+    {
+      "do": "await",
+      "id": "running",
+      "thread": "t1",
+      "until": "run_status",
+      "run": "r1",
+      "status": "running"
+    },
+    {
+      "do": "send",
+      "id": "send2",
+      "thread": "t1",
+      "input": "i2",
+      "text": "Respond with exactly: second fixture turn complete",
+      "mode": "queue"
+    },
+    {
+      "do": "queue_cancel",
+      "id": "cancel",
+      "thread": "t1",
+      "input": "i2"
+    }
+  ],
+  "expect": {
+    "complete": true,
+    "exhaustive": [
+      "input.accepted",
+      "queue.changed",
+      "run.finished",
+      "run.started"
+    ],
+    "threads": {
+      "t1": [
+        {
+          "id": "e1",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i1",
+          "from": "user",
+          "mode": "start",
+          "text": "Respond with exactly: first fixture turn complete"
+        },
+        {
+          "id": "e2",
+          "kind": "run.started",
+          "thread": "t1",
+          "run": "r1",
+          "inputs": [
+            "i1"
+          ]
+        },
+        {
+          "id": "e3",
+          "kind": "input.accepted",
+          "thread": "t1",
+          "input": "i2",
+          "from": "user",
+          "mode": "queue",
+          "text": "Respond with exactly: second fixture turn complete"
+        },
+        {
+          "id": "e4",
+          "kind": "queue.changed",
+          "thread": "t1",
+          "input": "i2",
+          "op": "enqueued"
+        },
+        {
+          "id": "e5",
+          "kind": "queue.changed",
+          "thread": "t1",
+          "input": "i2",
+          "op": "cancelled"
+        },
+        {
+          "id": "e6",
+          "kind": "run.finished",
+          "thread": "t1",
+          "run": "r1",
+          "status": "done"
+        }
+      ]
+    },
+    "happensBefore": []
+  },
+  "targets": {
+    "v1": {
+      "status": "pending",
+      "reason": "awaiting wp3 driver evidence"
+    },
+    "goat2": {
+      "status": "pending",
+      "reason": "no host yet"
+    }
+  }
+}
