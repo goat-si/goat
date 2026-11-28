@@ -106,6 +106,17 @@ edge `inset 0 0 0 1px` ink at 7%, lift `0 10px 32px` ink at 8%. Content (rows, b
 decision card) stays on opaque white cards. Muse: the home starts with a bot strip where the
 avatar ring carries state (red = needs you, dashed ink = working, solid ink = idle / GOAT).
 
+Pinned bots (2026-11-28, from Grok Bot's "Pinned Bots", seen in 0.75.5 and 1.3.0): desktop shows
+pinned bots as face tiles under the search field (77x80, three per row) and drops them from the
+flat Bots list; dragging a row onto the tiles pins it, dragging a tile back or Unpin removes it,
+tiles reorder by drag. Empty state appears only while dragging: "Drag here to pin". The collapsed
+rail shows GOAT, then pinned faces. Mobile (Muse-style): the bottom tab bar becomes one floating
+glass dock (same glass recipe) inset 12px: pinned faces on the left, a hairline divider, then the
+tab icons. Long-press a bot row to lift it, then drag to the dock: the list dims, the dock drops
+its tabs and shows a dashed slot with "Drop to pin". Long-press without dragging opens the context
+menu with Pin / Unpin. Badges only: blue dot (unread / waiting on you), small ring (working).
+Boards: "봇 홈 — 봇 고정 (드래그해서 핀)", "모바일 iOS — 봇 고정 (꾹 눌러 독으로)".
+
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
 
