@@ -181,6 +181,8 @@ pub struct LaunchFolds {
     pub append_system_prompt: Vec<String>,
     /// `--permission-mode` / `--dangerously-skip-permissions` from the launch arguments.
     pub permission_mode: Option<PermissionMode>,
+    /// The `--settings` object from the launch arguments (v1 `launchArgSettings`).
+    pub settings: Map<String, Value>,
 }
 
 /// v1 `CLAUDE_HOST_SESSION_VARIABLES` (`ClaudeHome.ts:49-63`) plus the SDK's removals.
@@ -329,6 +331,7 @@ pub fn build_launch(
     folds.append_system_prompt.retain(|text| !text.is_empty());
 
     let permission_mode = folds.permission_mode.unwrap_or(request.permission_mode);
+    folds.settings = settings.clone();
     let model = request.model;
     for (key, value) in &model.settings {
         settings.insert(key.clone(), json!(value));

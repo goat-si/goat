@@ -43,6 +43,7 @@ pub enum ThreadLive {
     Text {
         item_id: ItemId,
         offset: u64,
+        stream_kind: goat2_contracts::ContentStreamKind,
         text: String,
     },
     /// The item finished (its `item.completed` line follows or preceded); drop its buffer.
@@ -60,6 +61,7 @@ pub enum ThreadLive {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamingItem {
     pub item_id: ItemId,
+    pub stream_kind: goat2_contracts::ContentStreamKind,
     pub text: String,
 }
 
@@ -83,6 +85,11 @@ pub trait WsHost: Send + Sync + 'static {
     /// Run one UI command (a [Command] frame for which [is_command] is true). Deduped by
     /// `clientRequestId`; the caller answers with the current frame's `reqId`.
     async fn command(&self, command: Command) -> CommandReply;
+    /// The `providers` list: the current value (`None` until the first probes finished) and
+    /// every change.
+    fn watch_providers(&self) -> tokio::sync::watch::Receiver<crate::providers::ProviderList> {
+        tokio::sync::watch::channel(None).1
+    }
     /// Record how long the host itself was stalled, so silent-connection checks can ignore it.
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {
         let _ = since;

@@ -22,8 +22,8 @@ use goat2_contracts::limits::{
     MAX_CHILDREN_PER_BOT, MAX_CONCURRENT_RUNS, MAX_CONCURRENT_STARTS,
 };
 use goat2_contracts::{
-    BotId, BotProfile, ChildResultStatus, ItemId, LogEvent, NotifyKind, RequestId, RunId,
-    ThreadCursor, ThreadId, ThreadKind, text::utf16_len,
+    BotId, BotProfile, ChildResultStatus, ContentStreamKind, ItemId, LogEvent, NotifyKind,
+    RequestId, RunId, ThreadCursor, ThreadId, ThreadKind, text::utf16_len,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 
@@ -52,6 +52,9 @@ pub struct HostOptions {
     pub memory_sample: Duration,
     /// Longest `thread.wait` / `thread.start {mode: wait}` block.
     pub max_wait: Duration,
+    /// How long a background subagent that reported its end keeps its origin turn and the
+    /// engine's idle protection while its finished item is still on the way.
+    pub subagent_item_grace: Duration,
 }
 
 impl HostOptions {
@@ -75,6 +78,7 @@ impl HostOptions {
             memory_limit_bytes: ENGINE_GROUP_MEMORY_LIMIT_BYTES,
             memory_sample: Duration::from_secs(ENGINE_MEMORY_SAMPLE_SECS),
             max_wait: Duration::from_secs(60),
+            subagent_item_grace: Duration::from_secs(60),
         }
     }
 }
@@ -124,6 +128,9 @@ impl std::fmt::Debug for SigninLink {
     }
 }
 
+/// Last sequence number given out, and each open link with the number it was set with.
+type SigninLinks = (u64, HashMap<RequestId, (u64, SigninLink)>);
+
 /// A finished child run, as delivered to waiters and the parent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildOutcome {
@@ -145,13 +152,12 @@ pub type LiveSession = (u64, Arc<dyn EngineSession>);
 
 struct LiveThread {
     tx: broadcast::Sender<ThreadLive>,
-    streaming: Vec<(ItemId, String)>,
+    streaming: Vec<(ItemId, ContentStreamKind, String)>,
 }
 
 pub(crate) struct Inner {
     pub opts: HostOptions,
     pub store: Arc<dyn ThreadStore>,
-    pub engine: Arc<dyn EngineFactory>,
     pub sched: Arc<Scheduler>,
     pub stall: StallRecorder,
     pub mcp_url: OnceLock<String>,
@@ -175,7 +181,10 @@ pub(crate) struct Inner {
     pub command_lock: tokio::sync::Mutex<()>,
     pub memory_warned: Mutex<HashSet<(ThreadId, u64)>>,
     /// Sign-in links of open `signin` requests, by request. Memory only (see [SigninLink]).
-    signin_links: Mutex<HashMap<RequestId, SigninLink>>,
+    /// With the order each link was set in (a refreshed link counts as new).
+    signin_links: Mutex<SigninLinks>,
+    /// Provider instances, probes and the `providers` list (docs/part2/provider-wire.md).
+    pub providers: crate::providers::Providers,
     engine_groups_hook: Mutex<EngineGroupsNotifier>,
     /// Actor and background tasks, aborted on shutdown so the host (and the store lock) drops.
     tasks: Mutex<Vec<tokio::task::AbortHandle>>,
@@ -197,21 +206,39 @@ pub struct Host {
 }
 
 impl Host {
-    /// Build the host and settle the previous generation's runs (PRD runtime.md "재시작").
-    /// Call [Host::set_mcp_url] before any engine starts, then [Host::start_background].
+    /// Build the host with one engine factory, registered as the `codex` driver (tests, and the
+    /// host until more drivers are built in). See [Host::open_with_factories].
     pub fn open(
         opts: HostOptions,
         store: Arc<dyn ThreadStore>,
         engine: Arc<dyn EngineFactory>,
         stall: StallRecorder,
     ) -> StoreResult<Self> {
+        Self::open_with_factories(
+            opts,
+            store,
+            std::collections::BTreeMap::from([("codex".to_owned(), engine)]),
+            stall,
+        )
+    }
+
+    /// Build the host and settle the previous generation's runs (PRD runtime.md "재시작").
+    /// `factories`: driver kind (v1 `ProviderDriverKind` slug) -> its factory; a thread's
+    /// engine starts through the factory of its provider instance's driver.
+    /// Call [Host::set_mcp_url] before any engine starts, then [Host::start_background].
+    pub fn open_with_factories(
+        opts: HostOptions,
+        store: Arc<dyn ThreadStore>,
+        factories: std::collections::BTreeMap<String, Arc<dyn EngineFactory>>,
+        stall: StallRecorder,
+    ) -> StoreResult<Self> {
         let (cards_tx, _) = broadcast::channel(1024);
+        let providers = crate::providers::Providers::open(&opts.data_dir, factories);
         let host = Self {
             inner: Arc::new(Inner {
                 sched: Scheduler::new(opts.max_runs, opts.max_starts),
                 opts,
                 store,
-                engine,
                 stall,
                 mcp_url: OnceLock::new(),
                 cards_tx,
@@ -228,7 +255,8 @@ impl Host {
                 dedupe: Mutex::new(HashMap::new()),
                 command_lock: tokio::sync::Mutex::new(()),
                 memory_warned: Mutex::new(HashSet::new()),
-                signin_links: Mutex::new(HashMap::new()),
+                signin_links: Mutex::new((0, HashMap::new())),
+                providers,
                 engine_groups_hook: Mutex::new(EngineGroupsNotifier { hook: None, seq: 0 }),
                 tasks: Mutex::new(Vec::new()),
             }),
@@ -281,6 +309,9 @@ impl Host {
         commands::load_bots(self)?;
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
+        // Providers are probed on demand (first subscription or an explicit refresh), never at
+        // startup: a probe runs the provider's CLI, which a host that nobody shows providers to
+        // (tests, parity replays) must not do.
         self.inner.stall.note(
             "startup",
             serde_json::json!({ "ms": started.elapsed().as_millis() as u64, "threads": self.inner.store.cards().len() }),
@@ -346,6 +377,21 @@ impl Host {
         self.actor(id).is_some_and(|tx| tx.send(msg).is_ok())
     }
 
+    /// Subscribe to the providers list; the first subscription starts the initial probes.
+    pub(crate) fn providers_subscribe(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::providers::ProviderList> {
+        let rx = self.inner.providers.subscribe();
+        if self.inner.providers.claim_initial_probe() {
+            let host = self.clone();
+            let probes = tokio::spawn(async move {
+                let _ = host.inner.providers.refresh(&host, None).await;
+            });
+            self.track(&probes);
+        }
+        rx
+    }
+
     /// Append and broadcast. Every log write goes through here.
     pub(crate) fn append(&self, id: &ThreadId, events: Vec<LogEvent>) -> StoreResult<Appended> {
         self.append_with(id, events, false)
@@ -386,23 +432,41 @@ impl Host {
     }
 
     /// Streaming text for an unfinished item (never stored).
-    pub(crate) fn stream_text(&self, id: &ThreadId, item_id: &ItemId, text: &str) {
+    pub(crate) fn stream_text(
+        &self,
+        id: &ThreadId,
+        item_id: &ItemId,
+        kind: ContentStreamKind,
+        text: &str,
+    ) {
         let mut live = self.inner.live.lock().expect("live");
         let entry = live.entry(id.clone()).or_insert_with(new_live);
-        let offset = match entry.streaming.iter_mut().find(|(i, _)| i == item_id) {
-            Some((_, buf)) => {
+        let (offset, stream_kind) = match entry.streaming.iter_mut().find(|(i, _, _)| i == item_id)
+        {
+            Some((_, first_kind, buf)) => {
+                if *first_kind != kind {
+                    tracing::debug!(
+                        ?item_id,
+                        ?first_kind,
+                        ?kind,
+                        "stream kind changed; retaining first kind"
+                    );
+                }
                 let offset = utf16_len(buf);
                 buf.push_str(text);
-                offset
+                (offset, *first_kind)
             }
             None => {
-                entry.streaming.push((item_id.clone(), text.to_owned()));
-                0
+                entry
+                    .streaming
+                    .push((item_id.clone(), kind, text.to_owned()));
+                (0, kind)
             }
         };
         let _ = entry.tx.send(ThreadLive::Text {
             item_id: item_id.clone(),
             offset,
+            stream_kind,
             text: text.to_owned(),
         });
     }
@@ -423,7 +487,7 @@ impl Host {
     pub(crate) fn stream_done(&self, id: &ThreadId, item_id: &ItemId) {
         let mut live = self.inner.live.lock().expect("live");
         if let Some(entry) = live.get_mut(id) {
-            entry.streaming.retain(|(i, _)| i != item_id);
+            entry.streaming.retain(|(i, _, _)| i != item_id);
             let _ = entry.tx.send(ThreadLive::TextDone {
                 item_id: item_id.clone(),
             });
@@ -433,7 +497,7 @@ impl Host {
     pub(crate) fn stream_clear(&self, id: &ThreadId) {
         let mut live = self.inner.live.lock().expect("live");
         if let Some(entry) = live.get_mut(id) {
-            for (item_id, _) in std::mem::take(&mut entry.streaming) {
+            for (item_id, _, _) in std::mem::take(&mut entry.streaming) {
                 let _ = entry.tx.send(ThreadLive::TextDone { item_id });
             }
         }
@@ -448,7 +512,8 @@ impl Host {
         let snapshot = entry
             .streaming
             .iter()
-            .map(|(item_id, text)| StreamingItem {
+            .map(|(item_id, stream_kind, text)| StreamingItem {
+                stream_kind: *stream_kind,
                 item_id: item_id.clone(),
                 text: text.clone(),
             })
@@ -465,28 +530,36 @@ impl Host {
         self.inner.runtime.lock().expect("runtime").get(id).cloned()
     }
 
-    /// Sign-in links of the open `signin` requests, oldest request id first.
+    /// Sign-in links of the open `signin` requests, oldest first (the order they were set in).
     pub fn signin_links(&self) -> Vec<SigninLink> {
         let links = self.inner.signin_links.lock().expect("signin links");
-        let mut out: Vec<SigninLink> = links.values().cloned().collect();
-        out.sort_by(|a, b| a.request_id.as_str().cmp(b.request_id.as_str()));
-        out
+        let mut out: Vec<&(u64, SigninLink)> = links.1.values().collect();
+        out.sort_by_key(|(seq, _)| *seq);
+        out.into_iter().map(|(_, link)| link.clone()).collect()
     }
 
     pub(crate) fn set_signin_link(&self, link: SigninLink) {
-        self.inner
-            .signin_links
-            .lock()
-            .expect("signin links")
-            .insert(link.request_id.clone(), link);
+        {
+            let mut links = self.inner.signin_links.lock().expect("signin links");
+            links.0 += 1;
+            let seq = links.0;
+            links.1.insert(link.request_id.clone(), (seq, link));
+        }
+        self.inner.providers.publish(self);
     }
 
     pub(crate) fn forget_signin_link(&self, request_id: &RequestId) {
-        self.inner
+        let removed = self
+            .inner
             .signin_links
             .lock()
             .expect("signin links")
-            .remove(request_id);
+            .1
+            .remove(request_id)
+            .is_some();
+        if removed {
+            self.inner.providers.publish(self);
+        }
     }
 
     /// Busy children of a parent (the per-bot child cap counts these).

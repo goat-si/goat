@@ -305,7 +305,8 @@ async fn refused_turn_start_fails_closed_and_holds_the_queue() {
 
 #[tokio::test]
 async fn interrupt_goes_first_and_collect_merges() {
-    let t = setup(manual()).await;
+    // A collect window long enough that both collect inputs land in it on a loaded machine.
+    let t = setup_with(manual(), |o| o.collect_window = Duration::from_secs(1)).await;
     let id = start_user_thread(&t, "int", Some("long job")).await;
     eventually("running", || running(&t, &id)).await;
     let queued = send(&t, &id, "int-f", "later", InputMode::Followup)
@@ -1937,11 +1938,10 @@ async fn part2_fields_carry_what_the_host_knows() {
     // A Part 2 command whose module has not landed is refused as not available.
     let refused = t
         .host
-        .command(ClientFrame::RefreshProviders {
+        .command(ClientFrame::ProviderInstallStart {
             req_id: "r".into(),
-            client_request_id: "p2-refresh".into(),
-            instance_id: None,
-            refresh_models: None,
+            client_request_id: "p2-install".into(),
+            instance_id: "codex".into(),
         })
         .await
         .unwrap_err();
@@ -1949,6 +1949,1282 @@ async fn part2_fields_carry_what_the_host_knows() {
     assert_eq!(
         refused.code,
         goat2_contracts::AgentSurfaceErrorCode::Unavailable
+    );
+}
+
+#[tokio::test]
+async fn a_late_item_goes_to_its_origin_run_and_never_to_another() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late", Some("one")).await;
+    eventually("first turn", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.finish_turn(&id, "first answer");
+    eventually("first run finished", || count(&t, &id, "run.finished") == 1).await;
+    send(&t, &id, "late-two", "two", InputMode::Followup).await;
+    eventually("second turn", || running(&t, &id)).await;
+    let run2 = last_run(&t, &id).unwrap();
+    assert_ne!(run1, run2);
+    // While run 2 runs: an item for an unknown turn is dropped, the first turn's late items go
+    // to run 1 (a background subagent result and a late assistant message).
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    emit("no-such-turn", late_text(&id, "stray", "stray"));
+    emit(&first, subagent_item(&id, "sub-1", None));
+    emit(
+        &first,
+        late_text(&id, "late-text", "late answer from run 1"),
+    );
+    eventually("late items", || item_run(&t, &id, "late-text").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-1"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "late-text"), Some(run1.clone()));
+    assert_eq!(item_run(&t, &id, "stray"), None);
+    // Run 2 keeps its own answer.
+    t.fake.finish_turn(&id, "second answer");
+    eventually("second run finished", || {
+        count(&t, &id, "run.finished") == 2
+    })
+    .await;
+    let finished = events(&t, &id)
+        .into_iter()
+        .filter_map(|e| match e {
+            LogEvent::RunFinished(f) => Some(f.run_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        finished,
+        vec![run1.clone(), run2.clone()],
+        "no run reopened or finished twice"
+    );
+    // While idle: still filed on run 1.
+    emit(&first, subagent_item(&id, "sub-2", None));
+    eventually("idle late item", || item_run(&t, &id, "sub-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "sub-2"), Some(run1));
+    assert_eq!(count(&t, &id, "run.finished"), 2);
+}
+
+#[tokio::test]
+async fn a_running_background_subagent_keeps_the_engine_from_idle_stopping() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "bg", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(turn.clone()),
+            subagent_id: "bg-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while the subagent runs"
+    );
+    // The subagent finishes late: its item lands on the run, then the idle stop follows.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn,
+            item: Box::new(subagent_item(&id, "bg-1-item", Some("bg-1"))),
+            locator: None,
+        },
+    );
+    eventually("idle stop after the subagent", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-1-item").is_some());
+}
+
+async fn setup_with(script: FakeScript, tweak: impl FnOnce(&mut HostOptions)) -> T {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(script);
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let mut options = opts(&path, 1);
+    tweak(&mut options);
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(options, Arc::new(store), Arc::new(fake.clone()), stall).unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    T {
+        host,
+        fake,
+        _dir: Some(dir),
+    }
+}
+
+fn shut_down(t: &T, id: &ThreadId) -> bool {
+    t.fake
+        .calls()
+        .iter()
+        .any(|c| matches!(c, FakeCall::Shutdown { thread_id } if thread_id == id))
+}
+
+fn item_run(t: &T, id: &ThreadId, item_id: &str) -> Option<goat2_contracts::RunId> {
+    events(t, id).into_iter().find_map(|e| match e {
+        LogEvent::ItemCompleted(i) if i.item.id.as_str() == item_id => Some(i.run_id),
+        _ => None,
+    })
+}
+
+fn late_text(id: &ThreadId, item_id: &str, text: &str) -> goat2_contracts::TurnItem {
+    goat2_host::engine::fake::assistant_item(id, &item_id.into(), "late", text)
+}
+
+/// A finished engine-native subagent item (`subagent_id` defaults to the item id).
+fn subagent_item(
+    id: &ThreadId,
+    item_id: &str,
+    subagent_id: Option<&str>,
+) -> goat2_contracts::TurnItem {
+    let mut item = late_text(id, item_id, "");
+    item.body = goat2_contracts::TurnItemBody::Subagent {
+        subagent_id: subagent_id.unwrap_or(item_id).to_owned(),
+        origin: goat2_contracts::SubagentOrigin::ProviderNative,
+        driver: "claudeAgent".into(),
+        provider_instance_id: "claudeAgent".into(),
+        child_thread_id: None,
+        prompt: "look around".into(),
+        progress: None,
+        result: Some("found it".into()),
+    };
+    item
+}
+
+#[tokio::test]
+async fn a_steer_the_engine_cancels_is_requeued_as_a_followup() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-cancel", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "steer-cancel-more", "also this", InputMode::Steer).await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let accepted_before = count(&t, &id, "input.accepted");
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SteerUpdated {
+            turn_id: turn,
+            input_ids: vec![steered.as_str().into()],
+            status: goat2_host::engine::SteerStatus::Cancelled {
+                reason: "discarded".into(),
+            },
+        },
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered && q.mode == InputMode::Followup)
+    })
+    .await;
+    assert_eq!(
+        count(&t, &id, "input.accepted"),
+        accepted_before,
+        "no second message"
+    );
+    // The next turn carries it.
+    t.fake.finish_turn(&id, "done");
+    eventually("next turn with the input", || {
+        t.fake.calls().iter().any(|c| {
+            matches!(
+                c,
+                FakeCall::Turn { input_ids, .. } if input_ids.contains(&steered)
+            )
+        })
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_turn_with_a_live_subagent_outlives_the_turn_cap() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SubagentUpdate {
+            turn_id: Some(first.clone()),
+            subagent_id: "long-1".into(),
+            status: goat2_contracts::TurnItemStatus::Running,
+            title: None,
+            progress: None,
+        },
+    );
+    let mut second = None;
+    // 65 more turns: past the 64 turns the host remembers.
+    for n in 1..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(&t, &id, &format!("cap-{n}"), "next", InputMode::Followup).await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 1 {
+            second = t.fake.active_turn(&id);
+        }
+    }
+    let emit = |turn: &str, item: goat2_contracts::TurnItem| {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::ItemCompleted {
+                turn_id: turn.to_owned(),
+                item: Box::new(item),
+                locator: None,
+            },
+        )
+    };
+    // Turn 2 had no live subagent, so it was forgotten: its late item is dropped. Turn 1's
+    // subagent was still running, so its result lands on run 1.
+    emit(&second.unwrap(), late_text(&id, "late-2", "too late"));
+    emit(&first, subagent_item(&id, "long-1-item", Some("long-1")));
+    eventually("subagent result", || {
+        item_run(&t, &id, "long-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "long-1-item"), Some(run1));
+    assert_eq!(item_run(&t, &id, "late-2"), None);
+}
+
+#[tokio::test]
+async fn a_subagent_without_a_turn_keeps_its_origin_through_the_turn_cap() {
+    // Reported without a turn while turn 1 runs: turn 1 is its origin.
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-none", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-1", goat2_contracts::TurnItemStatus::Running),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(
+        &t,
+        &id,
+        &first,
+        subagent_item(&id, "anon-1-item", Some("anon-1")),
+    );
+    eventually("subagent result", || {
+        item_run(&t, &id, "anon-1-item").is_some()
+    })
+    .await;
+    assert_eq!(item_run(&t, &id, "anon-1-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn a_subagent_of_unknown_origin_stops_eviction_until_it_ends() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "cap-unknown", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    t.fake.finish_turn(&id, "ok");
+    eventually("idle", || count(&t, &id, "run.finished") == 1).await;
+    // No turn running: its origin is unknown, so no turn may be forgotten while it lives.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Running),
+    );
+    send(&t, &id, "cap-unknown-2", "turn 2", InputMode::Followup).await;
+    eventually("turn 2", || running(&t, &id)).await;
+    let (second, run2) = (t.fake.active_turn(&id).unwrap(), last_run(&t, &id).unwrap());
+    let mut third = None;
+    for n in 2..=65usize {
+        t.fake.finish_turn(&id, "ok");
+        eventually("run finished", || count(&t, &id, "run.finished") == n).await;
+        send(
+            &t,
+            &id,
+            &format!("cap-unknown-{}", n + 1),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(&t, &id)).await;
+        if n == 2 {
+            third = t.fake.active_turn(&id);
+        }
+    }
+    // 65 turns later turn 2 is still known.
+    emit_item(&t, &id, &second, late_text(&id, "late-2", "still known"));
+    eventually("turn 2 item", || item_run(&t, &id, "late-2").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-2"), Some(run2));
+    // Once it ends and its finished item is recorded, the next turn trims the record back under
+    // the cap: turn 3 is forgotten.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "anon-2", goat2_contracts::TurnItemStatus::Completed),
+    );
+    emit_item(
+        &t,
+        &id,
+        &second,
+        subagent_item(&id, "anon-2-item", Some("anon-2")),
+    );
+    eventually("anon-2 item", || item_run(&t, &id, "anon-2-item").is_some()).await;
+    more_turns(&t, &id, 65, 1).await;
+    emit_item(
+        &t,
+        &id,
+        &third.unwrap(),
+        late_text(&id, "late-3", "forgotten"),
+    );
+    // Barrier: an item of the running turn, handled after the one above.
+    let now = t.fake.active_turn(&id).unwrap();
+    emit_item(&t, &id, &now, late_text(&id, "barrier", "current"));
+    eventually("barrier", || item_run(&t, &id, "barrier").is_some()).await;
+    assert_eq!(item_run(&t, &id, "late-3"), None);
+}
+
+/// Finish the running turn and start `n` more; `done` runs have finished before.
+async fn more_turns(t: &T, id: &ThreadId, done: usize, n: usize) {
+    for k in 1..=n {
+        t.fake.finish_turn(id, "ok");
+        eventually("run finished", || count(t, id, "run.finished") == done + k).await;
+        send(
+            t,
+            id,
+            &format!("more-{}-{}", id.as_str(), done + k),
+            "next",
+            InputMode::Followup,
+        )
+        .await;
+        eventually("next turn", || running(t, id)).await;
+    }
+}
+
+fn subagent_update(
+    turn_id: Option<String>,
+    subagent_id: &str,
+    status: goat2_contracts::TurnItemStatus,
+) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SubagentUpdate {
+        turn_id,
+        subagent_id: subagent_id.into(),
+        status,
+        title: None,
+        progress: None,
+    }
+}
+
+fn emit_item(t: &T, id: &ThreadId, turn: &str, item: goat2_contracts::TurnItem) {
+    t.fake.emit(
+        id,
+        goat2_host::engine::EngineEvent::ItemCompleted {
+            turn_id: turn.to_owned(),
+            item: Box::new(item),
+            locator: None,
+        },
+    );
+}
+
+#[tokio::test]
+async fn an_ended_subagent_keeps_its_origin_until_its_item_arrives() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "ended-origin", Some("turn 1")).await;
+    eventually("turn 1", || running(&t, &id)).await;
+    let first = t.fake.active_turn(&id).unwrap();
+    let run1 = last_run(&t, &id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    // It reports its end; its finished item only comes after 65 more turns.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(first.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    more_turns(&t, &id, 0, 65).await;
+    emit_item(&t, &id, &first, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("subagent result", || item_run(&t, &id, "bg-item").is_some()).await;
+    assert_eq!(item_run(&t, &id, "bg-item"), Some(run1));
+}
+
+#[tokio::test]
+async fn an_ended_subagent_holds_the_idle_stop_until_its_item_arrives() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "ended-idle", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done for now");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "not idle-stopped while its item is on the way"
+    );
+    emit_item(&t, &id, &turn, subagent_item(&id, "bg-item", Some("bg")));
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+    assert!(item_run(&t, &id, "bg-item").is_some());
+}
+
+#[tokio::test]
+async fn an_ended_subagent_whose_item_never_comes_stops_holding_after_the_grace() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "ended-grace", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "bg",
+            goat2_contracts::TurnItemStatus::Running,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    t.fake.emit(
+        &id,
+        subagent_update(Some(turn), "bg", goat2_contracts::TurnItemStatus::Completed),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_failed_approval_answer_never_returns_the_engine_text() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "approval-fail", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-SECRET-1".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    let approval = || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .find(|r| r.kind == RequestKind::Approval)
+            .map(|r| r.request_id.clone())
+    };
+    eventually("approval open", || approval().is_some()).await;
+    t.fake.fail_answers(true);
+    let refused = t
+        .host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "approval-fail-1".into(),
+            thread_id: id.clone(),
+            request_id: approval().unwrap(),
+            outcome: RequestOutcome::Accept,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message, "the engine did not take the answer");
+}
+
+#[tokio::test]
+async fn a_steer_settled_after_its_turn_ended_is_ignored() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "late-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    t.fake.finish_turn(&id, "ok");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    let delivered_before = count(&t, &id, "input.delivered");
+    t.fake
+        .emit(&id, steer_cancelled(&turn, vec![steered.as_str()]));
+    // Barrier: a later event of the same session is handled after the cancel.
+    t.fake.emit(
+        &id,
+        subagent_update(None, "barrier", goat2_contracts::TurnItemStatus::Running),
+    );
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        count(&t, &id, "input.delivered"),
+        delivered_before,
+        "nothing written"
+    );
+    assert!(
+        t.host.store().fold(&id).unwrap().queued_inputs.is_empty(),
+        "not requeued"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_requeues_only_inputs_this_turn_accepted_as_steers() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "stray-steer", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "stray-steer-more", "also this", InputMode::Steer).await;
+    let steered = steered_input(&t);
+    // A stray id and a duplicate next to the real one: the real one is requeued once.
+    t.fake.emit(
+        &id,
+        steer_cancelled(
+            &turn,
+            vec!["in_not_a_steer", steered.as_str(), steered.as_str()],
+        ),
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered)
+    })
+    .await;
+    assert_eq!(t.host.store().fold(&id).unwrap().queued_inputs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_live_and_an_ended_subagent_still_let_the_idle_stop_happen() {
+    let t = setup_with(manual(), |o| {
+        o.idle_stop = Duration::from_millis(150);
+        o.subagent_item_grace = Duration::from_millis(400);
+    })
+    .await;
+    let id = start_user_thread(&t, "mixed", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    let running_ = goat2_contracts::TurnItemStatus::Running;
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "live", running_));
+    t.fake
+        .emit(&id, subagent_update(Some(turn.clone()), "ended", running_));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    // One ends (its item never comes) while the other still runs; an idle check passes in that
+    // state and does not re-arm. Then the other's item arrives without an end update.
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "ended",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!shut_down(&t, &id));
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "live-item", Some("live")),
+    );
+    eventually("idle stop after the grace", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_subagent_first_heard_of_at_its_end_holds_until_its_item() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "first-end", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        subagent_update(
+            Some(turn.clone()),
+            "quick",
+            goat2_contracts::TurnItemStatus::Completed,
+        ),
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!shut_down(&t, &id), "held while its item is on the way");
+    emit_item(
+        &t,
+        &id,
+        &turn,
+        subagent_item(&id, "quick-item", Some("quick")),
+    );
+    eventually("idle stop after the item", || shut_down(&t, &id)).await;
+}
+
+fn steered_input(t: &T) -> String {
+    t.fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine")
+}
+
+fn steer_cancelled(turn: &str, ids: Vec<&str>) -> goat2_host::engine::EngineEvent {
+    goat2_host::engine::EngineEvent::SteerUpdated {
+        turn_id: turn.to_owned(),
+        input_ids: ids.into_iter().map(Into::into).collect(),
+        status: goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    }
+}
+
+#[tokio::test]
+async fn providers_list_refresh_and_instance_settings() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    // The initial probe may have run before the fake had a probe set: refresh once.
+    t.host.command(refresh("prov-0", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    assert!(codex.enabled);
+    assert_eq!(codex.driver, "codex");
+    assert_eq!(
+        codex.capabilities,
+        goat2_host::engine::codex::codex_capabilities()
+    );
+    assert_eq!(codex.probe.models[0].slug, "gpt-6.1-terra");
+    // Refresh probes again and pushes the new result.
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    t.host
+        .command(refresh("prov-1", Some("codex")))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    // Unknown instance.
+    let missing = t
+        .host
+        .command(refresh("prov-2", Some("nope")))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.reason, "provider_not_found");
+    // Turn it off: listed as disabled, saved.
+    t.host
+        .command(set_instance("prov-3", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = eventually_provider(&t, |e| !e.enabled).await;
+    assert_eq!(
+        off.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+    let saved = std::fs::read_to_string(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json"),
+    )
+    .unwrap();
+    assert!(saved.contains("\"enabled\": false"), "{saved}");
+    // A driver this build does not have is refused.
+    let grok = t
+        .host
+        .command(set_instance("prov-4", "grok", "grok", true))
+        .await
+        .unwrap_err();
+    assert_eq!(grok.reason, "driver_unavailable");
+    // Back on: probed again.
+    t.host
+        .command(set_instance("prov-5", "codex", "codex", true))
+        .await
+        .unwrap();
+    let on = eventually_provider(&t, |e| {
+        e.enabled && e.probe.status == goat2_contracts::ServerProviderState::Ready
+    })
+    .await;
+    assert_eq!(on.probe.version.as_deref(), Some("0.168.0"));
+}
+
+#[tokio::test]
+async fn a_driver_that_cannot_probe_is_listed_with_that_reason() {
+    let t = setup(manual()).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Warning
+    );
+    assert_eq!(
+        codex.probe.message.as_deref(),
+        Some("This driver cannot report its status yet.")
+    );
+    // Not "not found": the row does not know whether the provider is installed.
+    assert!(codex.probe.installed);
+}
+
+#[tokio::test]
+async fn an_engine_sign_in_link_shows_on_its_provider() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "prov-auth", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some("https://auth.example.invalid/device?code=ABC".into()),
+            message: "Sign in to Codex".into(),
+        },
+    );
+    let codex = eventually_provider(&t, |e| e.probe.auth.action.is_some()).await;
+    let action = codex.probe.auth.action.unwrap();
+    assert_eq!(action.url, "https://auth.example.invalid/device?code=ABC");
+    assert_eq!(action.message, "Sign in to Codex");
+    // Settling the request takes the link off the entry.
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "prov-auth-done".into(),
+            thread_id: id.clone(),
+            request_id: action.elicitation_id.as_str().into(),
+            outcome: RequestOutcome::Answered,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| e.probe.auth.action.is_none()).await;
+}
+
+fn ready_probe(version: &str) -> goat2_contracts::ProviderProbeResult {
+    serde_json::from_value(serde_json::json!({
+        "installed": true, "version": version, "status": "ready",
+        "auth": { "status": "authenticated", "type": "chatgpt" },
+        "models": [{ "slug": "gpt-6.1-terra", "name": "GPT-6.1 Terra", "isCustom": false, "isDefault": true, "capabilities": null }],
+        "checkedAt": "2026-11-29T00:00:00Z"
+    }))
+    .unwrap()
+}
+
+fn refresh(key: &str, instance: Option<&str>) -> ClientFrame {
+    ClientFrame::RefreshProviders {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: instance.map(Into::into),
+        refresh_models: None,
+    }
+}
+
+fn set_instance(key: &str, id: &str, driver: &str, enabled: bool) -> ClientFrame {
+    ClientFrame::SetProviderInstance {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: id.into(),
+        driver: driver.into(),
+        acp_agent_id: None,
+        enabled,
+        display_name: None,
+    }
+}
+
+/// The codex entry of the providers list once `pred` holds for it.
+async fn eventually_provider(
+    t: &T,
+    pred: impl Fn(&goat2_contracts::ServerProviderEntry) -> bool,
+) -> goat2_contracts::ServerProviderEntry {
+    let rx = t.host.watch_providers();
+    let find = || {
+        rx.borrow()
+            .as_ref()
+            .and_then(|l| {
+                l.iter()
+                    .find(|e| e.instance_id.as_str() == "codex")
+                    .cloned()
+            })
+            .filter(|e| pred(e))
+    };
+    eventually("provider entry", || find().is_some()).await;
+    find().unwrap()
+}
+
+#[tokio::test]
+async fn provider_instance_settings_survive_a_restart() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            t.host
+                .command(set_instance("prov-restart", "codex", "codex", false))
+                .await
+                .unwrap();
+            eventually_provider(&t, |e| !e.enabled).await;
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
+#[tokio::test]
+async fn a_provider_sign_in_flow_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    let method: goat2_contracts::ProviderAuthMethod = serde_json::from_value(serde_json::json!({
+        "id": "chatgpt", "name": "Sign in with ChatGPT", "description": null, "type": "agent"
+    }))
+    .unwrap();
+    t.fake.set_provider_setup(
+        Some((
+            vec![method],
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("auth-0", None)).await.unwrap();
+    let idle = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    assert!(idle.setup.as_ref().unwrap().can_authenticate);
+    let flow = idle.auth_flow.unwrap();
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Idle);
+    assert_eq!(flow.methods.unwrap()[0].id, "chatgpt");
+    // Start: the driver's state is answered and shown.
+    let started = t.host.command(auth_start("auth-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url.as_deref(),
+        Some("https://auth.example.invalid/x")
+    );
+    eventually_provider(&t, |e| {
+        e.auth_flow
+            .as_ref()
+            .is_some_and(|a| a.phase == goat2_contracts::ProviderAuthPhase::Waiting)
+    })
+    .await;
+    // A second start while it runs answers the running flow; the driver is not asked again.
+    let again = t.host.command(auth_start("auth-2")).await.unwrap();
+    assert_eq!(again.auth_state.unwrap().flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(t.fake.auth_starts(), 1);
+    // An update for another instance is dropped; success is shown and the provider re-probed.
+    let updates = t.fake.auth_updates().unwrap();
+    updates
+        .send(auth_state("other", "succeeded", None))
+        .unwrap();
+    t.fake.set_probe(Ok(ready_probe("0.168.0")));
+    updates
+        .send(auth_state("codex", "succeeded", None))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.168.0")).await;
+    assert_eq!(
+        done.auth_flow.unwrap().phase,
+        goat2_contracts::ProviderAuthPhase::Succeeded
+    );
+}
+
+#[tokio::test]
+async fn a_provider_install_is_shown_and_settles() {
+    let t = setup(manual()).await;
+    t.fake
+        .set_provider_setup(None, Some(install_state("downloading")));
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("inst-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_install)).await;
+    let started = t
+        .host
+        .command(ClientFrame::ProviderInstallStart {
+            req_id: "r".into(),
+            client_request_id: "inst-1".into(),
+            instance_id: "codex".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        started.install_state.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Downloading
+    );
+    eventually_provider(&t, |e| e.install.is_some()).await;
+    t.fake.set_probe(Ok(ready_probe("0.169.0")));
+    t.fake
+        .install_updates()
+        .unwrap()
+        .send(install_state("succeeded"))
+        .unwrap();
+    let done = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.169.0")).await;
+    assert_eq!(
+        done.install.unwrap().phase,
+        goat2_contracts::ProviderInstallPhase::Succeeded
+    );
+}
+
+fn auth_state(
+    instance: &str,
+    phase: &str,
+    url: Option<&str>,
+) -> goat2_contracts::ProviderAuthState {
+    serde_json::from_value(serde_json::json!({
+        "instanceId": instance, "phase": phase, "flowId": "flow-1", "authorizationUrl": url,
+        "expiresAt": null, "message": null
+    }))
+    .unwrap()
+}
+
+fn install_state(phase: &str) -> goat2_contracts::ProviderInstallState {
+    serde_json::from_value(serde_json::json!({
+        "driver": "codex", "operationId": "op-1", "phase": phase, "downloadedBytes": 0,
+        "totalBytes": null, "version": "0.169.0", "installedVersion": "0.167.0", "canRemove": false,
+        "message": null
+    }))
+    .unwrap()
+}
+
+fn auth_start(key: &str) -> ClientFrame {
+    ClientFrame::ProviderAuthStart {
+        req_id: "r".into(),
+        client_request_id: key.into(),
+        instance_id: "codex".into(),
+        method_id: Some("chatgpt".into()),
+    }
+}
+
+#[tokio::test]
+async fn a_thread_starts_on_its_provider_instance_driver() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let codex = FakeEngine::new(manual());
+    let claude = FakeEngine::new(manual());
+    let (store, _) = LaneAStore::open(&path).unwrap();
+    let host = Host::open_with_factories(
+        opts(&path, 1),
+        Arc::new(store),
+        std::collections::BTreeMap::from([
+            (
+                "codex".to_owned(),
+                Arc::new(codex.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+            (
+                "claudeAgent".to_owned(),
+                Arc::new(claude.clone()) as Arc<dyn goat2_host::engine::EngineFactory>,
+            ),
+        ]),
+        StallRecorder::open(&path).unwrap(),
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake: claude.clone(),
+        _dir: Some(dir),
+    };
+    let id = start_thread_on(&t, "on-claude", "claudeAgent").await;
+    eventually("claude started", || running(&t, &id)).await;
+    assert!(
+        codex.calls().is_empty(),
+        "codex never started: {:?}",
+        codex.calls().len()
+    );
+    // A provider that is turned off cannot start a thread: the run fails with that reason.
+    t.host
+        .command(set_instance("prov-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    let off = start_thread_on(&t, "on-codex-off", "codex").await;
+    eventually("refused run", || {
+        events(&t, &off).iter().any(|e| matches!(e, LogEvent::RunFinished(f)
+            if f.reason.as_deref().is_some_and(|r| r.contains("provider codex is turned off in settings"))))
+    })
+    .await;
+    assert!(codex.calls().is_empty());
+}
+
+async fn start_thread_on(t: &T, key: &str, instance: &str) -> ThreadId {
+    t.host
+        .command(ClientFrame::StartThread {
+            req_id: format!("r-{key}"),
+            client_request_id: key.into(),
+            kind: ThreadKind::User,
+            title: Some(key.into()),
+            bot_id: None,
+            parent: None,
+            model_selection: ModelSelection {
+                instance_id: instance.into(),
+                model: "test-model".into(),
+                options: None,
+            },
+            runtime_mode: None,
+            cwd: Some("/tmp".into()),
+            text: Some("hi".into()),
+            mode: None,
+        })
+        .await
+        .unwrap()
+        .thread_id
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_holds_other_commands() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_secs(2));
+    let started = Instant::now();
+    t.host
+        .command(refresh("slow-1", Some("codex")))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "refresh answers at once"
+    );
+    // Another command completes while the probe still runs.
+    let other = Instant::now();
+    start_user_thread(&t, "slow-other", None).await;
+    assert!(
+        other.elapsed() < Duration::from_millis(500),
+        "not held behind the probe"
+    );
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+}
+
+#[tokio::test]
+async fn a_slow_probe_never_overwrites_a_newer_setting() {
+    // The initial on-demand probe is slow; the provider is turned off while it runs.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    fake.set_probe(Ok(ready_probe("0.167.0")));
+    fake.set_probe_delay(Duration::from_millis(400));
+    let t = open_at(&path, Some(dir), fake, 1).await;
+    // The first subscription starts the initial probes; let that slow probe start (it reads
+    // the settings, then waits).
+    let _rx = t.host.watch_providers();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host
+        .command(set_instance("over-2", "codex", "codex", false))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let codex = eventually_provider(&t, |_| true).await;
+    assert!(!codex.enabled);
+    assert_eq!(
+        codex.probe.status,
+        goat2_contracts::ServerProviderState::Disabled
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_sign_in_link_is_not_attached() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    let id = start_user_thread(&t, "bad-link", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            key: None,
+            url: Some(" https://auth.example.invalid/x".into()),
+            message: "Sign in".into(),
+        },
+    );
+    eventually("sign-in request", || signins(&t, &id).len() == 1).await;
+    // A later change publishes the list; the bad link is left off, so the list still serializes.
+    t.fake.set_probe(Ok(ready_probe("0.170.0")));
+    t.host.command(refresh("bad-link-r", None)).await.unwrap();
+    let codex = eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.170.0")).await;
+    assert!(codex.probe.auth.action.is_none());
+    serde_json::to_value(&codex).expect("the entry serializes");
+}
+
+#[tokio::test]
+async fn a_failed_settings_save_changes_nothing() {
+    let t = setup(manual()).await;
+    eventually_provider(&t, |_| true).await;
+    // The temporary file cannot be created: a folder is in its place.
+    std::fs::create_dir(
+        t._dir
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("provider-instances.json.tmp"),
+    )
+    .unwrap();
+    let refused = t
+        .host
+        .command(set_instance("save-fail", "codex", "codex", false))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.reason, "internal");
+    t.host.command(refresh("save-fail-r", None)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(eventually_provider(&t, |_| true).await.enabled, "still on");
+}
+
+#[tokio::test]
+async fn a_driver_sign_in_url_that_is_not_valid_is_dropped() {
+    let t = setup(manual()).await;
+    let mut start = auth_state("codex", "waiting", None);
+    start.authorization_url = Some(" https://auth.example.invalid/padded\n".into());
+    t.fake.set_provider_setup(Some((Vec::new(), start)), None);
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("bad-url-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    let started = t.host.command(auth_start("bad-url-1")).await.unwrap();
+    let state = started.auth_state.unwrap();
+    assert_eq!(state.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+    assert_eq!(
+        state.authorization_url, None,
+        "the bad URL is dropped, the phase stays"
+    );
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    serde_json::to_value(&codex).expect("the entry still serializes");
+}
+
+#[tokio::test]
+async fn cancelling_an_older_flow_keeps_the_running_one() {
+    let t = setup(manual()).await;
+    t.fake.set_provider_setup(
+        Some((
+            Vec::new(),
+            auth_state("codex", "waiting", Some("https://auth.example.invalid/x")),
+        )),
+        None,
+    );
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.host.command(refresh("old-flow-0", None)).await.unwrap();
+    eventually_provider(&t, |e| e.setup.as_ref().is_some_and(|s| s.can_authenticate)).await;
+    t.host.command(auth_start("old-flow-1")).await.unwrap();
+    t.host
+        .command(ClientFrame::ProviderAuthCancel {
+            req_id: "r".into(),
+            client_request_id: "old-flow-2".into(),
+            instance_id: "codex".into(),
+            flow_id: "flow-0".into(),
+        })
+        .await
+        .unwrap();
+    let codex = eventually_provider(&t, |e| e.auth_flow.is_some()).await;
+    let flow = codex.auth_flow.unwrap();
+    assert_eq!(flow.flow_id.as_deref(), Some("flow-1"));
+    assert_eq!(flow.phase, goat2_contracts::ProviderAuthPhase::Waiting);
+}
+
+#[tokio::test]
+async fn turning_a_provider_back_on_never_sends_an_empty_list() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    let mut rx = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    t.host
+        .command(set_instance("chk-off", "codex", "codex", false))
+        .await
+        .unwrap();
+    eventually_provider(&t, |e| !e.enabled).await;
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    rx.borrow_and_update();
+    t.host
+        .command(set_instance("chk-on", "codex", "codex", true))
+        .await
+        .unwrap();
+    // Every list sent until the probe lands keeps the codex row (as being checked).
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let changed = tokio::time::timeout_at(deadline.into(), rx.changed()).await;
+        let list = rx.borrow_and_update().clone().unwrap();
+        let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+        assert!(codex.is_some(), "a list without the codex row: {list:?}");
+        let codex = codex.unwrap();
+        if codex.probe.status == goat2_contracts::ServerProviderState::Ready || changed.is_err() {
+            assert!(codex.enabled);
+            break;
+        }
+        assert_eq!(codex.probe.message.as_deref(), Some("Checking status…"));
+    }
+}
+
+#[tokio::test]
+async fn a_refresh_during_the_initial_probe_never_sends_an_empty_first_list() {
+    // A UI subscribes (starting the initial probe) and refreshes at once: the refresh makes
+    // the initial probe's results stale, yet the first list must still list the provider.
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    t.fake.set_probe_delay(Duration::from_millis(300));
+    let mut rx = t.host.watch_providers();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    t.host.command(refresh("first-1", None)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), rx.changed())
+        .await
+        .expect("a first list")
+        .unwrap();
+    let list = rx.borrow_and_update().clone().unwrap();
+    let codex = list.iter().find(|e| e.instance_id.as_str() == "codex");
+    assert!(codex.is_some(), "first published list: {list:?}");
+    assert_eq!(codex.unwrap().probe.version.as_deref(), Some("0.167.0"));
+}
+
+#[tokio::test]
+async fn providers_are_probed_on_demand_and_once() {
+    let t = setup(manual()).await;
+    t.fake.set_probe(Ok(ready_probe("0.167.0")));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(t.fake.probes(), 0, "no probe at startup");
+    // A full refresh before anyone subscribes is the initial probe.
+    t.host.command(refresh("once-1", None)).await.unwrap();
+    let _a = t.host.watch_providers();
+    let _b = t.host.watch_providers();
+    eventually_provider(&t, |e| e.probe.version.as_deref() == Some("0.167.0")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        t.fake.probes(),
+        1,
+        "subscriptions after a full refresh probe nothing more"
     );
 }
 
@@ -2432,4 +3708,410 @@ async fn a_settled_signin_key_is_never_answered_again() {
         2,
         "no retry after a successful decline"
     );
+}
+
+#[tokio::test]
+async fn a_completed_steer_is_not_requeued_by_a_later_cancel() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-completed", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(
+        &t,
+        &id,
+        "steer-completed-more",
+        "also this",
+        InputMode::Steer,
+    )
+    .await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let delivered = |t: &T| count(t, &id, "input.delivered");
+    let before = delivered(&t);
+    for status in [
+        goat2_host::engine::SteerStatus::Completed,
+        goat2_host::engine::SteerStatus::Cancelled {
+            reason: "discarded".into(),
+        },
+    ] {
+        t.fake.emit(
+            &id,
+            goat2_host::engine::EngineEvent::SteerUpdated {
+                turn_id: turn.clone(),
+                input_ids: vec![steered.as_str().into()],
+                status,
+            },
+        );
+    }
+    // The turn ends after both events were handled; the read steer never comes back.
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(
+        delivered(&t),
+        before,
+        "no second input.delivered for a read steer"
+    );
+    assert!(
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered),
+        "the read steer is not queued again"
+    );
+}
+
+#[tokio::test]
+async fn an_engine_closed_keyed_signin_closes_and_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn.clone(),
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-C-8801".into(),
+        },
+    );
+    eventually("closed", || {
+        t.host.store().fold(&id).unwrap().open_requests.is_empty()
+    })
+    .await;
+    // A later repeat of the closed key and the run end never answer it.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            key: Some("KEY-C-8801".into()),
+            turn_id: turn,
+            url: None,
+            message: "signin".into(),
+        },
+    );
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    assert_eq!(signins(&t, &id).len(), 1, "no new request for a closed key");
+    assert!(
+        !t.fake
+            .calls()
+            .iter()
+            .any(|c| matches!(c, FakeCall::Answer { key, .. } if key == "KEY-C-8801")),
+        "the engine is never answered for a key it closed"
+    );
+}
+
+#[tokio::test]
+async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "keyed-closed-retry", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id);
+    let auth = |key: &str| goat2_host::engine::EngineEvent::AuthRequired {
+        key: Some(key.to_owned()),
+        turn_id: turn.clone(),
+        url: None,
+        message: "signin".into(),
+    };
+    let answers = |key: &'static str| {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Answer { key: k, .. } if k == key))
+            .count()
+    };
+    // A is replaced by B while declines fail: A waits for a retry.
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    eventually("signin", || signins(&t, &id).len() == 1).await;
+    t.fake.fail_answers(true);
+    t.fake.emit(&id, auth("KEY-B-8902"));
+    eventually("A decline failed", || answers("KEY-A-8901") == 1).await;
+    t.fake.fail_answers(false);
+    // The engine closes A itself; a repeat of A and the run end never answer it again.
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestClosed {
+            key: "KEY-A-8901".into(),
+        },
+    );
+    t.fake.emit(&id, auth("KEY-A-8901"));
+    t.fake.finish_turn(&id, "done");
+    eventually("run finished", || count(&t, &id, "run.finished") == 1).await;
+    eventually("B declined at run end", || answers("KEY-B-8902") == 1).await;
+    assert_eq!(
+        answers("KEY-A-8901"),
+        1,
+        "A is not retried after the engine closed it"
+    );
+    assert_eq!(
+        signins(&t, &id).len(),
+        1,
+        "a closed key opens no new request"
+    );
+}
+
+/// A store whose appends can be made to fail, to check that a failed log write fences the thread.
+struct FlakyStore {
+    inner: LaneAStore,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl goat2_host::store::ThreadStore for FlakyStore {
+    fn index_epoch(&self) -> goat2_contracts::Epoch {
+        self.inner.index_epoch()
+    }
+    fn create(
+        &self,
+        id: &ThreadId,
+        created: goat2_contracts::ThreadCreated,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        self.inner.create(id, created)
+    }
+    fn append(
+        &self,
+        id: &ThreadId,
+        events: Vec<LogEvent>,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
+        }
+        self.inner.append(id, events)
+    }
+    fn card(&self, id: &ThreadId) -> Option<goat2_contracts::ThreadCard> {
+        self.inner.card(id)
+    }
+    fn fold(&self, id: &ThreadId) -> Option<goat2_contracts::Fold> {
+        self.inner.fold(id)
+    }
+    fn cards(&self) -> Vec<goat2_contracts::ThreadCard> {
+        self.inner.cards()
+    }
+    fn cards_after(
+        &self,
+        after: Option<&goat2_contracts::CardCursor>,
+    ) -> goat2_host::store::CardsAfter {
+        self.inner.cards_after(after)
+    }
+    fn delete(&self, id: &ThreadId) -> goat2_host::store::StoreResult<()> {
+        self.inner.delete(id)
+    }
+    fn thread_epoch(&self, id: &ThreadId) -> Option<goat2_contracts::Epoch> {
+        self.inner.thread_epoch(id)
+    }
+    fn last_seq(&self, id: &ThreadId) -> Option<u64> {
+        self.inner.last_seq(id)
+    }
+    fn read_after(
+        &self,
+        id: &ThreadId,
+        after: u64,
+    ) -> goat2_host::store::StoreResult<Vec<goat2_contracts::LogLine>> {
+        self.inner.read_after(id, after)
+    }
+    fn read_page(
+        &self,
+        id: &ThreadId,
+        before: u64,
+        limit: usize,
+    ) -> goat2_host::store::StoreResult<(Vec<goat2_contracts::LogLine>, bool)> {
+        self.inner.read_page(id, before, limit)
+    }
+    fn latest_checkpoint_seq(&self, id: &ThreadId) -> goat2_host::store::StoreResult<Option<u64>> {
+        self.inner.latest_checkpoint_seq(id)
+    }
+    fn flush(&self) -> goat2_host::store::StoreResult<()> {
+        self.inner.flush()
+    }
+}
+
+#[tokio::test]
+async fn a_failed_log_write_fences_the_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    // The engine asks for approval, but the request cannot be written: nobody could see it,
+    // so the engine must not keep waiting. The thread stops its engine.
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    // Writes work again, but the fenced thread starts no run until the host restarts.
+    fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    let turns = || {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Turn { thread_id, .. } if thread_id == &id))
+            .count()
+    };
+    let before = turns();
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "after-fence".into(),
+            thread_id: id.clone(),
+            text: "more".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(turns(), before, "a fenced thread starts no run");
+}
+
+#[tokio::test]
+async fn a_session_signin_left_by_a_restart_is_closed() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = start_user_thread(&t, "stale-signin", Some("go")).await;
+            eventually("running", || running(&t, &id)).await;
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-STALE-9101".into()),
+                    turn_id: None,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+            eventually("session signin", || signins(&t, &id).len() == 1).await;
+            id
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    // Any message wakes the thread's actor; its start closes the stale sign-in.
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "wake".into(),
+            thread_id: id.clone(),
+            text: "hello again".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    eventually("stale sign-in closed", || {
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .any(|r| r.kind == RequestKind::Signin)
+    })
+    .await;
+    drop(keep);
+}
+
+#[tokio::test]
+async fn a_fenced_thread_drops_its_unfinished_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced-stream", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ContentDelta {
+            turn_id: turn.clone(),
+            item_id: "think-1".into(),
+            stream_kind: goat2_contracts::ContentStreamKind::ReasoningText,
+            text: "half a thought".into(),
+        },
+    );
+    eventually("streaming", || !t.host.watch_thread(&id).1.is_empty()).await;
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: turn,
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    eventually("no unfinished stream for a later subscriber", || {
+        t.host.watch_thread(&id).1.is_empty()
+    })
+    .await;
 }
