@@ -149,3 +149,49 @@ it("a scroll with only a locator brings that element into view", () =>
       expect(box && viewport && box.y >= 0 && box.y + box.height <= viewport.height).toBe(true);
     },
   ));
+
+it("select throws a post-dispatch revert error when a page resets a single select, while clearing and multi-select stay allowed", () =>
+  fixture(
+    `<select id="reverted">
+        <option value="a" selected>A</option>
+        <option value="b">B</option>
+      </select>
+      <select id="multi" multiple>
+        <option value="x">X</option>
+        <option value="y">Y</option>
+      </select>
+      <script>
+        reverted.addEventListener("change", () => {
+          if (reverted.value === "b") reverted.value = "a";
+        });
+        multi.addEventListener("change", () => {
+          multi.options[0].selected = true;
+        });
+      </script>`,
+    async (page) => {
+      const failure = await ServerBrowserPage.select(page, {
+        locator: "#reverted",
+        values: ["b"],
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+      expect(failure).toBeInstanceOf(ServerBrowserOperationError);
+      expect(failure).toMatchObject({
+        tag: "PreviewAutomationExecutionError",
+        detail: {
+          beforeInput: false,
+          reason: "select_value_reverted",
+          requestedValue: "b",
+          observedValue: "a",
+        },
+      });
+      expect((failure as Error).message).toContain("select_value_reverted");
+      expect(await ServerBrowserPage.select(page, { locator: "#reverted", values: [] })).toEqual({
+        selected: [],
+      });
+      expect(await ServerBrowserPage.select(page, { locator: "#multi", values: ["y"] })).toEqual({
+        selected: ["x", "y"],
+      });
+    },
+  ));

@@ -1,11 +1,14 @@
-import type { ElementHandle, Locator, Page } from "playwright-core";
+import type { PreviewAutomationClickRefusal } from "@goat/contracts";
+import type { ElementHandle, Frame, Locator, Page } from "playwright-core";
 import {
   acquireTarget,
   actionCall,
   disposeAction,
   remaining,
+  revealFramesOf,
   type ReadinessGate,
 } from "./actionReadiness.ts";
+import { scrollIntoView } from "./actionScroll.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import {
   classifyOcclusionHitTest,
@@ -13,21 +16,33 @@ import {
   type FrameLink,
   type Point,
 } from "./BrowserActuationGeometry.ts";
+import { checkSpecialElementClickGuard } from "./BrowserDropdownAndDownloadPolicy.ts";
+import { inViewport } from "./pointerInput.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
-/** Runs in the page: an element's client rects and boxes and, given a point, whether it is on top there. */
 const probeElement = (node: unknown, at: readonly [number, number] | null) => {
   type PageNode = {
+    readonly tagName?: string;
+    readonly type?: string;
+    readonly control?: PageNode | null;
+    readonly htmlFor?: string;
+    readonly labels?: ArrayLike<PageNode> | null;
     readonly parentElement?: PageNode | null;
     readonly parentNode?: PageNode | null;
     readonly assignedSlot?: PageNode | null;
     readonly host?: PageNode | null;
     readonly shadowRoot?: { elementFromPoint(x: number, y: number): PageNode | null } | null;
-    getRootNode(): { readonly host?: PageNode | null };
+    getRootNode(): {
+      readonly host?: PageNode | null;
+      getElementById?(id: string): PageNode | null;
+    };
   };
   const element = node as PageNode & {
-    readonly ownerDocument: { elementFromPoint(x: number, y: number): PageNode | null };
+    readonly ownerDocument: {
+      elementFromPoint(x: number, y: number): PageNode | null;
+      getElementById?(id: string): PageNode | null;
+    };
     readonly clientLeft: number;
     readonly clientTop: number;
     readonly clientWidth: number;
@@ -58,7 +73,52 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     }
     current = current.parentElement ?? current.getRootNode().host;
   }
+  const within = (
+    candidate: PageNode | null | undefined,
+    ancestor: PageNode | null | undefined,
+  ) => {
+    if (!candidate || !ancestor) return false;
+    for (
+      let current: PageNode | null | undefined = candidate;
+      current;
+      current = current.assignedSlot ?? current.parentNode ?? current.host
+    ) {
+      if (current === ancestor) return true;
+    }
+    return false;
+  };
+  const enclosingLabel = (candidate: PageNode | null | undefined) => {
+    for (
+      let current: PageNode | null | undefined = candidate;
+      current;
+      current = current.parentElement
+    ) {
+      if (current.tagName?.toUpperCase() === "LABEL") return current;
+    }
+    return null;
+  };
+  const labelControl = (label: PageNode | null): PageNode | null => {
+    if (!label) return null;
+    if (label.control) return label.control;
+    if (label.control === undefined && label.htmlFor) {
+      const root = label.getRootNode();
+      return (
+        root.getElementById?.(label.htmlFor) ??
+        element.ownerDocument.getElementById?.(label.htmlFor) ??
+        null
+      );
+    }
+    return null;
+  };
+  const hasLabel = (candidate: PageNode | null | undefined, label: PageNode | null) => {
+    if (!candidate || !label || !candidate.labels) return false;
+    for (let index = 0; index < candidate.labels.length; index++) {
+      if (candidate.labels[index] === label) return true;
+    }
+    return false;
+  };
   let inside: boolean | undefined;
+  let associated: boolean | undefined;
   if (at !== null) {
     let hit = element.ownerDocument.elementFromPoint(at[0], at[1]);
     while (hit?.shadowRoot) {
@@ -66,19 +126,27 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
       if (!inner || inner === hit) break;
       hit = inner;
     }
-    inside = false;
-    for (
-      let current: PageNode | null | undefined = hit;
-      current;
-      current = current.assignedSlot ?? current.parentNode ?? current.host
-    ) {
-      if (current === element) {
-        inside = true;
-        break;
-      }
-    }
+    inside = within(hit, element);
+    const hitLabel = enclosingLabel(hit);
+    const targetLabel = enclosingLabel(element);
+    const hitControl = labelControl(hitLabel);
+    const targetControl = labelControl(targetLabel);
+    associated =
+      (hitLabel !== null &&
+        (hitControl === element ||
+          within(element, hitControl) ||
+          hasLabel(element, hitLabel) ||
+          (hitControl === null && within(element, hitLabel)))) ||
+      (targetLabel !== null &&
+        (targetControl === hit ||
+          within(hit, targetControl) ||
+          hasLabel(hit, targetLabel) ||
+          (targetControl === null && within(hit, targetLabel)))) ||
+      (hitControl !== null && targetControl !== null && hitControl === targetControl);
   }
   return {
+    tagName: typeof element.tagName === "string" ? element.tagName : "",
+    inputType: typeof element.type === "string" ? element.type : undefined,
     rects: Array.from(element.getClientRects(), ({ x, y, width, height }) => ({
       x,
       y,
@@ -95,6 +163,7 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     },
     unproven,
     inside,
+    associated,
   };
 };
 
@@ -108,7 +177,11 @@ export const aimClickPoint = async (
   locator: Locator,
   deadline: number,
   gate: ReadinessGate,
-): Promise<{ readonly point: Point; readonly position: Point }> => {
+): Promise<{
+  readonly point: Point;
+  readonly position: Point;
+  readonly associatedLabel?: boolean;
+}> => {
   const target = await acquireTarget(locator, remaining(deadline), gate.signal, gate);
   const elements: Array<ElementHandle> = [];
   try {
@@ -131,6 +204,21 @@ export const aimClickPoint = async (
           }),
         ),
     ]);
+    const refusal = async (kind: PreviewAutomationClickRefusal, message: string) => {
+      const receiver =
+        kind === "occluded_refused" ? await describeReceiver(page, locator, deadline) : undefined;
+      return new ServerBrowserOperationError("PreviewAutomationExecutionError", message, {
+        beforeInput: true,
+        clickRefusal: kind,
+        kind,
+        ...(receiver === undefined ? {} : { interceptedBy: `Now at the target: ${receiver}.` }),
+      });
+    };
+    const specialGuard = checkSpecialElementClickGuard({
+      tagName: typeof measured.tagName === "string" ? measured.tagName : "",
+      inputType: typeof measured.inputType === "string" ? measured.inputType : undefined,
+    });
+    if (!specialGuard.ok) throw await refusal("special_element_refused", specialGuard.message);
     const frames: Array<FrameLink> = [];
     for (const element of elements) {
       const probe = await actionCall(gate, () => element.evaluate(probeElement, null));
@@ -155,15 +243,6 @@ export const aimClickPoint = async (
       viewport,
       frames,
     });
-    const refusal = async (kind: string, message: string) => {
-      const receiver =
-        kind === "occluded_refused" ? await describeReceiver(page, locator, deadline) : undefined;
-      return new ServerBrowserOperationError("PreviewAutomationExecutionError", message, {
-        beforeInput: true,
-        kind,
-        ...(receiver === undefined ? {} : { interceptedBy: `Now at the target: ${receiver}.` }),
-      });
-    };
     if (!aimed.ok) {
       const messages = {
         no_visible_area:
@@ -176,25 +255,26 @@ export const aimClickPoint = async (
     }
     const hitTest = async (element: ElementHandle, point: Point) => {
       let inside = false;
+      let associated = false;
       let hitTestError: string | undefined;
       try {
-        inside =
-          (
-            await actionCall(gate, () =>
-              element.evaluate(probeElement, [point.x, point.y] as const),
-            )
-          ).inside === true;
+        const probed = await actionCall(gate, () =>
+          element.evaluate(probeElement, [point.x, point.y] as const),
+        );
+        inside = probed.inside === true;
+        associated = probed.associated === true;
       } catch (cause) {
         if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
         hitTestError = cause instanceof Error ? cause.message : String(cause);
       }
-      // The in-page identity comparison has no CDP node id.
       const verdict = classifyOcclusionHitTest({
         backendNodeId: 0,
         hitMatchesTargetOrDescendant: inside,
+        hitIsAssociatedLabelOrControl: associated,
         ...(hitTestError === undefined ? {} : { hitTestError }),
       });
       if (!verdict.ok) throw await refusal(verdict.detail.kind, verdict.message);
+      return { inside, associated };
     };
     let offset: Point = { x: 0, y: 0 };
     for (const [index, element] of elements.entries()) {
@@ -203,16 +283,94 @@ export const aimClickPoint = async (
       if (frame) offset = { x: offset.x + frame.bounds.x, y: offset.y + frame.bounds.y };
     }
     const local = { x: aimed.point.x - offset.x, y: aimed.point.y - offset.y };
-    await hitTest(target, local);
+    const targetHit = await hitTest(target, local);
     return {
       point: aimed.point,
       position: {
         x: local.x - measured.origin.x - measured.border.x,
         y: local.y - measured.origin.y - measured.border.y,
       },
+      ...(targetHit.associated && !targetHit.inside ? { associatedLabel: true } : {}),
     };
   } finally {
     for (const element of elements) disposeAction(gate, element);
     disposeAction(gate, target);
+  }
+};
+
+export const locatePoint = async (
+  page: Page,
+  locator: Locator | null,
+  input: { readonly x?: number | undefined; readonly y?: number | undefined },
+  deadline: number,
+  gate: ReadinessGate,
+) => {
+  if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
+  const target = await acquireTarget(locator, remaining(deadline), gate.signal, gate);
+  try {
+    await revealFramesOf(target, deadline, gate);
+  } finally {
+    disposeAction(gate, target);
+  }
+  const viewport = page.viewportSize();
+  let box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
+  if (!inViewport(box, viewport)) {
+    await scrollIntoView(locator, deadline, gate);
+    box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
+  }
+  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
+};
+
+const probePointElement = (at: readonly [number, number]) => {
+  type PageNode = {
+    readonly tagName?: string;
+    readonly type?: string;
+    readonly shadowRoot?: { elementFromPoint(x: number, y: number): PageNode | null } | null;
+  };
+  const doc = (
+    globalThis as unknown as {
+      readonly document?: { elementFromPoint(x: number, y: number): PageNode | null };
+    }
+  ).document;
+  let hit = doc?.elementFromPoint(at[0], at[1]) ?? null;
+  while (hit?.shadowRoot) {
+    const inner = hit.shadowRoot.elementFromPoint(at[0], at[1]);
+    if (!inner || inner === hit) break;
+    hit = inner;
+  }
+  return hit
+    ? {
+        tagName: typeof hit.tagName === "string" ? hit.tagName : "",
+        inputType: typeof hit.type === "string" ? hit.type : undefined,
+      }
+    : null;
+};
+
+export const assertCoordinateClickAllowed = async (
+  frame: Frame,
+  point: Point,
+  gate: ReadinessGate,
+): Promise<void> => {
+  let probed: { readonly tagName?: unknown; readonly inputType?: unknown } | null = null;
+  try {
+    probed = await actionCall(gate, () =>
+      frame.evaluate(probePointElement, [point.x, point.y] as const),
+    );
+  } catch (cause) {
+    if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+  }
+  if (probed !== null && typeof probed === "object") {
+    const guard = checkSpecialElementClickGuard({
+      tagName: typeof probed.tagName === "string" ? probed.tagName : "",
+      inputType: typeof probed.inputType === "string" ? probed.inputType : undefined,
+    });
+    if (!guard.ok) {
+      throw new ServerBrowserOperationError("PreviewAutomationExecutionError", guard.message, {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      });
+    }
   }
 };

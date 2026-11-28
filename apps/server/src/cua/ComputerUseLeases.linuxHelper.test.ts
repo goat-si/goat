@@ -22,6 +22,78 @@ import * as LinuxHelperHost from "./linuxHelperHost/LinuxHelperHost.ts";
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const thread = ThreadId.make("thread-person");
 
+it.effect("stops active controls on Linux helper cuaPersonStop and ignores stale generations", () =>
+  Effect.gen(function* () {
+    const reports = yield* Queue.unbounded<DesktopCuaSafetyReport>();
+    const readiness: DesktopCuaReadinessReport = {
+      version: 1,
+      type: "cuaReadiness",
+      generation: 2,
+      readiness: {
+        grants: { accessibility: "granted", screenCapture: "granted" },
+        helper: "authenticated",
+        capture: "ready",
+        tree: "ready",
+        input: "background",
+        blockers: [],
+        reasons: [],
+      },
+      signals: { humanInput: "supported", privateMode: "unsupported" },
+    };
+    const helperReport = yield* Ref.make(Option.some(readiness));
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const signals = yield* leases.subscribe;
+      const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+      yield* PubSub.take(signals);
+
+      yield* Queue.offer(reports, {
+        version: 1,
+        type: "cuaPersonStop",
+        generation: 1,
+        reason: "person_esc",
+      });
+      yield* Queue.offer(reports, readiness);
+      yield* PubSub.take(signals);
+      assert.equal((yield* leases.controlState(thread, control.controlId))._tag, "active");
+
+      yield* Queue.offer(reports, {
+        version: 1,
+        type: "cuaPersonStop",
+        generation: 2,
+        reason: "person_esc",
+      });
+      yield* PubSub.take(signals);
+      assert.deepEqual(yield* leases.controlState(thread, control.controlId), {
+        _tag: "ended",
+        reason: "stopped_all",
+      });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              DesktopTelemetryReceiver.layerTest({}),
+              Layer.succeed(
+                LinuxHelperHost.LinuxHelperHost,
+                LinuxHelperHost.LinuxHelperHost.of({
+                  readiness: Ref.get(helperReport),
+                  liveReadiness: Ref.get(helperReport),
+                  safety: Stream.fromQueue(reports),
+                  setWatch: () => Effect.void,
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
 // quarantine: #1695 private mode is switched off; re-enable with it
 it.effect.skip(
   "a standalone Linux server's own helper: its signals count as detected, it watches while an agent controls the host, and its secret field pauses",

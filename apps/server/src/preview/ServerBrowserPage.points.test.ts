@@ -335,3 +335,97 @@ it("a ref click reaches a shadow button through the light-DOM text slotted into 
     await browser.close();
   }
 });
+
+it("a ref click allows an associated label covering its control and refuses an unrelated label", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(`<div style="position:relative;width:120px;height:40px">
+        <input id="agree" type="checkbox" style="position:absolute;left:10px;top:10px;width:20px;height:20px;margin:0">
+        <label for="agree" style="position:absolute;left:0;top:0;width:120px;height:40px;display:block"><span style="display:block;width:100%;height:100%">Agree</span></label>
+      </div>
+      <div style="position:relative;width:120px;height:40px;margin-top:20px">
+        <input id="other" type="checkbox" style="position:absolute;left:10px;top:10px;width:20px;height:20px;margin:0">
+        <label id="wrong" for="agree" style="position:absolute;left:0;top:0;width:120px;height:40px;display:block">Wrong</label>
+      </div>`);
+    await ServerBrowserPage.click(page, { locator: "#agree" });
+    expect(await page.isChecked("#agree")).toBe(true);
+    await expect(ServerBrowserPage.click(page, { locator: "#other" })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      detail: {
+        beforeInput: true,
+        clickRefusal: "occluded_refused",
+        kind: "occluded_refused",
+        interceptedBy: expect.stringContaining("#wrong"),
+      },
+    });
+    expect(await page.isChecked("#other")).toBe(false);
+  } finally {
+    await browser.close();
+  }
+});
+
+it("locator and coordinate clicks refuse native select and file input elements before dispatch", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(`<select id="country" style="position:absolute;left:10px;top:10px;width:120px;height:30px">
+        <option value="us">US</option>
+        <option value="ca">CA</option>
+      </select>
+      <input id="upload" type="file" style="position:absolute;left:10px;top:60px;width:200px;height:30px">
+      <div id="shadow-host" style="position:absolute;left:10px;top:110px"></div>
+      <script>
+        window.pointerEvents = [];
+        addEventListener("pointerdown", (event) => window.pointerEvents.push(event.target.id || event.target.tagName), true);
+        const root = document.querySelector("#shadow-host").attachShadow({ mode: "open" });
+        root.innerHTML = '<select style="width:120px;height:30px"><option value="a">A</option></select>';
+      </script>`);
+    await expect(ServerBrowserPage.click(page, { locator: "#country" })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_select"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { locator: "#upload" })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_upload"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 40, y: 25 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_select"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 40, y: 75 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_upload"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 40, y: 125 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      message: expect.stringContaining("goat_preview_select"),
+      detail: {
+        beforeInput: true,
+        clickRefusal: "special_element_refused",
+        kind: "special_element_refused",
+      },
+    });
+    expect(await page.evaluate("window.pointerEvents")).toEqual([]);
+  } finally {
+    await browser.close();
+  }
+});

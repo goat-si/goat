@@ -1,4 +1,5 @@
 import { makeServerBrowserControls } from "./ServerBrowserControls.ts";
+import { makeClickPopupTracker } from "./serverBrowserClickPopup.ts";
 import { BROWSER_TITLE_LIMIT, makeBrowserTitleWatcher } from "./browserTitleWatcher.ts";
 import { makeSaveDownload } from "./saveBrowserDownload.ts";
 import { stopUnresponsiveScript } from "./stopUnresponsiveScript.ts";
@@ -337,6 +338,7 @@ const make = Effect.gen(function* () {
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const closedPendingTabs = new Set<string>();
   const adoptedPages = new Map<string, AdoptedPage>();
+  const clickPopups = makeClickPopupTracker();
   const popupNavigation = new PopupNavigationRequests(
     (context) => {
       const runs = new Map<string, BlockedTabRun>();
@@ -896,8 +898,7 @@ const make = Effect.gen(function* () {
       page.on("download", (download) => void journalDownload(tab, download, saveDownload));
       openSignal?.throwIfAborted();
       updateFileChooserInterception(tab);
-      // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
-      page.on("popup", (p) => void adoptPopup(tab, p).catch(popupCloseFailure(p)));
+      page.on("popup", (p) => clickPopups.observe(tab, adoptPopup(tab, p), popupCloseFailure(p)));
       void startBrowserWatchers(tab, () => Date.now(), adopted?.signal)
         .finally(() => adopted?.release())
         .catch(constVoid);
@@ -1003,7 +1004,7 @@ const make = Effect.gen(function* () {
 
   const prepareContext = makeContextPreparer();
 
-  const adoptPopup = async (opener: ServerTab, popup: Page) => {
+  const adoptPopup = async (opener: ServerTab, popup: Page): Promise<string | undefined> => {
     const { agentId, visits, refused, signal, releaseOrigin, close } = await inspectPopup(
       opener,
       popup,
@@ -1012,14 +1013,14 @@ const make = Effect.gen(function* () {
       (id) => capacity.atLimit(id),
       () => Date.now(),
     );
-    if (refused) return;
+    if (refused) return undefined;
     const release = closePopupOnAbort(signal, releaseOrigin, close, popupCloseFailure(popup));
-    if (signal?.aborted) return release();
+    if (signal?.aborted) return (release(), undefined);
     const url = popup.url();
     const controller = [...opener.viewers].find(
       (viewer) => viewer.id === opener.control.controller,
     );
-    await runPromise(
+    return runPromise(
       openTab({
         threadId: opener.threadId,
         ...(/^https?:/i.test(url) ? { url } : {}),
@@ -1041,10 +1042,12 @@ const make = Effect.gen(function* () {
     ).then(
       (snapshot) => {
         if (agentId === null) controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+        return snapshot.tabId;
       },
       async () => {
         release();
         await close().catch(popupCloseFailure(popup));
+        return undefined;
       },
     );
   };
@@ -1976,6 +1979,7 @@ const make = Effect.gen(function* () {
             deadline: deadlineMs,
           },
           actionGate(destination),
+          (targetUrl) => blockedTabs.assertTab(tab, request.runId, targetUrl),
         );
       }
       case "scrollCollect":
@@ -1993,19 +1997,14 @@ const make = Effect.gen(function* () {
         const targetLabel = secretFill.historySafe(tab, request.threadId)
           ? await browserHistoryTarget(tab.page, clickInput, gate.channel)
           : undefined;
-        const { effect, evidence, pressesCompleted, pressed, checked } = await recordAction(
-          tab,
-          "click",
-          () => ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gate),
-          targetLabel === undefined ? {} : { targetLabel: tab.diagnostics.mask(targetLabel) },
+        return clickPopups.trackClick(tab, tabs, deadlineMs, signal, () =>
+          recordAction(
+            tab,
+            "click",
+            () => ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gate),
+            targetLabel === undefined ? {} : { targetLabel: tab.diagnostics.mask(targetLabel) },
+          ),
         );
-        return {
-          effect,
-          evidence,
-          url: tab.page.url(),
-          ...(pressesCompleted === undefined ? {} : { pressesCompleted }),
-          ...(pressed === undefined ? {} : { pressed, checked }),
-        };
       }
       case "hover":
         return recordAction(tab, "hover", () =>

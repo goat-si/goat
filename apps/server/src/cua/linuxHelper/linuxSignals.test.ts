@@ -339,7 +339,7 @@ describe("makeSignalMonitor", () => {
     ]);
   });
 
-  it("a probe past its time limit holds its window until its scan ends, so slow scans never pile up", async () => {
+  it("a probe past its time limit holds its window until its scan ends without pausing private mode", async () => {
     const probes: Array<PromiseWithResolvers<SecureFocus>> = [];
     const m = monitor({
       secureFocus: () => {
@@ -353,18 +353,17 @@ describe("makeSignalMonitor", () => {
     m.expireProbes();
     await first;
     expect(m.events).toEqual([
-      { watchId: "w", event: { type: "privateMode", active: true, target } },
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
     ]);
     await m.tick();
     expect(probes).toHaveLength(1);
     probes[0]?.resolve(secure);
     await probes[0]?.promise;
-    // The next tick probes again once the slow scan has ended; it never answers here.
     void m.tick();
     await vi.waitFor(() => expect(probes).toHaveLength(2));
   });
 
-  it("one window's slow focus probe holds back no other signal", async () => {
+  it("one window's slow focus probe holds back no other signal and does not emit privateMode true on timeout", async () => {
     const a = { pid: 10, windowId: 20 };
     const b = { pid: 11, windowId: 21 };
     const input: { latest: HumanInput | undefined; lost: boolean } = {
@@ -372,13 +371,11 @@ describe("makeSignalMonitor", () => {
       lost: false,
     };
     const m = monitor({
-      // Window b's probe never answers; a's password field has focus.
       secureFocus: (pid) =>
         pid === b.pid ? new Promise<SecureFocus>(() => undefined) : Promise.resolve(secure),
       input: { latest: () => input.latest, lost: () => input.lost, close: () => undefined },
     });
     await m.signals.watch("w", [a, b]);
-    // The deferred start waits for b's first report, which never comes; it is not awaited.
     void m.runDeferred();
     await m.tick();
     expect(m.events).toContainEqual({
@@ -394,10 +391,13 @@ describe("makeSignalMonitor", () => {
     input.lost = true;
     await m.tick();
     expect(m.lostCalls.count).toBe(1);
-    // When b's probe runs out of time, b counts as private.
     m.expireProbes();
     await m.tick();
     expect(m.events).toContainEqual({
+      watchId: "w",
+      event: { type: "privateMode", active: false, target: b },
+    });
+    expect(m.events).not.toContainEqual({
       watchId: "w",
       event: { type: "privateMode", active: true, target: b },
     });
@@ -443,13 +443,11 @@ describe("makeSignalMonitor", () => {
     ]);
   });
 
-  it("focus moving under every probe counts as unreadable, which is private (#1638)", async () => {
+  it("focus moving under every probe does not emit pausing private mode without a confirmed password field", async () => {
     const probes = { count: 0 };
     const changes: Array<() => void> = [];
     const m = monitor({
       secureFocus: async () => {
-        // The first three probes each see focus change while they read; the first probe
-        // starts before the watch subscribes, so the change comes after it yields once.
         await Promise.resolve();
         if (++probes.count <= 3) changes[0]?.();
         return NOT_SECURE;
@@ -458,8 +456,35 @@ describe("makeSignalMonitor", () => {
     changes.push(m.focusChange);
     await m.signals.watch("w", [target]);
     void m.runDeferred();
-    await m.eventCount(2);
+    await m.eventCount(1);
     expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
+    ]);
+  });
+
+  it("emits privateMode true only when focus is known and secure, and retains active private mode across unreadable reads", async () => {
+    const m = monitor();
+    m.focus.current = { known: false, secure: false, windows: 0 };
+    await m.signals.watch("w", [target]);
+    await m.runDeferred();
+    m.focus.current = { known: false, secure: true, windows: 0 };
+    await m.tick();
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
+    ]);
+    m.focus.current = secure;
+    await m.tick();
+    expect(m.events.at(-1)).toEqual({
+      watchId: "w",
+      event: { type: "privateMode", active: true, target },
+    });
+    m.focus.current = { known: false, secure: false, windows: 0 };
+    await m.tick();
+    expect(m.events).toHaveLength(2);
+    m.focus.current = NOT_SECURE;
+    await m.tick();
+    expect(m.events).toEqual([
+      { watchId: "w", event: { type: "privateMode", active: false, target } },
       { watchId: "w", event: { type: "privateMode", active: true, target } },
       { watchId: "w", event: { type: "privateMode", active: false, target } },
     ]);

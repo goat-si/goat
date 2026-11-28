@@ -19,6 +19,7 @@ import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.test
 import { active, call, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import { fullTableScans } from "../persistence/fullTableScans.testkit.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { computerUseGrantClients, instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
 
@@ -313,6 +314,138 @@ it.effect(
                   }),
                 ),
               ),
+            ),
+          ),
+        );
+      }),
+    ),
+);
+
+it.effect(
+  "re-evaluates enableCua, cuaDeniedApps, and excluded applications on both one-time and standing approvals",
+  () =>
+    withHarness(({ orchestrator, worker }) =>
+      Effect.gen(function* () {
+        const { owner, environmentId, dependencies } = yield* computerUseGrantClients(orchestrator);
+        const settingsLayer = ServerSettings.layerTest({
+          enableCua: true,
+          cuaStrictInputGuards: true,
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* Handoffs.Handoffs;
+          const leases = yield* ComputerUseLeases.ComputerUseLeases;
+          const settings = yield* ServerSettings.ServerSettingsService;
+          const ask = (apps: ReadonlyArray<string>, tag: string) =>
+            Effect.gen(function* () {
+              const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+              return yield* service.create({
+                kind: "approval",
+                title: `Allow ${tag}?`,
+                reason: `Use ${tag}`,
+                requestedBy: {
+                  threadId,
+                  providerInstanceId: instanceId,
+                  path: COMPUTER_USE_GRANT_HANDOFF_PATH,
+                },
+                target: { environmentId, path: COMPUTER_USE_GRANT_HANDOFF_PATH },
+                runId: run.id,
+                nodeId: run.rootNodeId!,
+                human: { location: "test-host" },
+                args: { purpose: tag, apps },
+                expiresAt: DateTime.add(yield* DateTime.now, { minutes: 30 }),
+                apps,
+              });
+            });
+
+          const excluded = yield* ask(["com.apple.keychainaccess"], "keychain");
+          yield* worker.drain();
+          const excludedOneTime = yield* service
+            .respond(
+              { threadId, handoffId: excluded.handoffId, action: "completed" },
+              owner.sessionId,
+            )
+            .pipe(Effect.flip);
+          assert.equal(
+            excludedOneTime._tag === "HandoffError" ? excludedOneTime.reason : excludedOneTime._tag,
+            "invalid_request",
+          );
+          const excludedStanding = yield* service
+            .respond(
+              {
+                threadId,
+                handoffId: excluded.handoffId,
+                action: "completed",
+                computerUseScope: "session",
+              },
+              owner.sessionId,
+            )
+            .pipe(Effect.flip);
+          assert.equal(
+            excludedStanding._tag === "HandoffError"
+              ? excludedStanding.reason
+              : excludedStanding._tag,
+            "invalid_request",
+          );
+          assert.isTrue(Option.isNone(yield* leases.active(threadId)));
+          yield* service.respond(
+            { threadId, handoffId: excluded.handoffId, action: "declined" },
+            owner.sessionId,
+          );
+
+          const allowed = yield* ask(["com.example.Allowed"], "allowed");
+          yield* worker.drain();
+          yield* service.respond(
+            { threadId, handoffId: allowed.handoffId, action: "completed" },
+            owner.sessionId,
+          );
+          assert.isTrue(Option.isSome(yield* leases.active(threadId)));
+
+          const soonDenied = yield* ask(["com.example.SoonDenied"], "denied");
+          yield* worker.drain();
+          yield* settings.updateSettings({ cuaDeniedApps: ["com.example.SoonDenied"] });
+          const deniedError = yield* service
+            .respond(
+              { threadId, handoffId: soonDenied.handoffId, action: "completed" },
+              owner.sessionId,
+            )
+            .pipe(Effect.flip);
+          assert.equal(
+            deniedError._tag === "HandoffError" ? deniedError.reason : deniedError._tag,
+            "conflict",
+          );
+          assert.equal(
+            (yield* service.read({ threadId, handoffId: soonDenied.handoffId })).state,
+            "pending",
+          );
+          assert.equal((yield* leases.state(threadId, allowed.handoffId))._tag, "active");
+
+          const disabled = yield* ask(["com.example.AfterDisable"], "disabled");
+          yield* worker.drain();
+          yield* settings.updateSettings({ enableCua: false });
+          const disabledError = yield* service
+            .respond(
+              { threadId, handoffId: disabled.handoffId, action: "completed" },
+              owner.sessionId,
+            )
+            .pipe(Effect.flip);
+          assert.equal(
+            disabledError._tag === "HandoffError" ? disabledError.reason : disabledError._tag,
+            "conflict",
+          );
+          assert.equal(
+            (yield* service.read({ threadId, handoffId: disabled.handoffId })).state,
+            "pending",
+          );
+          assert.deepEqual(
+            (yield* leases.grants).map((lease) => lease.handoffId),
+            [allowed.handoffId],
+          );
+        }).pipe(
+          Effect.provide(
+            Handoffs.layer.pipe(
+              Layer.provideMerge(ComputerUseLeases.layer),
+              Layer.provideMerge(settingsLayer),
+              Layer.provide(dependencies),
             ),
           ),
         );

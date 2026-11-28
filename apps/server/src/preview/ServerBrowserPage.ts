@@ -36,16 +36,14 @@ import {
   actionDeadline,
   pinTarget,
   remaining,
-  revealFramesOf,
   waitUntilWritable,
   type Readiness,
 } from "./actionReadiness.ts";
 import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
-import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
-import { scrollIntoView } from "./actionScroll.ts";
+import { dragBetween, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
-import { aimClickPoint } from "./clickAim.ts";
+import { aimClickPoint, assertCoordinateClickAllowed, locatePoint } from "./clickAim.ts";
 import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, transientCapture } from "./snapshotRetry.ts";
@@ -318,30 +316,6 @@ const targetPoint = (
   locatePoint(page, locator, input, deadline, gate).catch((cause: unknown) => {
     throw unsentOnTimeout(cause);
   });
-
-const locatePoint = async (
-  page: Page,
-  locator: Locator | null,
-  input: { readonly x?: number | undefined; readonly y?: number | undefined },
-  deadline: number,
-  gate: DispatchGate,
-) => {
-  if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  const target = await elementOf(locator, remaining(deadline), gate.signal, gate);
-  try {
-    await revealFramesOf(target, deadline, gate);
-  } finally {
-    disposeAction(gate, target);
-  }
-  const viewport = page.viewportSize();
-  let box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
-  if (!inViewport(box, viewport)) {
-    await scrollIntoView(locator, deadline, gate);
-    box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
-  }
-  if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-  return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
-};
 
 /**
  * A `data:` URL carries its content, which can be a whole file, and URLs and diagnostics
@@ -672,7 +646,6 @@ export const snapshot = (
     tooBusy: () => timing.timeout(input.timeoutMs),
   });
 
-/** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
 const clickTarget = async (
   page: Page,
   input: PreviewAutomationClickInput,
@@ -693,13 +666,11 @@ const clickTarget = async (
           throw unsentOnTimeout(cause);
         });
   const { point } = aimed;
-  await pointer(point, "click");
   const button = input.button ?? "left";
   const keys = heldKeys(page, gate, input.modifiers);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
-  // Listening first: a dialog that opens while the watch installs still ends the wait.
   let dialogBeforePress = false;
   let dialogShown = false;
   let clicked = false;
@@ -712,11 +683,22 @@ const clickTarget = async (
     page.once("dialog", onDialog);
   });
   const aim = await aimClick(page, locator, point, gate);
-  const watch = await watchClick(page, aim.frame, gate).catch((cause: unknown) => {
-    page.off("dialog", onDialog);
-    releaseAim(aim, gate);
-    throw cause;
-  });
+  const watch = await (
+    locator === null && !dialogBeforePress
+      ? assertCoordinateClickAllowed(
+          aim.frame ?? page.mainFrame(),
+          "point" in aim ? aim.point : point,
+          gate,
+        )
+      : Promise.resolve()
+  )
+    .then(() => pointer(point, "click"))
+    .then(() => watchClick(page, aim.frame, gate))
+    .catch((cause: unknown) => {
+      page.off("dialog", onDialog);
+      releaseAim(aim, gate);
+      throw cause;
+    });
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = async (count: number) => {
@@ -742,7 +724,7 @@ const clickTarget = async (
     if (dialogShown) return undefined;
     clicked = true;
     if (count === 1)
-      return locator === null
+      return locator === null || ("associatedLabel" in aimed && aimed.associatedLabel === true)
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
         : requireEvaluationChannel(gate).call(() =>
             locator.click({
