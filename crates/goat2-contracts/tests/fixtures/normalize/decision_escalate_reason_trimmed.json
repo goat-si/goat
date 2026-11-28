@@ -1,0 +1,11 @@
+{
+  "root": "decision_escalate_input",
+  "input": {
+    "id": "decision:1",
+    "reason": "  needs the owner\n"
+  },
+  "output": {
+    "id": "decision:1",
+    "reason": "needs the owner"
+  }
+}

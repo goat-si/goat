@@ -39,7 +39,7 @@
       ]
     },
     "reason": {
-      "description": "v1 `UserInputResponseReason`: 1 to 2000 UTF-16 code units (JavaScript `length`), not\nblank. Serde enforces the UTF-16 limit; the schema's `maxLength` counts code points, the\nclosest bound JSON Schema can express, so it also passes up to 2000 characters outside the BMP.",
+      "description": "v1 `TrimmedNonEmptyString.check(isMaxLength(2000))`: trimmed of ECMAScript whitespace\n(JavaScript `trim`), then 1 to 2000 UTF-16 code units (JavaScript `length`). Serde trims and\nreturns the trimmed reason. The schema describes that trimmed form: its `maxLength` counts\ncode points (the closest bound JSON Schema can express, looser only outside the BMP) and it\ndoes not trim, so padded input near the limit passes only serde.",
       "maxLength": 2000,
       "minLength": 1,
       "pattern": "\\S",

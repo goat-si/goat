@@ -189,5 +189,21 @@ fn decision_reason_counts_utf16_units_like_v1() {
         let value = make(emoji(1001));
         assert!(decode(root, value.clone()).is_err(), "{root}");
         assert!(validator(root).is_valid(&value), "{root}");
+        // v1 trims before counting: padding around a reason at the limit is accepted and
+        // removed (the untrimming schema sees 2002 characters).
+        let padded = format!(" {}\u{3000}", bmp(DECISION_REASON_MAX_UTF16));
+        let decoded = decode(root, make(padded)).unwrap();
+        assert_eq!(
+            decoded["reason"],
+            Value::from(bmp(DECISION_REASON_MAX_UTF16)),
+            "{root}"
+        );
+        assert!(
+            decode(
+                root,
+                make(format!(" {} ", bmp(DECISION_REASON_MAX_UTF16 + 1)))
+            )
+            .is_err()
+        );
     }
 }
