@@ -187,6 +187,25 @@ impl AcpEngineFactory {
     pub fn flavor(&self) -> &Arc<dyn AcpFlavor> {
         &self.flavor
     }
+
+    /// This factory as `target` runs it: the flavor's [AcpFlavor::with_home] when the target has
+    /// a private home, else this factory unchanged. Sessions and probes both go through it.
+    pub fn for_target(
+        &self,
+        target: Option<&goat2_engine_api::ProviderTarget>,
+    ) -> Result<std::borrow::Cow<'_, Self>, EngineError> {
+        let Some(home) = target.and_then(|t| t.home.as_deref()) else {
+            return Ok(std::borrow::Cow::Borrowed(self));
+        };
+        Ok(match self.flavor.with_home(home)? {
+            Some(flavor) => {
+                let mut factory = self.clone();
+                factory.flavor = flavor;
+                std::borrow::Cow::Owned(factory)
+            }
+            None => std::borrow::Cow::Borrowed(self),
+        })
+    }
 }
 
 impl std::fmt::Debug for AcpEngineFactory {
@@ -2707,7 +2726,8 @@ pub struct StartedAcp {
 #[async_trait]
 impl EngineFactory for AcpEngineFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
-        match self.start_inner(spec.clone()).await {
+        let factory = self.for_target(spec.instance.as_ref())?;
+        match factory.start_inner(spec.clone()).await {
             Ok(started) => Ok(EngineHandle {
                 session: Box::new(started.session),
                 events: started.events,
@@ -2715,11 +2735,11 @@ impl EngineFactory for AcpEngineFactory {
             }),
             Err(failure) => {
                 let links = signin_links(failure.events);
-                if links.is_empty() || self.probe {
+                if links.is_empty() || factory.probe {
                     return Err(failure.error);
                 }
                 Ok(SigninPending::handle(
-                    self.clone(),
+                    factory.into_owned(),
                     spec,
                     failure.error,
                     links,
@@ -2738,12 +2758,23 @@ impl EngineFactory for AcpEngineFactory {
     async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
         Ok(crate::probe::probe_provider(self).await)
     }
+
+    /// [Self::probe] for one instance: its launch settings apply over the factory's probe launch
+    /// as `SessionSpec.launch` applies to sessions, and its home goes through
+    /// [AcpEngineFactory::for_target] as a session's does (see [crate::probe::probe_instance]).
+    async fn probe_instance(
+        &self,
+        target: &goat2_engine_api::ProviderTarget,
+    ) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        crate::probe::probe_instance(self, target).await
+    }
 }
 
 impl AcpEngineFactory {
     /// [EngineFactory::start] returning the concrete [AcpSession].
     pub async fn start_acp(&self, spec: SessionSpec) -> Result<StartedAcp, EngineError> {
-        self.start_inner(spec)
+        self.for_target(spec.instance.as_ref())?
+            .start_inner(spec)
             .await
             .map_err(|failure| failure.error)
     }

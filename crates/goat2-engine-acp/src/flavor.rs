@@ -744,6 +744,16 @@ pub trait AcpFlavor: Send + Sync + 'static {
     }
     /// v1 `releaseRuntime`: the agent process of `session_id` ended; drop per-runtime state.
     fn release_runtime(&self, _session_id: &str) {}
+    /// The flavor for a provider instance whose per-account state lives in `home`
+    /// (`ProviderTarget.home`, a private folder the host owns). None: the driver keeps no
+    /// per-account state there and the instance runs as this flavor. Antigravity puts its
+    /// profile (sign-in token, settings) in it. Errors never name the path.
+    fn with_home(
+        &self,
+        _home: &std::path::Path,
+    ) -> Result<Option<Arc<dyn AcpFlavor>>, EngineError> {
+        Ok(None)
+    }
     /// v1 `extractSubagentEndNotice`: a subagent end announced in injected user text.
     fn subagent_end_notice(&self, _text: &str) -> Option<SubagentEndNotice> {
         None
