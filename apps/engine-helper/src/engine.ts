@@ -4,6 +4,8 @@ import type {
   EngineInput,
   InitializeParams,
   LogLevel,
+  ProbeParams,
+  ProbeResult,
   RequestAnswer,
   SteerResult,
   TurnSettings,
@@ -33,4 +35,6 @@ export interface EngineSession {
 
 export interface EngineModule {
   start(params: InitializeParams, host: EngineHost): Promise<EngineSession>;
+  /** Install, version, sign-in and models without starting a session (v1 provider status probe). */
+  probe?(params: ProbeParams, host: EngineHost): Promise<ProbeResult>;
 }

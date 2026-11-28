@@ -8,6 +8,7 @@ import {
   type EngineKind,
   type InitializeParams,
   type LogLevel,
+  type ProbeParams,
 } from "./protocol.ts";
 
 export type EngineLoaders = Readonly<Record<EngineKind, () => Promise<EngineModule>>>;
@@ -87,22 +88,9 @@ export function createServer(options: ServerOptions): HelperServer {
     if (session !== undefined || starting) {
       throw new HelperError("bad_request", "already initialized");
     }
-    if (!isObject(params)) throw new HelperError("bad_request", "initialize needs params");
-    if (params.protocol !== PROTOCOL_VERSION) {
-      throw new HelperError("bad_request", `unsupported protocol ${String(params.protocol)}`);
-    }
-    const engine = params.engine;
-    if (typeof engine !== "string" || !(ENGINE_KINDS as ReadonlyArray<string>).includes(engine)) {
-      throw new HelperError("bad_request", `unknown engine ${String(engine)}`);
-    }
     starting = true;
     try {
-      let module: EngineModule;
-      try {
-        module = await options.engines[engine as EngineKind]();
-      } catch (cause) {
-        throw new HelperError("unavailable", `${engine} SDK could not be loaded: ${errorMessage(cause)}`);
-      }
+      const [, module] = await loadEngine(params);
       try {
         session = await module.start(params as unknown as InitializeParams, host);
       } catch (cause) {
@@ -115,11 +103,35 @@ export function createServer(options: ServerOptions): HelperServer {
     }
   };
 
+  const loadEngine = async (params: unknown): Promise<[EngineKind, EngineModule]> => {
+    if (!isObject(params)) throw new HelperError("bad_request", "missing params");
+    if (params.protocol !== PROTOCOL_VERSION) {
+      throw new HelperError("bad_request", `unsupported protocol ${String(params.protocol)}`);
+    }
+    const engine = params.engine;
+    if (typeof engine !== "string" || !(ENGINE_KINDS as ReadonlyArray<string>).includes(engine)) {
+      throw new HelperError("bad_request", `unknown engine ${String(engine)}`);
+    }
+    try {
+      return [engine as EngineKind, await options.engines[engine as EngineKind]()];
+    } catch (cause) {
+      throw new HelperError("unavailable", `${engine} SDK could not be loaded: ${errorMessage(cause)}`);
+    }
+  };
+
+  const probe = async (params: unknown) => {
+    const [engine, module] = await loadEngine(params);
+    if (module.probe === undefined) throw new HelperError("unavailable", `${engine} has no probe`);
+    return module.probe(params as unknown as ProbeParams, host);
+  };
+
   const dispatch = async (frame: RequestFrame): Promise<unknown> => {
     const params = isObject(frame.params) ? frame.params : {};
     switch (frame.method) {
       case "initialize":
         return initialize(frame.params);
+      case "probe":
+        return probe(frame.params);
       case "turn.start":
         return requireSession().startTurn(
           (params.inputs ?? []) as never,
