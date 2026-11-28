@@ -5,8 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use goat2_contracts::{
     EngineItemLocator, ItemId, MessageId, NativeItemRef, NativeRefStrength, ProviderFailure,
-    ProviderFailureClass, ProviderRequestKind, RequestId, RequestKind, SubagentOrigin, ThreadId,
-    TurnItem, TurnItemBody, TurnItemStatus, UserInputOption, UserInputQuestion,
+    ProviderFailureClass, ProviderRequestKind, ProviderRetry, RequestId, RequestKind,
+    SubagentOrigin, ThreadId, TurnItem, TurnItemBody, TurnItemStatus, UserInputOption,
+    UserInputQuestion,
 };
 use goat2_engine_api::{EngineEvent, TurnOutcome};
 use serde_json::Value;
@@ -37,6 +38,10 @@ pub(super) struct Translator {
     interrupted: bool,
     failure: Option<String>,
     finished: bool,
+    retry: Option<(ProviderRetry, String)>,
+    async_tools: HashMap<String, (String, String)>,
+    async_latest: Vec<Value>,
+    async_emitted: HashMap<(String, String), (String, String, String)>,
 }
 
 fn s<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
@@ -55,8 +60,114 @@ fn content(v: &Value) -> String {
         })
         .unwrap_or_default()
 }
+
+// Match v1's structured-output budget before persisting extension-controlled data.
+fn bounded(value: &Value) -> bool {
+    fn visit(v: &Value, depth: usize, nodes: &mut usize, bytes: &mut usize) -> bool {
+        if depth > 32 || *nodes == 0 {
+            return false;
+        }
+        *nodes -= 1;
+        let cost = match v {
+            Value::Array(a) => {
+                let Some(n) = 2usize.checked_add(a.len()) else {
+                    return false;
+                };
+                if n > *bytes {
+                    return false;
+                }
+                *bytes -= n;
+                return a.iter().all(|x| visit(x, depth + 1, nodes, bytes));
+            }
+            Value::Object(o) => {
+                if *bytes < 2 {
+                    return false;
+                }
+                *bytes -= 2;
+                for (key, val) in o {
+                    let n = serde_json::to_string(key).unwrap_or_default().len() + 2;
+                    if n > *bytes {
+                        return false;
+                    }
+                    *bytes -= n;
+                    if !visit(val, depth + 1, nodes, bytes) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            _ => serde_json::to_string(v).unwrap_or_default().len(),
+        };
+        if cost > *bytes {
+            return false;
+        }
+        *bytes -= cost;
+        true
+    }
+    visit(value, 0, &mut 4096, &mut (64 * 1024))
+}
+fn tool_output(result: &Value, name: &str) -> Option<Value> {
+    let mut blocks = match result.get("content") {
+        Some(Value::Array(a)) => a.clone(),
+        Some(Value::String(t)) => vec![serde_json::json!({"type":"text","text":t})],
+        _ => vec![],
+    };
+    let mut structured = result.get("structuredContent");
+    let details = &result["details"];
+    let mcp = name.starts_with("mcp__")
+        && s(details, "server").is_some()
+        && s(details, "tool").is_some()
+        && structured
+            .and_then(|x| x.get("content"))
+            .is_some_and(Value::is_array);
+    if mcp {
+        structured = structured.and_then(|x| x.get("structuredContent"));
+    }
+    let text = content(&Value::Array(blocks.clone()));
+    if structured.and_then(Value::as_str) == Some(text.as_str()) {
+        structured = None;
+    }
+    if name == "read"
+        && let Some(Value::Object(obj)) = structured
+    {
+        let image = s(&Value::Object(obj.clone()), "type") == Some("image");
+        let note = blocks
+            .iter()
+            .find(|b| s(b, "type") == Some("text"))
+            .and_then(|b| s(b, "text"))
+            .unwrap_or("");
+        if image
+            && obj
+                .keys()
+                .all(|k| matches!(k.as_str(), "type" | "data" | "mimeType" | "note"))
+            && obj.get("note").and_then(Value::as_str) == Some(note)
+            && blocks.iter().any(|b| {
+                s(b, "type") == Some("image")
+                    && b.get("data").and_then(Value::as_str).is_some()
+                    && b.get("data") == obj.get("data")
+                    && b.get("mimeType").and_then(Value::as_str).is_some()
+                    && b.get("mimeType") == obj.get("mimeType")
+            })
+        {
+            structured = None;
+        }
+    }
+    if structured.is_some_and(|v| !bounded(v)) {
+        blocks.push(serde_json::json!({"type":"text","text":"Structured output omitted because it exceeds the stored result limit."}));
+        return Some(serde_json::json!({"content":blocks}));
+    }
+    if !mcp && structured.is_none() && blocks.iter().all(|b| s(b, "type") == Some("text")) {
+        return (!text.is_empty()).then_some(Value::String(text));
+    }
+    let mut output = serde_json::json!({"content":blocks});
+    if let Some(value) = structured {
+        output["structuredContent"] = value.clone();
+    }
+    Some(output)
+}
+
 // UTC RFC3339 without an extra dependency. Based on the civil-from-days conversion.
-fn now() -> String {
+pub(super) fn now() -> String {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -100,6 +211,10 @@ impl Translator {
             interrupted: false,
             failure: None,
             finished: false,
+            retry: None,
+            async_tools: HashMap::new(),
+            async_latest: Vec::new(),
+            async_emitted: HashMap::new(),
         }
     }
     pub(super) fn start_turn(&mut self) {
@@ -112,9 +227,13 @@ impl Translator {
         self.interrupted = false;
         self.failure = None;
         self.finished = false;
+        self.retry = None;
     }
     pub(super) fn interrupt(&mut self) {
         self.interrupted = true;
+    }
+    pub(super) fn cancel_interrupt(&mut self) {
+        self.interrupted = false;
     }
     /// Call after a request has been resolved or expires. The driver owns RPC replies and timeouts.
     pub(super) fn close_request(&mut self, key: &str) -> Option<EngineEvent> {
@@ -232,6 +351,16 @@ impl Translator {
                 self.streams.clear();
             }
             "message_update" => {
+                if let Some((retry, message)) = self.retry.take() {
+                    out.push(self.retry_item(
+                        turn_id,
+                        retry,
+                        message,
+                        TurnItemStatus::Completed,
+                        true,
+                    ));
+                    self.failure = None;
+                }
                 let d = &record["assistantMessageEvent"];
                 let kind = s(d, "type").unwrap_or("");
                 let index = d.get("contentIndex").and_then(Value::as_u64).unwrap_or(0);
@@ -380,19 +509,7 @@ impl Translator {
                         changes: None,
                     }
                 } else {
-                    let structured = result.get("structuredContent");
-                    let output = if let Some(value) = structured {
-                        Some(
-                            serde_json::json!({"content": result.get("content").cloned().unwrap_or(Value::Array(vec![])), "structuredContent": value}),
-                        )
-                    } else if !text.is_empty() {
-                        Some(Value::String(text))
-                    } else {
-                        result
-                            .get("content")
-                            .filter(|v| v.as_array().is_some_and(|a| !a.is_empty()))
-                            .map(|v| serde_json::json!({"content":v}))
-                    };
+                    let output = tool_output(result, &name);
                     TurnItemBody::DynamicTool {
                         tool_name: Some(name.clone()),
                         input: if args.is_null() {
@@ -448,34 +565,157 @@ impl Translator {
                     None,
                 ));
             }
+            "extension_ui_request"
+                if s(record, "method") == Some("setWidget")
+                    && s(record, "widgetKey") == Some("subagent-async") =>
+            {
+                if let Some(lines) = record.get("widgetLines").and_then(Value::as_array) {
+                    for line in lines.iter().filter_map(Value::as_str) {
+                        if line.len() > 262144 {
+                            continue;
+                        }
+                        if let Some(json) = line.strip_prefix("PI_SUBAGENT_ASYNC_JSON:")
+                            && let Ok(snapshot) = serde_json::from_str::<Value>(json)
+                            && let Some(runs) = snapshot.get("runs").and_then(Value::as_array)
+                        {
+                            self.async_latest = runs.iter().take(128).cloned().collect();
+                            self.async_snapshot(&mut out, turn_id);
+                        }
+                    }
+                }
+            }
             "extension_ui_request" => self.request(&mut out, record, turn_id),
             "extension_error" => {
-                let message = s(record, "error")
-                    .unwrap_or("Pi extension error.")
-                    .to_owned();
+                let path = s(record, "extensionPath").unwrap_or("").replace('\\', "/");
+                let parts: Vec<_> = path.split('/').filter(|p| !p.is_empty()).collect();
+                let file = parts.last().copied().unwrap_or("");
+                let stem = file.rsplit_once('.').map(|(base, _)| base).unwrap_or(file);
+                let name = if stem == "index" && parts.len() > 1 {
+                    parts[parts.len() - 2]
+                } else if stem.is_empty() {
+                    "Pi extension"
+                } else {
+                    stem
+                };
+                let event = s(record, "event")
+                    .map(|e| format!(" during {e}"))
+                    .unwrap_or_default();
+                let detail: String = s(record, "error")
+                    .unwrap_or("")
+                    .trim()
+                    .chars()
+                    .take(2000)
+                    .collect();
+                let message = if detail.is_empty() {
+                    format!("{name} failed{event}.")
+                } else {
+                    format!("{name} failed{event}.\n\n{detail}")
+                };
                 let id = format!("extension-error:{turn_id}:{}", self.ordinal);
-                out.push(self.error(turn_id, &id, message));
+                let mut e = self.error(turn_id, &id, message);
+                if let EngineEvent::ItemCompleted { item, .. } = &mut e {
+                    item.title = Some(name.to_owned());
+                    if let TurnItemBody::Error { failure, .. } = &mut item.body {
+                        failure.retryable = Some(false);
+                    }
+                }
+                out.push(e);
             }
             "auto_retry_start" => {
-                self.failure = Some(
+                let attempt = record
+                    .get("attempt")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1)
+                    .clamp(1, u32::MAX as u64) as u32;
+                let max = record
+                    .get("maxAttempts")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(attempt as u64)
+                    .clamp(attempt as u64, u32::MAX as u64) as u32;
+                self.retry = Some((
+                    ProviderRetry {
+                        attempt,
+                        max_attempts: Some(max),
+                        retry_delay_ms: Some(
+                            record.get("delayMs").and_then(Value::as_u64).unwrap_or(0),
+                        ),
+                    },
                     s(record, "errorMessage")
                         .unwrap_or("Pi provider request failed.")
                         .into(),
-                );
+                ));
             }
-            "auto_retry_end" if record["success"] == true => {
-                self.failure = None;
+            "auto_retry_end" => {
+                if record["success"] == true {
+                    if let Some((mut retry, message)) = self.retry.take() {
+                        if let Some(n) = record.get("attempt").and_then(Value::as_u64) {
+                            retry.attempt = n.clamp(1, u32::MAX as u64) as u32;
+                        }
+                        out.push(self.retry_item(
+                            turn_id,
+                            retry,
+                            message,
+                            TurnItemStatus::Completed,
+                            true,
+                        ));
+                    }
+                    self.failure = None;
+                } else {
+                    let message = s(record, "finalError")
+                        .unwrap_or("Pi auto-retry failed.")
+                        .to_owned();
+                    let attempt = record
+                        .get("attempt")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(1)
+                        .clamp(1, u32::MAX as u64) as u32;
+                    let mut retry = self.retry.take().map(|x| x.0).unwrap_or(ProviderRetry {
+                        attempt,
+                        max_attempts: Some(attempt),
+                        retry_delay_ms: None,
+                    });
+                    retry.attempt = attempt;
+                    self.retry = Some((retry, message.clone()));
+                    self.failure = Some(message);
+                }
+            }
+            "agent_error" => {
+                self.failure = Some(
+                    s(record, "error")
+                        .or_else(|| s(record, "message"))
+                        .or_else(|| s(record, "errorMessage"))
+                        .unwrap_or("Pi agent error.")
+                        .to_owned(),
+                );
             }
             "agent_settled" if !self.finished => {
                 out.extend(self.finish_streams(turn_id));
                 for key in std::mem::take(&mut self.pending) {
                     out.push(EngineEvent::RequestClosed { key });
                 }
+                if let Some((retry, message)) = self.retry.take() {
+                    let status = if self.interrupted || record["aborted"] == true {
+                        TurnItemStatus::Interrupted
+                    } else if self.failure.is_some() {
+                        TurnItemStatus::Failed
+                    } else {
+                        TurnItemStatus::Completed
+                    };
+                    out.push(self.retry_item(
+                        turn_id,
+                        retry,
+                        message,
+                        status,
+                        status != TurnItemStatus::Failed,
+                    ));
+                }
                 let outcome = if self.interrupted || record["aborted"] == true {
                     TurnOutcome::Interrupted
                 } else if let Some(reason) = self.failure.take() {
                     let id = format!("error:{turn_id}:{}", self.ordinal);
-                    out.push(self.error(turn_id, &id, reason.clone()));
+                    if !out.iter().any(|e| matches!(e, EngineEvent::ItemCompleted { item, .. } if matches!(&item.body, TurnItemBody::Error { retry: Some(_), .. }))) {
+                        out.push(self.error(turn_id, &id, reason.clone()));
+                    }
                     TurnOutcome::Failed { reason }
                 } else {
                     TurnOutcome::Done
@@ -489,6 +729,34 @@ impl Translator {
             _ => {}
         }
         out
+    }
+    fn retry_item(
+        &mut self,
+        turn: &str,
+        retry: ProviderRetry,
+        message: String,
+        status: TurnItemStatus,
+        retryable: bool,
+    ) -> EngineEvent {
+        let id = format!("terminal-failure:{turn}");
+        self.emit(
+            turn,
+            &id,
+            status,
+            None,
+            TurnItemBody::Error {
+                failure: ProviderFailure {
+                    class: ProviderFailureClass::ProviderError,
+                    message,
+                    code: None,
+                    retryable: Some(retryable),
+                    reset_at: None,
+                    log: None,
+                },
+                retry: Some(retry),
+            },
+            None,
+        )
     }
     fn error(&mut self, turn: &str, id: &str, message: String) -> EngineEvent {
         self.emit(
@@ -607,6 +875,80 @@ impl Translator {
             item: Some(Box::new(item)),
         });
     }
+    fn async_snapshot(&mut self, out: &mut Vec<EngineEvent>, _turn: &str) {
+        for run in self.async_latest.clone() {
+            let Some(run_id) = s(&run, "id") else {
+                continue;
+            };
+            let Some((tool, turn)) = self.async_tools.get(run_id).cloned() else {
+                continue;
+            };
+            let mut unsettled = false;
+            if let Some(children) = run.get("children").and_then(Value::as_array) {
+                for child in children.iter().take(256) {
+                    let (Some(id), Some(agent), Some(state)) =
+                        (s(child, "id"), s(child, "agent"), s(child, "state"))
+                    else {
+                        continue;
+                    };
+                    if s(child, "kind") != Some("step") {
+                        continue;
+                    }
+                    let status = match state {
+                        "queued" => "pending",
+                        "running" => "running",
+                        "paused" => "waiting",
+                        "complete" | "partial" => "completed",
+                        "failed" | "rejected" => "failed",
+                        "stopped" => "interrupted",
+                        _ => continue,
+                    };
+                    unsettled |= matches!(status, "pending" | "running" | "waiting");
+                    let key = (run_id.to_owned(), id.to_owned());
+                    let model = s(child, "model").unwrap_or("");
+                    if self
+                        .async_emitted
+                        .get(&key)
+                        .is_some_and(|(_, old_status, old_model)| {
+                            old_status == status && old_model == model
+                        })
+                    {
+                        continue;
+                    }
+                    self.async_emitted
+                        .insert(key, (agent.to_owned(), status.to_owned(), model.to_owned()));
+                    let result = serde_json::json!({"details":{"results":[{"agent":agent,"task":"","asyncMemberId":id,"asyncStatus":status}]}});
+                    self.subagents(out, &turn, &tool, &result, false);
+                }
+            }
+            if !unsettled
+                && matches!(
+                    s(&run, "state"),
+                    Some("complete" | "partial" | "failed" | "rejected" | "stopped")
+                )
+            {
+                let final_status = if matches!(s(&run, "state"), Some("complete" | "partial")) {
+                    "completed"
+                } else {
+                    "interrupted"
+                };
+                let missing: Vec<_> = self
+                    .async_emitted
+                    .iter()
+                    .filter(|((id, _), (_, status, _))| {
+                        id == run_id && matches!(status.as_str(), "pending" | "running" | "waiting")
+                    })
+                    .map(|((_, id), (agent, _, _))| (id.clone(), agent.clone()))
+                    .collect();
+                for (id, agent) in missing {
+                    let result = serde_json::json!({"details":{"results":[{"agent":agent,"task":"","asyncMemberId":id,"asyncStatus":final_status}]}});
+                    self.subagents(out, &turn, &tool, &result, false);
+                }
+                self.async_emitted.retain(|(id, _), _| id != run_id);
+                self.async_tools.remove(run_id);
+            }
+        }
+    }
     fn subagents(
         &mut self,
         out: &mut Vec<EngineEvent>,
@@ -618,6 +960,15 @@ impl Translator {
         let Some(results) = result.pointer("/details/results").and_then(Value::as_array) else {
             return;
         };
+        if results.is_empty()
+            && let Some(id) = result.pointer("/details/asyncId").and_then(Value::as_str)
+            && self.async_tools.len() < 128
+        {
+            self.async_tools
+                .entry(id.to_owned())
+                .or_insert_with(|| (tool.to_owned(), turn.to_owned()));
+            self.async_snapshot(out, turn);
+        }
         for (index, entry) in results.iter().enumerate() {
             let (Some(agent), Some(task)) = (s(entry, "agent"), s(entry, "task")) else {
                 continue;
@@ -632,7 +983,11 @@ impl Translator {
                 })
                 .unwrap_or_else(|| index.to_string());
             let id = format!("{tool}:subagent:{suffix}");
-            let finished = ended || entry["finished"] == true;
+            let finished = match s(entry, "asyncStatus") {
+                Some("pending" | "waiting" | "running") => false,
+                Some("completed" | "failed" | "interrupted") => true,
+                _ => ended || entry["finished"] == true,
+            };
             let status = match s(entry, "asyncStatus") {
                 Some("pending") => TurnItemStatus::Pending,
                 Some("waiting") => TurnItemStatus::Waiting,
@@ -676,6 +1031,13 @@ impl Translator {
             } else {
                 text
             };
+            out.push(EngineEvent::SubagentUpdate {
+                turn_id: Some(turn.into()),
+                subagent_id: id.clone(),
+                status,
+                title: Some(agent.into()),
+                progress: (!finished && !text.is_empty()).then(|| text.chars().take(200).collect()),
+            });
             if finished {
                 let body = TurnItemBody::Subagent {
                     subagent_id: id.clone(),
@@ -685,17 +1047,9 @@ impl Translator {
                     child_thread_id: None,
                     prompt: task.into(),
                     progress: None,
-                    result: (!text.is_empty()).then_some(text),
+                    result: (!text.is_empty()).then(|| text.chars().take(10_000).collect()),
                 };
                 out.push(self.emit(turn, &id, status, Some(agent.into()), body, Some(tool)));
-            } else {
-                out.push(EngineEvent::SubagentUpdate {
-                    turn_id: Some(turn.into()),
-                    subagent_id: id,
-                    status,
-                    title: Some(agent.into()),
-                    progress: (!text.is_empty()).then_some(text),
-                });
             }
         }
     }

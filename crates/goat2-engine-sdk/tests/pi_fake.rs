@@ -1,7 +1,8 @@
 //! Pi RPC integration tests. The fake binary uses only local stdio and dummy credentials.
 use goat2_contracts::{
     EngineConfig, EngineDriver, EngineRef, InputId, ModelSelection, ProviderInstanceId,
-    ProviderOptionSelection, ProviderOptionSelectionValue, RequestKind, RequestOutcome, RuntimeMode, ThreadId, TurnItemBody,
+    ProviderOptionSelection, ProviderOptionSelectionValue, RequestKind, RequestOutcome,
+    RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
     EngineEvent, EngineFactory, EngineHandle, EngineInput, LaunchSpec, McpEndpoint, RequestAnswer,
@@ -185,6 +186,10 @@ async fn steer_and_abort() {
         SteerResult::Accepted
     );
     assert!(matches!(
+        h.session.steer(&turn, input("decline-steer")).await,
+        SteerResult::Declined { .. }
+    ));
+    assert!(matches!(
         h.session.steer("wrong", input("other")).await,
         SteerResult::Declined { .. }
     ));
@@ -223,7 +228,23 @@ async fn reserved_args_rejected_and_mcp_extension_materialized() {
             "accepted {arg}"
         );
     }
-    let mut h = start("pi-mcp").await;
+    let mut config = spec("pi-mcp");
+    config
+        .launch
+        .as_mut()
+        .unwrap()
+        .env
+        .insert("GOAT_MCP_URL".into(), "http://wrong.invalid".into());
+    config
+        .launch
+        .as_mut()
+        .unwrap()
+        .env
+        .insert("GOAT_MCP_BEARER_TOKEN".into(), "wrong".into());
+    let mut h = factory(PiProfile::Pi)
+        .start(config)
+        .await
+        .expect("fake starts");
     accepted(
         h.session
             .start_turn(input("inspect-launch"), &settings())
@@ -263,8 +284,21 @@ fn fake_version_probe() {
 
 #[tokio::test]
 async fn omo_profile_supplies_its_rpc_environment() {
+    let mut config = spec("omo-env");
+    config
+        .launch
+        .as_mut()
+        .unwrap()
+        .env
+        .insert("SENPI_RPC_HOST_IDLE_EXIT_MS".into(), "999".into());
+    config
+        .launch
+        .as_mut()
+        .unwrap()
+        .env
+        .insert("SENPI_RPC_HOST_EMPTY_EXIT_MS".into(), "999".into());
     let mut h = factory(PiProfile::Omo)
-        .start(spec("omo-env"))
+        .start(config)
         .await
         .expect("omo starts");
     accepted(
@@ -289,10 +323,159 @@ async fn factory_probe_uses_fake_binary() {
 async fn model_and_thinking_selection_reach_the_runtime() {
     let mut h = start("pi-config").await;
     let mut selected = settings();
-    selected.model_selection.model = "vendor/custom/model".into();
-    selected.model_selection.options = Some(vec![ProviderOptionSelection { id: "thinking".into(), value: ProviderOptionSelectionValue::Text("high".into()) }]);
+    selected.model_selection.model = "vendor/nested/custom/model".into();
+    selected.model_selection.options = Some(vec![
+        ProviderOptionSelection {
+            id: "thinking".into(),
+            value: ProviderOptionSelectionValue::Text("high".into()),
+        },
+        ProviderOptionSelection {
+            id: "serviceTier".into(),
+            value: ProviderOptionSelectionValue::Text("priority".into()),
+        },
+    ]);
     h.session.set_config(&selected).await.expect("configure");
-    accepted(h.session.start_turn(input("inspect-config"), &selected).await);
-    assert_eq!(text(&finished(&mut h).await), "vendor/custom/model:high");
+    accepted(
+        h.session
+            .start_turn(input("inspect-config"), &selected)
+            .await,
+    );
+    assert_eq!(
+        text(&finished(&mut h).await),
+        "vendor/nested|custom/model:high:priority"
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn prompt_dialog_can_open_before_acknowledgment() {
+    let mut h = start("pi-dialog-before-ack").await;
+    let turn = tokio::time::timeout(
+        Duration::from_secs(2),
+        h.session
+            .start_turn(input("dialog-before-ack"), &settings()),
+    )
+    .await
+    .expect("start must not wait for dialog ACK");
+    accepted(turn);
+    let key = match next(&mut h).await {
+        EngineEvent::RequestOpened { key, .. } => key,
+        other => panic!("expected dialog: {other:?}"),
+    };
+    h.session
+        .answer_request(
+            &key,
+            RequestAnswer {
+                outcome: RequestOutcome::Answered,
+                text: Some("yes".into()),
+                answers: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(text(&finished(&mut h).await), "answer: yes");
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn command_only_and_late_ack_both_settle_once() {
+    let mut h = start("pi-ack-order").await;
+    accepted(
+        h.session
+            .start_turn(input("command-only"), &settings())
+            .await,
+    );
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    accepted(h.session.start_turn(input("late-ack"), &settings()).await);
+    let events = finished(&mut h).await;
+    assert_eq!(text(&events), "late");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, EngineEvent::TurnFinished { .. }))
+            .count(),
+        1
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn concurrent_dialog_responses_are_sent_only_once() {
+    let mut h = start("pi-concurrent-dialog").await;
+    accepted(h.session.start_turn(input("question"), &settings()).await);
+    let key = match next(&mut h).await {
+        EngineEvent::RequestOpened { key, .. } => key,
+        other => panic!("expected dialog: {other:?}"),
+    };
+    let answer = RequestAnswer {
+        outcome: RequestOutcome::Answered,
+        text: Some("yes".into()),
+        answers: None,
+    };
+    let (a, b) = tokio::join!(
+        h.session.answer_request(&key, answer.clone()),
+        h.session.answer_request(&key, answer)
+    );
+    assert_ne!(a.is_ok(), b.is_ok());
+    assert_eq!(text(&finished(&mut h).await), "answer: yes");
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn background_subagent_update_is_projected_after_turn_settles() {
+    let mut h = start("pi-background").await;
+    accepted(
+        h.session
+            .start_turn(input("async-subagent"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "spawned");
+    assert!(matches!(
+        next(&mut h).await,
+        EngineEvent::SubagentUpdate { .. }
+    ));
+    assert!(
+        matches!(next(&mut h).await, EngineEvent::ItemCompleted { item, .. } if matches!(item.body, TurnItemBody::Subagent { .. }))
+    );
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejected_abort_does_not_claim_interruption() {
+    let mut h = start("pi-rejected-abort").await;
+    let turn = accepted(
+        h.session
+            .start_turn(input("hang-reject-abort"), &settings())
+            .await,
+    );
+    assert!(h.session.interrupt(&turn).await.is_err());
+    assert!(matches!(
+        finished(&mut h).await.last(),
+        Some(EngineEvent::TurnFinished {
+            outcome: TurnOutcome::Done,
+            ..
+        })
+    ));
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn background_dialog_fails_visibly_when_there_is_no_owned_turn() {
+    let mut h = start("pi-background-dialog").await;
+    accepted(
+        h.session
+            .start_turn(input("background-dialog"), &settings())
+            .await,
+    );
+    assert_eq!(text(&finished(&mut h).await), "done");
+    assert!(
+        matches!(next(&mut h).await, EngineEvent::Exited { reason } if reason.contains("outside a host-owned turn"))
+    );
     h.session.shutdown().await;
 }

@@ -396,4 +396,5 @@ profile of the same runtime, not a Node helper driver.
 | `crates/goat2-engine-sdk/src/pi/session.rs` | `packages/provider-pi/src/server/rpc.ts:293-334`, `mcpInjection.ts:294-398`, `adapter.ts:2360-2460,2550-2621,2935-2974,3070-3088`, `profile.ts` | RPC, launch, session and selection adapted to Rust engine API. |
 | `crates/goat2-engine-sdk/src/pi/events.rs` | `packages/provider-pi/src/server/adapter.ts:1709-2052`, `extensionDialog.ts`, `piContentText.ts`, `piToolOutput.ts`, `subagentOutput.ts` | Event projection adapted to GOAT 2 engine API. |
 | `crates/goat2-engine-sdk/src/pi/probe.rs` | `packages/provider-pi/src/server/status.ts:118-158,193-215,295-315,472-510` | Version and RPC model probe ported to Rust. |
+| `crates/goat2-engine-sdk/src/jsonl.rs` | `packages/provider-pi/src/server/rpc.ts:311-334` | Additive change: forward responses without a pending synchronous call to the event stream, as v1 does for asynchronously acknowledged prompts. |
 | `crates/goat2-engine-sdk/src/bin/fake_pi.rs`, `crates/goat2-engine-sdk/tests/pi_fake.rs` | Pi RPC protocol and adapter events | New deterministic JSONL fake and Rust integration tests. |
