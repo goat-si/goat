@@ -297,6 +297,48 @@ async fn a_refused_model_list_is_a_failure_not_a_late_catalog() {
     assert!(message.contains("catalog unavailable"), "{message}");
 }
 
+/// An API-key login whose first model/list page is `page`.
+fn api_key_catalog(page: Value) -> Vec<Entry> {
+    let mut e = handshake(None);
+    e.push(expect(
+        json!({"id": 2, "method": "account/read", "params": {}}),
+    ));
+    e.push(emit(
+        json!({"id": 2, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    e.push(expect(
+        json!({"id": 3, "method": "config/read", "params": {"includeLayers": false}}),
+    ));
+    e.push(emit(json!({"id": 3, "result": {"config": {}}})));
+    e.push(expect(
+        json!({"id": 4, "method": "model/list", "params": {}}),
+    ));
+    e.push(emit(json!({"id": 4, "result": page})));
+    e
+}
+
+#[tokio::test]
+async fn a_malformed_model_entry_fails_instead_of_a_partial_catalog() {
+    // v1 decodes the whole model/list response with its schema; one bad entry fails the probe.
+    let page =
+        json!({"data": [model("gpt-6.1-terra", true, json!({})), {"displayName": "no slug"}]});
+    let p = factory(api_key_catalog(page)).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert!(p.models.is_empty(), "{:?}", p.models);
+    let message = p.message.unwrap();
+    assert!(message.contains("unreadable model"), "{message}");
+}
+
+#[tokio::test]
+async fn a_malformed_cursor_fails_instead_of_ending_the_catalog() {
+    let page = json!({"data": [model("gpt-6.1-terra", true, json!({}))], "nextCursor": 7});
+    let p = factory(api_key_catalog(page)).probe().await.unwrap();
+    assert_eq!(p.status, ServerProviderState::Error);
+    assert!(p.models.is_empty(), "{:?}", p.models);
+    let message = p.message.unwrap();
+    assert!(message.contains("unreadable nextCursor"), "{message}");
+}
+
 #[cfg(unix)]
 fn script(name: &str, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;

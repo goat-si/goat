@@ -304,12 +304,19 @@ async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, Strin
             .get("data")
             .and_then(Value::as_array)
             .ok_or_else(|| "model/list answered without data".to_string())?;
-        models.extend(data.iter().filter_map(model_from_codex));
-        cursor = page
-            .get("nextCursor")
-            .and_then(Value::as_str)
-            .filter(|c| !c.is_empty())
-            .map(str::to_string);
+        // Every entry must be readable: a partial catalog is not a catalog (v1 decodes the whole
+        // response with its schema and fails otherwise).
+        for entry in data {
+            models.push(
+                model_from_codex(entry)
+                    .ok_or_else(|| "model/list answered an unreadable model".to_string())?,
+            );
+        }
+        cursor = match page.get("nextCursor") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(c)) => (!c.is_empty()).then(|| c.clone()),
+            Some(_) => return Err("model/list answered an unreadable nextCursor".into()),
+        };
         if cursor.is_none() {
             return Ok(models);
         }
@@ -521,33 +528,19 @@ impl Url {
         };
         let (host, port) = if let Some(v6) = host_port.strip_prefix('[') {
             let (inside, after) = v6.split_once(']')?;
-            if inside.is_empty()
-                || !inside
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
-            {
-                return None;
-            }
+            // WHATWG serializes a valid IPv6 address compressed and lowercase; anything else fails.
+            let addr: std::net::Ipv6Addr = inside.parse().ok()?;
             if !after.is_empty() && !after.starts_with(':') {
                 return None;
             }
-            (
-                format!("[{}]", inside.to_ascii_lowercase()),
-                after.strip_prefix(':'),
-            )
+            (format!("[{addr}]"), after.strip_prefix(':'))
         } else {
-            match host_port.rsplit_once(':') {
-                Some((h, p)) => (h.to_ascii_lowercase(), Some(p)),
-                None => (host_port.to_ascii_lowercase(), None),
-            }
+            let (raw, port) = match host_port.rsplit_once(':') {
+                Some((h, p)) => (h, Some(p)),
+                None => (host_port, None),
+            };
+            (domain_or_ipv4(raw)?, port)
         };
-        if host.is_empty()
-            || host
-                .chars()
-                .any(|c| c.is_whitespace() || matches!(c, '/' | '\\' | '?' | '#' | '@'))
-        {
-            return None;
-        }
         let port = match port {
             None | Some("") => None,
             Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => Some(p.parse::<u16>().ok()?),
@@ -590,6 +583,93 @@ impl Url {
     fn is_http(&self) -> bool {
         self.scheme == "http" || self.scheme == "https"
     }
+}
+
+/// WHATWG host parsing for an ASCII host: percent-decode, lowercase, refuse forbidden code
+/// points, and normalize IPv4 (decimal, hex 0x.., octal 0.., fewer than four parts). A non-ASCII
+/// host would need IDNA, which this parser does not do: it is refused, so the route counts as
+/// unverified (never as "away from OpenAI").
+fn domain_or_ipv4(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            let hex = raw.get(i + 1..i + 3)?;
+            decoded.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let host = String::from_utf8(decoded).ok()?.to_ascii_lowercase();
+    if host.is_empty()
+        || !host.is_ascii()
+        || host.bytes().any(|b| {
+            b <= b' '
+                || b == 0x7f
+                || matches!(
+                    b,
+                    b'#' | b'%'
+                        | b'/'
+                        | b':'
+                        | b'<'
+                        | b'>'
+                        | b'?'
+                        | b'@'
+                        | b'['
+                        | b'\\'
+                        | b']'
+                        | b'^'
+                        | b'|'
+                )
+        })
+    {
+        return None;
+    }
+    // "Ends in a number": the last label (ignoring one trailing dot) is numeric -> must be IPv4.
+    let mut parts: Vec<&str> = host.split('.').collect();
+    if parts.last() == Some(&"") && parts.len() > 1 {
+        parts.pop();
+    }
+    let last = *parts.last()?;
+    let numeric = |p: &str| {
+        !p.is_empty()
+            && (p.bytes().all(|b| b.is_ascii_digit())
+                || (p.starts_with("0x") || p.starts_with("0X"))
+                    && p[2..].bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    if !numeric(last) {
+        return Some(host);
+    }
+    if parts.len() > 4 {
+        return None;
+    }
+    let mut values = Vec::with_capacity(parts.len());
+    for p in &parts {
+        let value = if let Some(h) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
+            if h.is_empty() {
+                0
+            } else {
+                u64::from_str_radix(h, 16).ok()?
+            }
+        } else if p.len() > 1 && p.starts_with('0') {
+            u64::from_str_radix(&p[1..], 8).ok()?
+        } else {
+            p.parse::<u64>().ok()?
+        };
+        values.push(value);
+    }
+    let (last_value, head) = values.split_last()?;
+    if head.iter().any(|v| *v > 255) || *last_value >= 256u64.pow(5 - values.len() as u32) {
+        return None;
+    }
+    let mut address = *last_value;
+    for (n, v) in head.iter().enumerate() {
+        address += v * 256u64.pow(3 - n as u32);
+    }
+    Some(std::net::Ipv4Addr::from(address as u32).to_string())
 }
 
 /// v1 `readEffectiveBaseUrl` (OpenCodexRoute.ts:151-178): configuration wins only where the
@@ -1512,6 +1592,46 @@ mod tests {
         assert_eq!(Url::parse("not a url"), None);
         assert_eq!(Url::parse("http://[::1]x"), None);
         assert!(Url::parse("https://u:p@h/").unwrap().has_credentials);
+        // Hosts are percent-decoded and lowercased as Node's URL does, so an encoded OpenAI host
+        // is still OpenAI.
+        assert_eq!(
+            Url::parse("https://%61pi.openai.com/v1").unwrap().origin(),
+            "https://api.openai.com"
+        );
+        assert!(!routes_away_from_openai(Some(
+            "https://%61pi.openai.com/v1"
+        )));
+        assert!(!routes_away_from_openai(Some("https://API.OPENAI.COM./v1")));
+        // IPv6 must be a real address and is serialized compressed.
+        assert_eq!(Url::parse("http://[::::]/"), None);
+        assert_eq!(Url::parse("http://[1:2:3]/"), None);
+        assert_eq!(
+            Url::parse("http://[0:0:0:0:0:0:0:1]:443/")
+                .unwrap()
+                .origin(),
+            "http://[::1]:443"
+        );
+        // IPv4 forms are normalized (hex, octal, short) or refused when out of range.
+        assert_eq!(
+            Url::parse("http://0x7f.1/").unwrap().origin(),
+            "http://127.0.0.1"
+        );
+        assert_eq!(
+            Url::parse("http://017700000001/").unwrap().origin(),
+            "http://127.0.0.1"
+        );
+        assert_eq!(
+            Url::parse("http://2130706433:8080/").unwrap().origin(),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(Url::parse("http://1.2.3.256/"), None);
+        assert_eq!(Url::parse("http://1.2.3.4.5/"), None);
+        // Forbidden code points and invalid escapes fail; a non-ASCII host is refused (no IDNA),
+        // which leaves the route unverified, never "away from OpenAI".
+        assert_eq!(Url::parse("http://a%2fb/"), None);
+        assert_eq!(Url::parse("http://a%zz/"), None);
+        assert_eq!(Url::parse("http://bücher.example/"), None);
+        assert!(!routes_away_from_openai(Some("http://bücher.example/v1")));
     }
 
     #[test]
