@@ -18,6 +18,10 @@ import {
 } from "@goat/contracts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 
+import type { Nodes } from "mdast";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+
 import { capabilityRecordApp } from "./appContextId.ts";
 import { expandAssistantCitationsForProvider } from "./assistantCitations.ts";
 import { markdownLinksStartingBefore } from "./markdownLinkPrefix.ts";
@@ -120,20 +124,63 @@ export interface ComposerContextReferenceOccurrence {
   end: number;
 }
 
+const markdownParser = unified().use(remarkParse);
+const FENCE_OPENER = /^(?:`{3,}|~{3,})/;
+const FENCE_CLOSER = /^[ \t>]*(`{3,}|~{3,})[ \t]*$/;
+
+// Parsed rather than matched: a fence ends with its list item or blockquote, and a four-space
+// indent is not one. Only closed fences count: chips are appended at the end of the prompt, and
+// an unclosed fence above them would run to the end and silently drop their context.
+function fencedCodeRanges(markdown: string) {
+  const ranges: Array<{ start: number; end: number }> = [];
+  if (!markdown.includes("```") && !markdown.includes("~~~")) return ranges;
+  const visit = (node: Nodes) => {
+    if (node.type === "code") {
+      const start = node.position?.start.offset;
+      const end = node.position?.end.offset;
+      if (start === undefined || end === undefined) return;
+      const source = markdown.slice(start, end);
+      const opener = FENCE_OPENER.exec(source)?.[0];
+      const lastLineStart = Math.max(source.lastIndexOf("\n"), source.lastIndexOf("\r")) + 1;
+      const closer = FENCE_CLOSER.exec(source.slice(lastLineStart))?.[1];
+      if (
+        opener !== undefined &&
+        lastLineStart > 0 &&
+        closer !== undefined &&
+        closer[0] === opener[0] &&
+        closer.length >= opener.length
+      ) {
+        ranges.push({ start, end });
+      }
+    } else if ("children" in node) {
+      for (const child of node.children) visit(child);
+    }
+  };
+  visit(markdownParser.parse(markdown));
+  return ranges;
+}
+
 export function collectComposerContextReferences(
   text: string,
   limit?: number,
 ): ComposerContextReferenceOccurrence[] {
   const occurrences: ComposerContextReferenceOccurrence[] = [];
-  // No link can match without the protocol prefix; skip the scan entirely on
-  // plain prose so long messages never pay for a regex walk per `[`.
+  // Skip scanning plain prose without a context link.
   if (limit === undefined && !CONTEXT_HREF_PREFIXES.some((prefix) => text.includes(`](${prefix}`)))
     return occurrences;
   const matches =
     limit === undefined
       ? text.matchAll(CONTEXT_LINK)
       : markdownLinksStartingBefore(text, CONTEXT_LINK, limit);
+  const fences = fencedCodeRanges(text);
+  let fenceIndex = 0;
   for (const match of matches) {
+    const start = match.index;
+    const end = start + match[0].length;
+    while (fences[fenceIndex] !== undefined && (fences[fenceIndex]?.end ?? Infinity) <= start)
+      fenceIndex += 1;
+    const fence = fences[fenceIndex];
+    if (fence !== undefined && end > fence.start) continue;
     const parsed = parseComposerContextHref(match[3]!);
     if (!parsed) continue;
     occurrences.push({
@@ -141,8 +188,8 @@ export function collectComposerContextReferences(
       label: sanitizeComposerContextLabel(match[2]!, parsed.kind),
       image: match[1] === "!",
       source: match[0],
-      start: match.index,
-      end: match.index + match[0].length,
+      start,
+      end,
     });
   }
   return occurrences;
