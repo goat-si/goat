@@ -21,7 +21,7 @@ flowchart LR
 |---|---|---|---|
 | Electron main | user | until quit | no thread work; no IPC data path for threads |
 | renderer | main | per window | talks to the host directly over WebSocket |
-| `goat2-host` | main | until app quit | quitting the app ends the work; own process group; exits when stdin closes; writes `host.json` (pid, port, generation); on start: kills a leftover host group from `host.json` (never attaches), settles runs, regenerates index epoch |
+| `goat2-host` | main | until app quit | quitting the app ends the work; own process group; exits when stdin closes; writes `host.json` (pid, port, generation) and bumps `<dataDir>/generation` on every start; on start: kills a leftover host group from `host.json` (never attaches), settles runs, regenerates index epoch |
 | `codex app-server` | host | per thread; stopped after 10 min idle | own process group, `nice -n 10` for agent commands, memory limit per group: lane B gives `group_rss_bytes()` + `kill_group()`, host (lane E) samples every 10 s, 8 GiB default, warns at 80 %, over → kill that group only, run `failed` (`memory_limit`), never resent |
 
 | Build | App | Bundle id | Data dir | Host port |
@@ -45,5 +45,6 @@ GOAT v1 Nightly is a separate app with its own data (`~/.goat/desktop-nightly`);
 - `titleBarStyle: hiddenInset`, macOS buttons at x16 y13 (v1 `DesktopWindowAppearance.ts`), top bar 40px drawn by the UI as
   `-webkit-app-region: drag` (controls `no-drag`), traffic-light area x16..~84 left empty in the desktop build.
 - Preload `window.goat2Host = {wsUrl, token, build: {commit, branch, builtAt}}`; Dev builds show the stamp in the top bar.
-- `scripts/build-dev-app.sh` installs only from branch `goat2`.
+- `scripts/build-dev-app.sh` installs only from branch `goat2` and refuses unless `pnpm -r typecheck` and `cargo test --workspace --locked` pass.
+- Renderer origin: custom scheme `goat2-dev://app` (v1 naming pattern, never v1's `goat` / `goat-dev`); `goat2-dev://app/...` links open in the Dev app (single instance + open-url, lifted from v1).
 - A host that exits 0 before its ready line / `/health` is not restarted ("host not running"); ready-then-exit or non-zero exit restarts with v1 backoff.

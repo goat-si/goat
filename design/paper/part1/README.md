@@ -44,3 +44,8 @@ code-derived spec of v1 `origin/dev` 916b5ccc (`components/Sidebar.tsx` Activity
 (40px top bar, 44px rail) and the Updating line are GOAT 2. v1 keeps its own colours inside the timeline and composer
 (diff +/- counts, Full access chip, stop button); the "Approval" label is GOAT 2 blue. When code and board differ on a
 v1 component, v1 code wins.
+
+**Workspace reaches the window bottom (owner, 2026-11-28 ~22:35 KST).** The sidebar and main pane run flush to the
+bottom and right edges of the window: no 8px bottom/right inset, only the top-left corner of the workspace is rounded
+(like v1's `workspace-content-frame`: border top + left, `rounded-tl`). All desktop boards were changed and the bot home
+boards re-exported.

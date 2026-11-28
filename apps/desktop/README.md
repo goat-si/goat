@@ -33,7 +33,7 @@ Window: no native title bar. The UI draws the 40px top bar and must keep it a dr
 it, so the UI leaves that spot empty (the boards' painted dots are illustrations). The window title is
 still set (Window menu, Mission Control, About).
 
-Only the app's own origin (`goat2://app`, or `GOAT2_WEB_URL` in dev) may load in the window and receive
+Only the app's own origin (`goat2-dev://app`, or `GOAT2_WEB_URL` in dev) may load in the window and receive
 `{wsUrl, token}`; other navigations are refused (http(s) opens in the browser). The window reloads when
 the host announces a different `wsUrl`.
 

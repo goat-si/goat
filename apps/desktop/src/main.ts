@@ -1,23 +1,81 @@
 // GOAT 2 Electron shell (structure/10_processes.md): main owns windows only. It starts goat2-host
 // as a separate process group, restarts it on crash, and ends it with its whole group on quit,
 // because quitting the app ends the work. The renderer (apps/web) talks to the host directly over
-// WebSocket; main only hands it {wsUrl, token} through the preload, never thread data.
+// WebSocket; main only hands it {wsUrl, token, build} through the preload, never thread data.
+//
+// Window, menu, protocol, single-instance and recovery behaviour are lifted from GOAT v1
+// apps/desktop (docs/PROVENANCE.md, "apps/desktop" rows); host supervision is new (hostSupervisor.ts).
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, shell } from "electron";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { app, BrowserWindow, ipcMain, nativeTheme, screen, shell } from "electron";
 import { HostSupervisor, type HostState } from "./hostSupervisor.ts";
+import {
+  getDesktopScheme,
+  getDesktopUrl,
+  registerDesktopProtocol,
+  registerDesktopSchemePrivilegesSync,
+} from "./electron/ElectronProtocol.ts";
+import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
+import {
+  configureApplicationMenu,
+  type MainWindowContentsCommand,
+  type MainWindowZoomDirection,
+} from "./window/DesktopApplicationMenu.ts";
+import {
+  getInitialWindowBackgroundColor,
+  getWindowTitleBarOptions,
+  syncMacosWindowButtons,
+} from "./window/DesktopWindowAppearance.ts";
+import {
+  MIN_MAIN_WINDOW_HEIGHT,
+  MIN_MAIN_WINDOW_WIDTH,
+  normalBoundsOnWindowDisplay,
+  resolveInitialMainWindowBounds,
+} from "./window/mainWindowPlacement.ts";
+import { isSameOriginRendererNavigation } from "./window/rendererNavigation.ts";
 
-const APP_NAME = "GOAT 2 (Dev)";
+/** Shown in the menu, About and the title bar. */
+const DISPLAY_NAME = "GOAT 2 (Dev)";
+// v1 DesktopAppIdentity.configure: the runtime name has no parentheses, because Electron keeps
+// them in its User-Agent token, which breaks Turnstile in browser sessions.
+const RUNTIME_APP_NAME = "GOAT 2 Dev";
+// Part 1 ships only the Dev channel, packaged or not: renderer scheme goat2-dev, never v1's goat / goat-dev.
+const IS_DEV_CHANNEL = true;
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "../../..");
 // Dev build identity (structure/10_processes.md): own data dir and host port, nothing shared with GOAT v1.
 const DATA_DIR = process.env.GOAT2_DATA_DIR ?? join(homedir(), ".goat2-dev");
 const HOST_PORT = Number(process.env.GOAT2_HOST_PORT ?? 3873);
 const HOST_TOKEN = randomBytes(32).toString("base64url");
+
+// v1 DesktopWindow.ts constants.
+const MAIN_WINDOW_BOUNDS_PERSIST_DEBOUNCE_MS = 500;
+const RENDERER_RECOVERY_RELOAD_DELAY_MS = 500;
+const RENDERER_RECOVERY_MAX_ATTEMPTS = 3;
+const RENDERER_RECOVERY_WINDOW_MS = 60_000;
+const DEVELOPMENT_LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([-2, -7, -9, -102, -105, -106, -118]);
+
+// v1 DesktopWindow.ts: an unpackaged dev load can fail while Vite is still starting.
+function isRetryableDevelopmentRendererLoadFailure(input: {
+  readonly applicationUrl: string;
+  readonly errorCode: number;
+  readonly isMainFrame: boolean;
+  readonly validatedUrl: string;
+}): boolean {
+  return (
+    input.isMainFrame &&
+    DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES.has(input.errorCode) &&
+    isSameOriginRendererNavigation({
+      applicationUrl: input.applicationUrl,
+      navigationUrl: input.validatedUrl,
+    })
+  );
+}
 
 interface BuildInfo {
   readonly commit: string;
@@ -37,18 +95,18 @@ function readBuildInfo(): BuildInfo {
     }
   };
   return {
-    commit: git("rev-parse", "--short=11", "HEAD") || "unknown",
+    // v1 DesktopAppIdentity COMMIT_HASH_DISPLAY_LENGTH = 12.
+    commit: git("rev-parse", "--short=12", "HEAD") || "unknown",
     branch: git("rev-parse", "--abbrev-ref", "HEAD") || "unknown",
     dirty: git("status", "--porcelain") !== "",
     builtAt: null,
   };
 }
 
-app.setName(APP_NAME);
+// Before ready (v1 ElectronProtocol: registerSchemesAsPrivileged must run during bootstrap).
+registerDesktopSchemePrivilegesSync();
+app.setName(RUNTIME_APP_NAME);
 app.setPath("userData", join(DATA_DIR, "desktop"));
-protocol.registerSchemesAsPrivileged([
-  { scheme: "goat2", privileges: { standard: true, secure: true, supportFetchAPI: true } },
-]);
 
 const build = readBuildInfo();
 const versionLabel = `${build.branch} ${build.commit}${build.dirty ? "+dirty" : ""}`;
@@ -58,7 +116,10 @@ const hostBinary = app.isPackaged
 const webRoot = app.isPackaged
   ? join(app.getAppPath(), "web")
   : (process.env.GOAT2_WEB_DIST ?? join(REPO_ROOT, "apps", "web", "dist"));
-const webUrl = !app.isPackaged && process.env.GOAT2_WEB_URL ? process.env.GOAT2_WEB_URL : "goat2://app/index.html";
+const scheme = getDesktopScheme(IS_DEV_CHANNEL);
+const applicationUrl =
+  !app.isPackaged && process.env.GOAT2_WEB_URL ? process.env.GOAT2_WEB_URL : getDesktopUrl(IS_DEV_CHANNEL);
+const windowStateFile = join(app.getPath("userData"), "window-state.json");
 
 const logsDir = join(DATA_DIR, "logs");
 mkdirSync(logsDir, { recursive: true });
@@ -97,13 +158,28 @@ const HOST_SUFFIX: Partial<Record<HostState["phase"], string>> = {
   stopping: "quitting",
 };
 
+// Deliberate difference from v1 (which lets the renderer title the window after the open thread):
+// the Dev build's title always carries the build and host state (lane G brief).
 function windowTitle(state: HostState): string {
   const suffix = HOST_SUFFIX[state.phase];
-  return [APP_NAME, versionLabel, suffix].filter(Boolean).join(" · ");
+  return [DISPLAY_NAME, versionLabel, suffix].filter(Boolean).join(" · ");
 }
 
 function updateTitles(state: HostState): void {
   for (const win of BrowserWindow.getAllWindows()) if (!win.isDestroyed()) win.setTitle(windowTitle(state));
+}
+
+const isAppUrl = (url: string | undefined) =>
+  url !== undefined && isSameOriginRendererNavigation({ applicationUrl, navigationUrl: url });
+
+// v1 ElectronShell.parseSafeExternalUrl: only web links leave the app (editor links: no editor here yet).
+const SAFE_WEB_PROTOCOLS = new Set(["http:", "https:"]);
+function openExternalIfSafe(url: string): void {
+  try {
+    if (SAFE_WEB_PROTOCOLS.has(new URL(url).protocol)) void shell.openExternal(url);
+  } catch {
+    // Not a URL.
+  }
 }
 
 // The page loads once the host has printed its start line (so the preload can hand over wsUrl),
@@ -112,11 +188,16 @@ function updateTitles(state: HostState): void {
 // frozen {wsUrl, token} is never null or stale for long.
 const LOAD_WAIT_MS = 3_000;
 const loadedWith = new WeakMap<BrowserWindow, string | null>();
+/** A link to the app's own origin (open-url, second instance) waiting for the window to load. */
+let pendingAppUrl: string | null = null;
 function loadWindows(): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed() || loadedWith.has(win)) continue;
     loadedWith.set(win, supervisor.state.announce?.wsUrl ?? null);
-    void win.loadURL(webUrl);
+    const target = pendingAppUrl ?? applicationUrl;
+    pendingAppUrl = null;
+    // v1: load failures surface through did-fail-load; the promise rejection carries nothing more.
+    void win.loadURL(target).catch(() => undefined);
   }
 }
 
@@ -129,102 +210,228 @@ function reloadStaleWindows(wsUrl: string): void {
   }
 }
 
-// Only the app's own pages may run in the window: the preload hands them the host token.
-const trustedOrigin = (() => {
-  const url = new URL(webUrl);
-  return `${url.protocol}//${url.host}`;
-})();
-function isTrusted(url: string | undefined): boolean {
-  if (url === undefined) return false;
+const mainWindow = (): BrowserWindow | undefined =>
+  BrowserWindow.getAllWindows().find((win) => !win.isDestroyed());
+
+function reveal(win: BrowserWindow): void {
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+/** v1 DesktopWindow.zoomWindow: half-step zoom, buttons follow the scaled top bar. */
+function zoomMain(direction: MainWindowZoomDirection): void {
+  const win = mainWindow();
+  if (win === undefined) return;
+  const contents = win.webContents;
+  contents.setZoomLevel(direction === "reset" ? 0 : contents.getZoomLevel() + (direction === "in" ? 0.5 : -0.5));
+  if (process.platform === "darwin") syncMacosWindowButtons(win);
+}
+
+/** v1 DesktopWindow.runMainContentsCommand: menu commands target the app, never a focused guest. */
+function runMainContentsCommand(command: MainWindowContentsCommand): void {
+  const contents = mainWindow()?.webContents;
+  if (contents === undefined || contents.isDestroyed()) return;
+  if (command === "reload") contents.reload();
+  else if (command === "forceReload") contents.reloadIgnoringCache();
+  else contents.toggleDevTools();
+}
+
+function displayBounds(): Electron.Rectangle[] {
   try {
-    const parsed = new URL(url);
-    return `${parsed.protocol}//${parsed.host}` === trustedOrigin;
-  } catch {
-    return false;
+    return screen.getAllDisplays().map((display) => display.bounds);
+  } catch (error) {
+    log(`failed to read connected displays; using defaults: ${String(error)}`);
+    return [];
   }
 }
 
-// The UI draws a 40px top bar (Paper boards, docs/DECISIONS.md "Top bar 40px"); the native title bar
-// is hidden and the window buttons sit inside that bar. Same placement rule as GOAT v1
-// (apps/desktop/src/window/DesktopWindowAppearance.ts:28-34: x 16, y = bar / 2 - button radius 7).
-const TOP_BAR_HEIGHT = 40;
-const WINDOW_BUTTON_RADIUS = 7;
-
-function createWindow(): void {
+function createWindow(): BrowserWindow {
+  const saved = DesktopAppSettings.readMainWindowState(windowStateFile);
+  const initialBounds = resolveInitialMainWindowBounds(saved.mainWindowBounds, displayBounds());
+  const shouldUseDarkColors = nativeTheme.shouldUseDarkColors;
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    ...initialBounds,
+    minWidth: MIN_MAIN_WINDOW_WIDTH,
+    minHeight: MIN_MAIN_WINDOW_HEIGHT,
+    show: false,
+    autoHideMenuBar: true,
+    ...(process.platform === "darwin" ? { disableAutoHideCursor: true } : {}),
+    backgroundColor: getInitialWindowBackgroundColor(shouldUseDarkColors),
     title: windowTitle(supervisor.state),
-    backgroundColor: "#FFFFFF",
-    ...(process.platform === "darwin"
-      ? {
-          titleBarStyle: "hiddenInset" as const,
-          trafficLightPosition: { x: 16, y: TOP_BAR_HEIGHT / 2 - WINDOW_BUTTON_RADIUS },
-        }
-      : {}),
+    ...getWindowTitleBarOptions(shouldUseDarkColors, process.platform),
     webPreferences: {
       preload: join(HERE, "preload.cjs"),
+      // Hidden-renderer throttling stalls first paint; re-enable it after the first reveal.
+      backgroundThrottling: false,
       contextIsolation: true,
-      sandbox: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
-  // The page's <title> must not replace the build and host state in the title bar.
+  win.once("ready-to-show", () => {
+    if (saved.mainWindowMaximized) win.maximize();
+    reveal(win);
+    win.webContents.setBackgroundThrottling(true);
+  });
+
   win.on("page-title-updated", (event) => event.preventDefault());
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url)) void shell.openExternal(url);
+    openExternalIfSafe(url);
     return { action: "deny" };
   });
+  // v1 DesktopWindow will-navigate guard; will-redirect added in GOAT 2 (review r1-4): only the app's
+  // own pages may run here because the preload hands them the host token.
   const guard = (event: Electron.Event, url: string) => {
-    if (isTrusted(url)) return;
+    if (isAppUrl(url)) return;
     event.preventDefault();
-    if (/^https?:/.test(url)) void shell.openExternal(url);
+    openExternalIfSafe(url);
   };
   win.webContents.on("will-navigate", guard);
   win.webContents.on("will-redirect", guard);
+
+  // Ctrl+wheel bypasses menus.
+  win.webContents.on("zoom-changed", (_event, direction) => {
+    if (!win.isDestroyed()) zoomMain(direction);
+  });
+  // v1 DesktopWindow.ts development load retry (unpackaged only: the packaged app loads from disk).
+  const isDevelopment = !app.isPackaged;
+  let developmentLoadRetryIndex = 0;
+  let developmentLoadRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  // GOAT 2 fix over v1: after a failed main-frame load Chromium commits its error page and fires
+  // did-finish-load for the same URL right away (seen: did-fail-load -102, then did-finish-load
+  // 5 ms later), which would cancel the retry just scheduled. Skip that one did-finish-load.
+  let errorPagePending = false;
+  const clearDevelopmentLoadRetry = () => {
+    if (developmentLoadRetryTimer === undefined) return;
+    clearTimeout(developmentLoadRetryTimer);
+    developmentLoadRetryTimer = undefined;
+  };
+  const loadApplication = () => {
+    if (win.isDestroyed()) return;
+    void win.loadURL(applicationUrl).catch(() => undefined);
+  };
+  const scheduleDevelopmentLoadRetry = () => {
+    if (developmentLoadRetryTimer !== undefined || win.isDestroyed()) return undefined;
+    const retryIndex = Math.min(developmentLoadRetryIndex, DEVELOPMENT_LOAD_RETRY_DELAYS_MS.length - 1);
+    const retryInMs = DEVELOPMENT_LOAD_RETRY_DELAYS_MS[retryIndex] ?? 2_000;
+    developmentLoadRetryIndex += 1;
+    developmentLoadRetryTimer = setTimeout(() => {
+      developmentLoadRetryTimer = undefined;
+      if (!win.isDestroyed()) loadApplication();
+    }, retryInMs);
+    return retryInMs;
+  };
+  win.webContents.on("did-finish-load", () => {
+    if (errorPagePending) {
+      errorPagePending = false;
+      return;
+    }
+    if (isDevelopment && !isAppUrl(win.webContents.getURL())) return;
+    clearDevelopmentLoadRetry();
+    developmentLoadRetryIndex = 0;
+    if (process.platform === "darwin") syncMacosWindowButtons(win);
+  });
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    // -3 ERR_ABORTED: a newer navigation replaced this one; no error page follows.
+    if (errorCode !== -3) errorPagePending = true;
+    const retryInMs =
+      isDevelopment &&
+      isRetryableDevelopmentRendererLoadFailure({ applicationUrl, errorCode, isMainFrame, validatedUrl: validatedURL })
+        ? scheduleDevelopmentLoadRetry()
+        : undefined;
+    log(
+      `main window failed to load: ${errorCode} ${errorDescription} ${validatedURL}` +
+        (retryInMs === undefined ? "" : `, retry in ${retryInMs} ms`),
+    );
+  });
+  win.on("closed", clearDevelopmentLoadRetry);
+
+  if (process.platform === "darwin") {
+    // Mouse drivers can deliver Back/Forward as macOS swipe gestures instead of buttons.
+    win.on("swipe", (_event, direction) => {
+      const history = win.webContents.navigationHistory;
+      if (direction === "left" && history.canGoBack()) history.goBack();
+      else if (direction === "right" && history.canGoForward()) history.goForward();
+    });
+  }
+
+  // v1 DesktopWindow render-process-gone: reload after a renderer crash; past 3 reloads a minute,
+  // wait for the oldest to leave the window instead of giving up, so the window never stays blank.
+  let rendererRecoveryTimestamps: number[] = [];
+  win.webContents.on("render-process-gone", (_event, details) => {
+    const recoverable =
+      details.reason === "crashed" ||
+      details.reason === "oom" ||
+      details.reason === "killed" ||
+      details.reason === "abnormal-exit";
+    const now = Date.now();
+    rendererRecoveryTimestamps = rendererRecoveryTimestamps.filter(
+      (timestamp) => now - timestamp < RENDERER_RECOVERY_WINDOW_MS,
+    );
+    const shouldRecover = recoverable && !win.isDestroyed();
+    const oldestAttempt =
+      rendererRecoveryTimestamps.length >= RENDERER_RECOVERY_MAX_ATTEMPTS
+        ? rendererRecoveryTimestamps[rendererRecoveryTimestamps.length - RENDERER_RECOVERY_MAX_ATTEMPTS]
+        : undefined;
+    const reloadInMs =
+      oldestAttempt === undefined
+        ? RENDERER_RECOVERY_RELOAD_DELAY_MS
+        : Math.max(RENDERER_RECOVERY_RELOAD_DELAY_MS, oldestAttempt + RENDERER_RECOVERY_WINDOW_MS - now);
+    log(
+      `main window render process gone: ${details.reason} exit=${details.exitCode}` +
+        (shouldRecover ? `, reload in ${reloadInMs} ms` : ""),
+    );
+    if (!shouldRecover) return;
+    rendererRecoveryTimestamps.push(now + reloadInMs);
+    setTimeout(() => {
+      if (!win.isDestroyed()) win.webContents.reload();
+    }, reloadInMs);
+  });
+
+  // v1 persists main window bounds (debounced, flushed on close) and restores them on display changes.
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  const persistBounds = () => {
+    if (persistTimer !== null) clearTimeout(persistTimer);
+    persistTimer = null;
+    if (win.isDestroyed() || win.isFullScreen() || win.isMinimized()) return;
+    const maximized = win.isMaximized();
+    const bounds = maximized
+      ? normalBoundsOnWindowDisplay(win.getNormalBounds(), win.getBounds(), displayBounds())
+      : win.getBounds();
+    try {
+      DesktopAppSettings.writeMainWindowState(windowStateFile, {
+        mainWindowBounds: {
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.max(MIN_MAIN_WINDOW_WIDTH, Math.round(bounds.width)),
+          height: Math.max(MIN_MAIN_WINDOW_HEIGHT, Math.round(bounds.height)),
+        },
+        mainWindowMaximized: maximized,
+      });
+    } catch (error) {
+      log(`failed to save window bounds: ${String(error)}`);
+    }
+  };
+  const scheduleBoundsPersist = () => {
+    if (persistTimer !== null) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persistBounds, MAIN_WINDOW_BOUNDS_PERSIST_DEBOUNCE_MS);
+  };
+  win.on("resize", scheduleBoundsPersist);
+  win.on("move", scheduleBoundsPersist);
+  win.on("maximize", scheduleBoundsPersist);
+  win.on("unmaximize", scheduleBoundsPersist);
+  win.on("close", persistBounds);
+
   if (supervisor.state.announce !== null || hostGaveUp(supervisor.state)) loadWindows();
   else setTimeout(loadWindows, LOAD_WAIT_MS);
-}
-
-function serveWeb(request: Request): Response | Promise<Response> {
-  const url = new URL(request.url);
-  if (url.host !== "app") return new Response("not found", { status: 404 });
-  const root = resolve(webRoot);
-  const relative = decodeURIComponent(url.pathname).replace(/^\/+/, "") || "index.html";
-  const file = resolve(root, relative);
-  if (file !== root && !file.startsWith(root + sep)) return new Response("not found", { status: 404 });
-  const target = existsSync(file) && statSync(file).isFile() ? file : join(root, "index.html");
-  return net.fetch(pathToFileURL(target).toString());
-}
-
-function buildMenu(): void {
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      {
-        label: APP_NAME,
-        submenu: [
-          { role: "about" },
-          { type: "separator" },
-          { label: "Start Host", click: () => supervisor.start() },
-          { label: "Open Data Folder", click: () => void shell.openPath(DATA_DIR) },
-          { type: "separator" },
-          { role: "hide" },
-          { role: "hideOthers" },
-          { role: "unhide" },
-          { type: "separator" },
-          { role: "quit" },
-        ],
-      },
-      { role: "editMenu" },
-      { role: "viewMenu" },
-      { role: "windowMenu" },
-    ]),
-  );
+  return win;
 }
 
 ipcMain.on("goat2:host-info", (event) => {
   const frame = event.senderFrame;
-  if (frame === null || frame.parent !== null || !isTrusted(frame.url)) {
+  if (frame === null || frame.parent !== null || !isAppUrl(frame.url)) {
     log(`refused host info to ${frame?.url ?? "unknown frame"}`);
     event.returnValue = { wsUrl: null, token: null, build: null };
     return;
@@ -237,28 +444,62 @@ ipcMain.on("goat2:host-info", (event) => {
   };
 });
 
+/** v1 DesktopClerk resumeProviderAuth pattern: a link to the app's own origin opens in the main window. */
+function openAppLink(url: string | undefined): boolean {
+  if (url === undefined || !isAppUrl(url)) return false;
+  const win = mainWindow();
+  if (win === undefined || !loadedWith.has(win)) {
+    pendingAppUrl = url;
+    if (win === undefined && app.isReady()) createWindow();
+    return true;
+  }
+  void win.loadURL(url).catch(() => undefined);
+  reveal(win);
+  return true;
+}
+
+// v1 DesktopClerk: take the single-instance lock before anything else starts, and queue
+// second-instance / open-url events until the window exists (macOS hands the launching link to
+// open-url before ready).
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    const win = BrowserWindow.getAllWindows()[0];
+  const pendingOpenUrls: string[] = [];
+  let handleOpenUrl = (url: string) => {
+    if (!isAppUrl(url)) return false;
+    pendingOpenUrls.push(url);
+    return true;
+  };
+  app.on("open-url", (event, url) => {
+    if (handleOpenUrl(url)) event.preventDefault();
+  });
+  app.on("second-instance", (_event, argv) => {
+    if (argv.some((value) => openAppLink(value))) return;
+    const win = mainWindow();
     if (win === undefined) createWindow();
-    else {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
+    else reveal(win);
   });
 
   void app.whenReady().then(() => {
-    log(`start ${APP_NAME} ${versionLabel} host=${hostBinary} port=${HOST_PORT} data=${DATA_DIR}`);
+    log(`start ${DISPLAY_NAME} ${versionLabel} host=${hostBinary} port=${HOST_PORT} data=${DATA_DIR}`);
+    // v1 DesktopAppIdentity.configure: About shows the app version and the build commit.
     app.setAboutPanelOptions({
-      applicationName: APP_NAME,
-      applicationVersion: versionLabel,
-      version: build.builtAt === null ? "unpackaged" : `built ${build.builtAt}`,
+      applicationName: DISPLAY_NAME,
+      applicationVersion: app.getVersion(),
+      version: versionLabel,
     });
-    protocol.handle("goat2", serveWeb);
-    buildMenu();
+    registerDesktopProtocol(scheme, webRoot);
+    configureApplicationMenu({
+      displayName: DISPLAY_NAME,
+      platform: process.platform,
+      startHost: () => supervisor.start(),
+      zoomMain,
+      runMainContentsCommand,
+    });
     supervisor.start();
+    for (const url of pendingOpenUrls.splice(0)) pendingAppUrl = url;
+    for (const value of process.argv) if (isAppUrl(value)) pendingAppUrl = value;
+    handleOpenUrl = openAppLink;
     createWindow();
   });
 

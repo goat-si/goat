@@ -91,11 +91,14 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   git merge --no-ff goat2_<lane> -m "merge goat2_<lane>: <what>"
   cargo fmt --check && cargo clippy --workspace -- -D warnings && cargo test --workspace
   pnpm -r typecheck                      # the TS side must stay green too
+  ! git grep -n -E '^(<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)( |$)' -- . ':!design'   # no conflict markers (diff3 too)
   git push --force-with-lease origin goat2
   trap - ERR; rmdir /tmp/goat2-merge.lock
   ```
 - Never leave an unpushed merge in `~/Developer/goat2` when you release the lock (a later lane would push it
   under its own name). Informational steps go before taking the lock, never under the lock with `set -e`.
+- Merge only after a **fresh independent review passes** on the exact lane head (findings fixed or rebutted with
+  evidence). Green tests alone are not enough.
 - `goat2` must always build: `cargo test --workspace` and `pnpm -r typecheck` green after every merge. A
   contract change that breaks another lane's code is announced to that lane before merging, and the fix lands
   right after (or in the same merge if small).

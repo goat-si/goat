@@ -1,8 +1,9 @@
 // Fake goat2-host for hostSupervisor tests. Behaviour comes from env:
 //   GOAT2_HOST_PORT   port for GET /health (and the start line)
 //   FAKE_HOST_PIDS    file the host appends "<role> <pid>" lines to
-//   FAKE_HOST_MODE    comma list: crash-after-ready, exit-clean-after-ready, exit-now, exit-clean,
-//                     ignore-term, grandchild
+//   FAKE_HOST_MODE    comma list: crash-after-ready, crash-first-after-ready (only the first host
+//                     started with this pids file crashes), exit-clean-after-ready, exit-now,
+//                     exit-clean, ignore-term, grandchild
 //   FAKE_HOST_ANNOUNCE_DELAY_MS  print the start line this late (slow host start)
 //   FAKE_HOST_HEALTH_STATUS      status /health answers with (default 200)
 //   FAKE_HOST_HEALTH_DELAY_MS    /health answers 503 until this long after start
@@ -10,11 +11,15 @@
 //   mode health-redirect         /health answers 302 to /ok, which answers 200
 //   mode no-announce             never print the start line
 import { spawn } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 
 const modes = new Set((process.env.FAKE_HOST_MODE ?? "").split(",").filter(Boolean));
 const port = Number(process.env.GOAT2_HOST_PORT);
+const firstHost =
+  !process.env.FAKE_HOST_PIDS ||
+  !existsSync(process.env.FAKE_HOST_PIDS) ||
+  !readFileSync(process.env.FAKE_HOST_PIDS, "utf8").includes("host ");
 const record = (role, pid) => {
   if (process.env.FAKE_HOST_PIDS) appendFileSync(process.env.FAKE_HOST_PIDS, `${role} ${pid}\n`);
 };
@@ -43,5 +48,6 @@ server.listen(port, "127.0.0.1", () => {
   const announce = () => console.log(JSON.stringify({ wsUrl: `ws://127.0.0.1:${port}/ws`, mcpUrl: null, port, generation: 1 }));
   if (!modes.has("no-announce")) setTimeout(announce, Number(process.env.FAKE_HOST_ANNOUNCE_DELAY_MS ?? 0));
   if (modes.has("crash-after-ready")) setTimeout(() => process.exit(1), 300);
+  if (modes.has("crash-first-after-ready") && firstHost) setTimeout(() => process.exit(1), 300);
   if (modes.has("exit-clean-after-ready")) setTimeout(() => process.exit(0), 300);
 });

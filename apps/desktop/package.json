@@ -7,8 +7,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsc -p tsconfig.build.json && electron .",
-    "test": "node --test src/*.test.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.json"
   },
-  "devDependencies": { "@types/node": "catalog:", "electron": "catalog:", "typescript": "catalog:" }
+  "devDependencies": {
+    "@electron/osx-sign": "catalog:",
+    "@types/node": "catalog:",
+    "electron": "catalog:",
+    "typescript": "catalog:"
+  }
 }
