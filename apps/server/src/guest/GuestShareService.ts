@@ -16,6 +16,7 @@ import {
   type OrchestrationV2CommandOutputFrame,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2GetTurnItemResult,
+  type OrchestrationV2TurnItem,
   type ThreadGuestShare,
   ThreadId,
   TurnItemId,
@@ -56,7 +57,6 @@ import { coalesceThreadLiveStream } from "../orchestration-v2/ThreadLiveEventCoa
 import { buildBoundedThreadStreamSnapshot } from "../orchestration-v2/ThreadStream.ts";
 import {
   projectTurnItemForDetail,
-  projectTurnItemForWire,
   threadStreamEventItem,
 } from "../orchestration-v2/WireProjection.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
@@ -211,6 +211,15 @@ const threadOf = (event: OrchestrationV2DomainEvent): OrchestrationV2AppThread |
       return null;
   }
 };
+
+const withoutFileText = (item: OrchestrationV2TurnItem): OrchestrationV2TurnItem => {
+  if (item.type !== "file_change") return item;
+  const { diffStr: _diff, oldStr: _old, newStr: _new, ...shown } = item;
+  return shown;
+};
+const rowWithoutFileText = <Row extends { readonly item: OrchestrationV2TurnItem }>(
+  row: Row,
+): Row => ({ ...row, item: withoutFileText(row.item) });
 
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -542,12 +551,16 @@ const make = Effect.gen(function* () {
         Stream.map((item): ReadonlyArray<GuestStreamEvent> => {
           if (item.kind !== "event") return [];
           if (endsShare(item.event)) return [ended];
+          const shown =
+            item.event.type === "turn-item.updated"
+              ? { ...item, event: { ...item.event, payload: withoutFileText(item.event.payload) } }
+              : item;
           const updated = threadOf(item.event);
           const view = updated === null ? null : viewOf(updated);
           return view === null
-            ? [{ type: "thread", item }]
+            ? [{ type: "thread", item: shown }]
             : [
-                { type: "thread", item },
+                { type: "thread", item: shown },
                 { type: "view", view },
               ];
         }),
@@ -565,7 +578,11 @@ const make = Effect.gen(function* () {
         type: "thread",
         item: buildBoundedThreadStreamSnapshot({
           snapshotSequence: snapshot.snapshotSequence,
-          projection: snapshot.projection,
+          projection: {
+            ...snapshot.projection,
+            turnItems: snapshot.projection.turnItems.map(withoutFileText),
+            visibleTurnItems: snapshot.projection.visibleTurnItems.map(rowWithoutFileText),
+          },
         }),
       },
     ];
@@ -627,10 +644,7 @@ const make = Effect.gen(function* () {
 
   const item = Effect.fn("GuestShareService.item")(function* (session: string, itemId: string) {
     const { item } = yield* threadItem(session, itemId);
-    return {
-      item:
-        item.type === "file_change" ? projectTurnItemForWire(item) : projectTurnItemForDetail(item),
-    };
+    return { item: projectTurnItemForDetail(withoutFileText(item)) };
   });
 
   const commandOutput = Effect.fn("GuestShareService.commandOutput")(function* (
