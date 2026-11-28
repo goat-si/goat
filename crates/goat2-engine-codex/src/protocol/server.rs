@@ -443,7 +443,7 @@ impl ServerRequest {
 /// Outcome of decoding a server request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedRequest {
-    Known(ServerRequest),
+    Known(Box<ServerRequest>),
     /// Not a method GOAT handles: answer -32601.
     Unknown,
     /// A known method whose params did not decode: answer -32603 and log.
@@ -456,7 +456,7 @@ pub fn parse_server_request(method: &str, params: Value) -> ParsedRequest {
         wrap: fn(T) -> ServerRequest,
     ) -> ParsedRequest {
         match serde_json::from_value(params) {
-            Ok(value) => ParsedRequest::Known(wrap(value)),
+            Ok(value) => ParsedRequest::Known(Box::new(wrap(value))),
             Err(error) => ParsedRequest::Malformed(error.to_string()),
         }
     }
@@ -468,7 +468,7 @@ pub fn parse_server_request(method: &str, params: Value) -> ParsedRequest {
         methods::ELICITATION => match serde_json::from_value::<ElicitationParams>(params.clone()) {
             Ok(mut decoded) => {
                 decoded.raw = params;
-                ParsedRequest::Known(ServerRequest::Elicitation(decoded))
+                ParsedRequest::Known(Box::new(ServerRequest::Elicitation(decoded)))
             }
             Err(error) => ParsedRequest::Malformed(error.to_string()),
         },

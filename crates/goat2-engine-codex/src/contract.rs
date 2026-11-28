@@ -4,7 +4,10 @@
 pub use goat2_contracts::{
     ApprovalDecision, ApprovalOption, CommandAction, DeliveredAs, DeliveryOutcome, EngineDriver,
     EngineItemLocator, EngineRef, EngineTurnRef, InputDelivered, InputId, ItemCompleted, ItemId,
-    MessageId, NativeItemRef, NativeRefStrength, PlanId, PlanStep, ProviderCapabilities,
-    ProviderFailure, RequestId, RequestKind, RequestOpened, RequestOutcome, RequestResolved,
-    RunAccepted, RunFinished, RunId, RunOutcome, ThreadId, TurnItem, TurnItemBody,
+    MessageId, ModelSelection, NativeItemRef, NativeRefStrength, PlanId, PlanStep,
+    ProviderCapabilities, ProviderFailure, ProviderOptionSelection, ProviderOptionSelectionValue,
+    ProviderRequestKind, RequestId, RequestKind, RequestOpened, RequestOutcome, RequestResolved,
+    RunAccepted, RunFinished, RunId, RunOutcome, RuntimeMode, ThreadId, TurnItem, TurnItemBody,
+    TurnItemStatus, UserInputOption, UserInputQuestion,
 };
+pub use goat2_contracts::{AssistantMessagePhase, FileChangeDetail};

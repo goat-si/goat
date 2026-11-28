@@ -96,8 +96,11 @@ fn server_requests_decode_or_are_unknown() {
             "availableDecisions": ["accept", {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["touch"]}}, {"futureShape": 1}, "cancel"]
         }),
     );
-    let ParsedRequest::Known(ServerRequest::CommandApproval(params)) = parsed else {
+    let ParsedRequest::Known(request) = parsed else {
         panic!("expected a command approval, got {parsed:?}")
+    };
+    let ServerRequest::CommandApproval(params) = *request else {
+        panic!("expected a command approval")
     };
     let decisions = params.available_decisions.unwrap();
     assert_eq!(decisions[0], CommandDecision::Accept);

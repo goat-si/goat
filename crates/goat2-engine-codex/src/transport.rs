@@ -265,6 +265,7 @@ impl Connection {
                     Ok(Incoming::Request { id, method, params }) => {
                         match parse_server_request(&method, params) {
                             ParsedRequest::Known(request) => {
+                                let request = *request;
                                 let _ = shared.inbound.send(Inbound::Request { id, request });
                             }
                             ParsedRequest::Unknown => {

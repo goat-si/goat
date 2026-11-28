@@ -211,6 +211,16 @@ pub struct TurnStartParams {
     pub effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<Value>,
 }
 
 /// `turn/steer` params. `expectedTurnId` is required: Codex refuses the steer when it does not
@@ -352,6 +362,11 @@ pub fn turn_start_params(
         model: model.map(str::to_string),
         effort: effort.map(str::to_string),
         approval_policy: None,
+        approvals_reviewer: None,
+        sandbox_policy: None,
+        summary: None,
+        service_tier: None,
+        collaboration_mode: None,
     }
 }
 
