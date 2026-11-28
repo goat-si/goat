@@ -57,14 +57,12 @@ impl RegistryFetch for HttpsFetch {
                 format!("Could not fetch ACP Registry index from {url}.")
             }
         };
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(fetch_failed)?
-            .error_for_status()
-            .map_err(fetch_failed)?;
+        let response = self.client.get(url).send().await.map_err(fetch_failed)?;
+        // Only a 2xx final response is the index; a redirect the policy stopped is not
+        // (v1 `filterStatusOk`, AcpRegistrySupport.ts:647-708).
+        if !response.status().is_success() {
+            return Err(format!("Could not fetch ACP Registry index from {url}."));
+        }
         let mut body = Vec::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -121,8 +119,18 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
             permit: Mutex::new(()),
         }
     }
-    fn disk(&self) -> Option<Index> {
-        std::fs::read(&self.path).ok().and_then(|b| decode(&b).ok())
+    /// The cached index, read with the size limit applied while reading: at most
+    /// MAX_REGISTRY_BYTES + 1 bytes are read, so [decode] rejects an oversized file without the
+    /// whole file in memory (final review finding 22).
+    async fn disk(&self) -> Option<Index> {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(&self.path).await.ok()?;
+        let mut bytes = Vec::new();
+        file.take(MAX_REGISTRY_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .ok()?;
+        decode(&bytes).ok()
     }
     fn write(&self, bytes: &[u8]) {
         if let Some(parent) = self.path.parent() {
@@ -145,7 +153,7 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
         if let Some(i) = self.state.lock().await.index.clone() {
             return Ok(i);
         }
-        if let Some(i) = self.disk() {
+        if let Some(i) = self.disk().await {
             let mut s = self.state.lock().await;
             return Ok(s.index.get_or_insert(i).clone());
         }
@@ -214,7 +222,10 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
                 Ok((i, changed))
             }
             Err(e) => {
-                let fallback = s.index.clone().or_else(|| self.disk());
+                let fallback = match s.index.clone() {
+                    Some(index) => Some(index),
+                    None => self.disk().await,
+                };
                 if s.index.is_none() {
                     s.index = fallback.clone()
                 }
@@ -264,6 +275,40 @@ mod tests {
         let cold = RegistryIndexCache::new(Fake(AtomicUsize::new(1)), dir.path().into(), None);
         assert!(cold.load().await.is_ok());
         assert!(cold.refresh(None, None).await.is_ok());
+    }
+
+    /// The cached index is read with the 1 MiB limit applied while reading: a cache file that
+    /// keeps growing is abandoned after MAX_REGISTRY_BYTES + 1 bytes (final review finding 22).
+    /// A FIFO stands in for the file; the writer only fails when the reader stops early.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn oversized_disk_cache_is_not_read_past_the_limit() {
+        use std::io::Write;
+        use std::os::unix::ffi::OsStrExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("acp-registry/registry.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: c_path is a valid NUL-terminated path for the duration of the call.
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut fifo = std::fs::OpenOptions::new()
+                .write(true)
+                .open(writer_path)
+                .unwrap();
+            fifo.write_all(&vec![b' '; 4 * MAX_REGISTRY_BYTES])
+        });
+        let c = RegistryIndexCache::new(Fake(AtomicUsize::new(0)), dir.path().into(), None);
+        // The oversized cache is ignored and the index is fetched instead.
+        assert!(c.load().await.is_ok());
+        assert_eq!(c.fetcher.0.load(Ordering::SeqCst), 1);
+        let written = writer.join().unwrap();
+        assert_eq!(
+            written.map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::BrokenPipe),
+            "the cache reader consumed the whole oversized file"
+        );
     }
 }
 

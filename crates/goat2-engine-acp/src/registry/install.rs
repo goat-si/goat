@@ -140,15 +140,14 @@ impl HttpsDownload {
     }
 }
 
-/// GET `url` and stream the body; any non-2xx status fails (v1 `filterStatusOk`).
+/// GET `url` and stream the body; any final status other than 2xx fails, including a redirect
+/// the client's policy stopped (v1 `filterStatusOk`, AcpRegistrySupport.ts:1313-1315).
 pub(crate) async fn http_stream(client: &reqwest::Client, url: &str) -> Result<ByteStream, String> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
+    let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP status {status} for {}", response.url()));
+    }
     Ok(response
         .bytes_stream()
         .map(|chunk| chunk.map(|b| b.to_vec()).map_err(|e| e.to_string()))
@@ -253,44 +252,13 @@ pub(crate) async fn run_command(
         let mut stdout = child.stdout.take().ok_or_else(could_not_run)?;
         let mut stderr = child.stderr.take().ok_or_else(could_not_run)?;
         let max = options.max_stdout;
-        let read_stdout = async move {
-            let mut kept = Vec::new();
-            let mut truncated = false;
-            let mut buf = vec![0u8; 64 * 1024];
-            loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let room = max.saturating_sub(kept.len());
-                        kept.extend_from_slice(&buf[..n.min(room)]);
-                        truncated |= n > room;
-                    }
-                }
-            }
-            (kept, truncated)
-        };
-        let read_stderr = async move {
-            let mut tail = Vec::new();
-            let mut buf = vec![0u8; 16 * 1024];
-            loop {
-                match stderr.read(&mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        tail.extend_from_slice(&buf[..n]);
-                        let keep = MAX_COMMAND_ERROR_TAIL_CHARS * 4;
-                        if tail.len() > keep * 2 {
-                            tail.drain(..tail.len() - keep);
-                        }
-                    }
-                }
-            }
-            let text = String::from_utf8_lossy(&tail).into_owned();
-            let count = text.chars().count();
-            text.chars()
-                .skip(count.saturating_sub(MAX_COMMAND_ERROR_TAIL_CHARS))
-                .collect::<String>()
-        };
-        let ((out, truncated), err, status) = tokio::join!(read_stdout, read_stderr, child.wait());
+        let (out, err, status) = tokio::join!(
+            read_capped(&mut stdout, max),
+            read_tail(&mut stderr),
+            child.wait()
+        );
+        let (out, truncated) = out.map_err(|_| could_not_run())?;
+        let err = err.map_err(|_| could_not_run())?;
         let status = status.map_err(|_| could_not_run())?;
         let code = status.code().unwrap_or_else(|| {
             #[cfg(unix)]
@@ -332,6 +300,51 @@ pub(crate) async fn run_command(
             ))
         }),
     }
+}
+
+/// Read `reader` to its end, keeping at most `max` bytes; true when more arrived. A read error
+/// fails the command (v1 AcpRegistrySupport.ts:742-758 fails when a stream fails).
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    max: usize,
+) -> io::Result<(Vec<u8>, bool)> {
+    let mut kept = Vec::new();
+    let mut truncated = false;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        let room = max.saturating_sub(kept.len());
+        kept.extend_from_slice(&buf[..n.min(room)]);
+        truncated |= n > room;
+    }
+    Ok((kept, truncated))
+}
+
+/// Read `reader` to its end, keeping the last [MAX_COMMAND_ERROR_TAIL_CHARS] characters. A read
+/// error fails the command, as for stdout.
+async fn read_tail<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> io::Result<String> {
+    let mut tail = Vec::new();
+    let mut buf = vec![0u8; 16 * 1024];
+    loop {
+        let n = reader.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        tail.extend_from_slice(&buf[..n]);
+        let keep = MAX_COMMAND_ERROR_TAIL_CHARS * 4;
+        if tail.len() > keep * 2 {
+            tail.drain(..tail.len() - keep);
+        }
+    }
+    let text = String::from_utf8_lossy(&tail).into_owned();
+    let count = text.chars().count();
+    Ok(text
+        .chars()
+        .skip(count.saturating_sub(MAX_COMMAND_ERROR_TAIL_CHARS))
+        .collect())
 }
 
 /// The package kind of a receipt.
@@ -1350,6 +1363,66 @@ mod tests {
         let mut versions = vec!["1.10.0", "1.9.0", "1.2.0"];
         versions.sort_by(|a, b| numeric_compare(b, a));
         assert_eq!(versions, ["1.10.0", "1.9.0", "1.2.0"]);
+    }
+
+    /// Yields some output, then a read error.
+    #[derive(Default)]
+    struct FailingRead {
+        sent: bool,
+    }
+    impl tokio::io::AsyncRead for FailingRead {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<io::Result<()>> {
+            if self.sent {
+                return std::task::Poll::Ready(Err(io::Error::other("read failed")));
+            }
+            self.sent = true;
+            buf.put_slice(b"partial");
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// A failed read of a command's output is a failure, never a truncated success (v1
+    /// AcpRegistrySupport.ts:742-758 fails the command when a stream fails; final review
+    /// finding 13).
+    #[tokio::test]
+    async fn command_output_read_errors_fail() {
+        assert!(
+            read_capped(&mut FailingRead::default(), 1024)
+                .await
+                .is_err()
+        );
+        assert!(read_tail(&mut FailingRead::default()).await.is_err());
+    }
+
+    /// A redirect the policy stops (here: away from HTTPS) is not a download: only a 2xx final
+    /// response is (v1 AcpRegistrySupport.ts:1313-1315 `filterStatusOk`; final review finding 6).
+    #[tokio::test]
+    async fn a_stopped_redirect_is_not_a_download() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") {
+                assert_eq!(socket.read(&mut byte).await.unwrap(), 1);
+                head.push(byte[0]);
+            }
+            let body = "#!/bin/sh\n";
+            let reply = format!(
+                "HTTP/1.1 302 Found\r\nLocation: http://{addr}/agent\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        let download = HttpsDownload::new().unwrap();
+        let opened = http_stream(&download.client, &format!("http://{addr}/start")).await;
+        assert!(opened.is_err(), "a 302 body was accepted as the download");
+        server.await.unwrap();
     }
 
     #[test]

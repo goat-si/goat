@@ -460,8 +460,8 @@ pub async fn check_grok_provider_status(
         .is_some();
     let program: PathBuf = command.program.clone();
     let binary = program.to_string_lossy().into_owned();
-    snapshot.binary_path =
-        resolve_executable(&program, &probe_env).map(|p| p.to_string_lossy().into_owned());
+    snapshot.binary_path = resolve_executable(&program, Some(&spawn_cwd), &probe_env)
+        .map(|p| p.to_string_lossy().into_owned());
 
     let version_result = spawn_and_collect(
         &program,

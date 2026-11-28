@@ -1946,9 +1946,7 @@ fn launch_for(flavor: &dyn AcpFlavor, spec: &SessionSpec) -> Result<Launch, Engi
     let mut launch = Launch::new(command.program).without_host_identity();
     launch.args = command.args.into_iter().map(Into::into).collect();
     launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
-    launch
-        .env_remove
-        .extend(command.env_remove.into_iter().map(Into::into));
+    launch.remove_env(command.env_remove);
     launch.env_set = command
         .env
         .into_iter()

@@ -37,6 +37,8 @@ use super::package::package_manager_for;
 use super::runtime_temp::{RegistryRuntimeTemp, RuntimeTempLease};
 use super::settings::{DistributionPreference, RegistrySettings, Source};
 use crate::flavor::LaunchCommand;
+use crate::probe::support::is_host_identity;
+use crate::process::REMOVE_INHERITED;
 
 /// v1 `AcpRegistryCatalogOptions` (`AcpRegistrySupport.ts:461-466`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,20 +208,21 @@ fn unavailable(detail: String) -> RegistryError {
     RegistryError::new(Reason::RegistryUnavailable, detail)
 }
 
-/// Turn a spawn into the driver's launch: the environment as changes against `base`.
+/// Turn a spawn into the driver's launch with its complete environment: the agent gets exactly
+/// `spawn.env`, as v1 spawns with the resolved environment (AcpRegistrySupport.ts:1739-1743,
+/// 1840-1856). [REMOVE_INHERITED] keeps everything else the GOAT process holds (variables outside
+/// the `base` snapshot, newer values) away from the agent (final review finding 3). Host identity
+/// that `spawn.env` only carries over from `base` stays out, as
+/// [crate::process::Launch::without_host_identity] keeps it out of other agents.
 pub fn launch_command(spawn: &SpawnSpec, base: &Environment) -> LaunchCommand {
     let mut command = LaunchCommand::new(spawn.command.clone(), spawn.args.clone());
     command.env = spawn
         .env
         .iter()
-        .filter(|(k, v)| base.get(*k) != Some(*v))
+        .filter(|(k, v)| !(is_host_identity(k) && base.get(*k) == Some(*v)))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    command.env_remove = base
-        .keys()
-        .filter(|k| !spawn.env.contains_key(*k))
-        .cloned()
-        .collect();
+    command.env_remove = vec![REMOVE_INHERITED.to_owned()];
     command
 }
 

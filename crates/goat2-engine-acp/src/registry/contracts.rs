@@ -60,6 +60,27 @@ where
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// `Schema.NullOr(..)` as a required key: null or a value, but never missing (e.g. v1
+/// `acpRegistry.ts:69-72`). Serde would read a missing `Option` key as None; a
+/// `deserialize_with` field makes it "missing field" instead.
+fn nullable<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d)
+}
+
+/// `Schema.optionalKey(..)` / `Schema.optional(..)`: missing or a value, but never null (e.g. v1
+/// `acpRegistry.ts:166-167`). Use with `#[serde(default)]`.
+fn present<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(d).map(Some)
+}
+
 // ---- shared field rules ----
 
 /// v1 `acpRegistry.ts:8-11` `AcpRegistryAgentId`.
@@ -132,9 +153,17 @@ fn provider_protocol(value: &mut String) -> Checked<()> {
 pub struct ProviderOptionChoice {
     pub id: String,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub is_default: Option<bool>,
 }
 impl Contract for ProviderOptionChoice {
@@ -161,31 +190,46 @@ pub enum ProviderOptionDescriptor {
     Select {
         id: String,
         label: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
         description: Option<String>,
         options: Vec<ProviderOptionChoice>,
         #[serde(
             default,
+            deserialize_with = "present",
             rename = "currentValue",
             skip_serializing_if = "Option::is_none"
         )]
         current_value: Option<String>,
         #[serde(
             default,
+            deserialize_with = "present",
             rename = "promptInjectedValues",
             skip_serializing_if = "Option::is_none"
         )]
         prompt_injected_values: Option<Vec<String>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
         role: Option<ProviderOptionRole>,
     },
     Boolean {
         id: String,
         label: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
         description: Option<String>,
         #[serde(
             default,
+            deserialize_with = "present",
             rename = "currentValue",
             skip_serializing_if = "Option::is_none"
         )]
@@ -238,7 +282,11 @@ impl Contract for ProviderOptionDescriptor {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCapabilities {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub option_descriptors: Option<Vec<ProviderOptionDescriptor>>,
 }
 impl Contract for ModelCapabilities {
@@ -283,7 +331,11 @@ pub enum AcpRegistryIntegrity {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AcpRegistrySearchInput {
     pub query: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub limit: Option<f64>,
 }
 impl Contract for AcpRegistrySearchInput {
@@ -319,9 +371,13 @@ pub struct AcpRegistrySearchAgent {
     pub version: String,
     pub description: String,
     pub authors: Vec<String>,
+    #[serde(deserialize_with = "nullable")]
     pub license: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub website: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub repository: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub icon: Option<String>,
     pub distribution: AcpRegistryDistribution,
     pub integrity: AcpRegistryIntegrity,
@@ -418,14 +474,27 @@ pub enum AcpRegistryAuthMethodType {
 pub struct AcpRegistryProbeAuthMethod {
     pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "nullable")]
     pub description: Option<String>,
     #[serde(rename = "type")]
     pub kind: AcpRegistryAuthMethodType,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub env_var_names: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub link: Option<String>,
 }
 impl Contract for AcpRegistryProbeAuthMethod {
@@ -451,9 +520,17 @@ pub struct AcpRegistryUrlAuthAction {
     pub elicitation_id: String,
     pub url: String,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub created_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub expires_at: Option<String>,
 }
 impl Contract for AcpRegistryUrlAuthAction {
@@ -497,10 +574,17 @@ pub struct AcpRegistrySession {
     pub session_id: String,
     pub cwd: String,
     pub additional_directories: Vec<String>,
+    #[serde(deserialize_with = "nullable")]
     pub title: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub updated_at: Option<String>,
+    #[serde(deserialize_with = "nullable")]
     pub imported_thread_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub native_history_pending: Option<bool>,
 }
 impl Contract for AcpRegistrySession {
@@ -527,9 +611,17 @@ impl Contract for AcpRegistrySession {
 pub struct AcpRegistryListSessionsInput {
     pub instance_id: String,
     pub project_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub continuation: Option<String>,
 }
 impl Contract for AcpRegistryListSessionsInput {
@@ -548,10 +640,19 @@ impl Contract for AcpRegistryListSessionsInput {
 #[serde(rename_all = "camelCase")]
 pub struct AcpRegistryListSessionsResult {
     pub sessions: Vec<AcpRegistrySession>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub truncated: Option<bool>,
+    #[serde(deserialize_with = "nullable")]
     pub next_cursor: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub continuation: Option<String>,
     pub can_load: bool,
     pub can_resume: bool,
@@ -612,9 +713,17 @@ impl Contract for AcpRegistryImportSessionInput {
 pub struct AcpRegistryImportSessionResult {
     pub thread_id: String,
     pub imported: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub native_history_pending: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub native_history_error: Option<String>,
 }
 impl Contract for AcpRegistryImportSessionResult {
@@ -663,6 +772,7 @@ pub struct AcpRegistryConfigurableProvider {
     pub provider_id: String,
     pub supported: Vec<String>,
     pub required: bool,
+    #[serde(deserialize_with = "nullable")]
     pub current: Option<AcpRegistryProviderEndpoint>,
 }
 impl Contract for AcpRegistryConfigurableProvider {
@@ -718,7 +828,11 @@ pub struct AcpRegistrySetProviderInput {
     pub provider_id: String,
     pub api_type: String,
     pub base_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub headers: Option<BTreeMap<String, String>>,
 }
 impl std::fmt::Debug for AcpRegistrySetProviderInput {
@@ -815,6 +929,7 @@ pub struct AcpRegistryLogoutResult {
 pub struct AcpRegistryProbeModel {
     pub id: String,
     pub name: String,
+    #[serde(deserialize_with = "nullable")]
     pub description: Option<String>,
     #[serde(
         default,
@@ -852,14 +967,24 @@ pub struct AcpRegistrySessionManagement {
 pub struct AcpRegistryProbeResult {
     pub instance_id: String,
     pub ready: True,
+    #[serde(deserialize_with = "nullable")]
     pub icon: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub agent_version: Option<String>,
     pub auth_methods: Vec<AcpRegistryProbeAuthMethod>,
     pub models: Vec<AcpRegistryProbeModel>,
+    #[serde(deserialize_with = "nullable")]
     pub current_model_id: Option<String>,
     pub config_options: Vec<ProviderOptionDescriptor>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub model_option_ids: Option<Vec<String>>,
     #[serde(default)]
     pub session_management: AcpRegistrySessionManagement,
@@ -967,9 +1092,17 @@ impl AcpRegistryOperationErrorReason {
 pub struct AcpRegistryOperationError {
     pub reason: AcpRegistryOperationErrorReason,
     pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub auth_methods: Option<Vec<AcpRegistryProbeAuthMethod>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub auth_action: Option<AcpRegistryUrlAuthAction>,
 }
 impl Contract for AcpRegistryOperationError {
@@ -989,7 +1122,7 @@ impl Contract for AcpRegistryOperationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     #[test]
     fn search_input_trims_and_bounds_limit() {
@@ -1162,5 +1295,72 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(bad.normalize().unwrap_err().path, ["label"]);
+    }
+
+    /// v1 acpRegistry.ts:63-72,163-167 and model.ts:10-44: a `Schema.NullOr` field is required
+    /// (null is its empty value, a missing key is an error); an `optionalKey`/`optional` field may
+    /// be missing but is never null (final review finding 14).
+    #[test]
+    fn missing_null_and_value_are_distinct() {
+        let agent = json!({
+            "id": "a", "name": "A", "version": "1", "description": "", "authors": [],
+            "license": null, "website": null, "repository": null, "icon": null,
+            "distribution": "npx", "integrity": "registry"
+        });
+        assert!(decode::<AcpRegistrySearchAgent>(agent.clone()).is_ok());
+        for key in ["license", "website", "repository", "icon"] {
+            let mut missing = agent.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                decode::<AcpRegistrySearchAgent>(missing).is_err(),
+                "missing {key}"
+            );
+        }
+        let sessions = json!({"instanceId": "acp", "projectId": "p"});
+        assert!(decode::<AcpRegistryListSessionsInput>(sessions.clone()).is_ok());
+        for key in ["cursor", "continuation"] {
+            let mut null = sessions.clone();
+            null[key] = Value::Null;
+            assert!(
+                decode::<AcpRegistryListSessionsInput>(null).is_err(),
+                "null {key}"
+            );
+        }
+        assert!(decode::<AcpRegistrySearchInput>(json!({"query": "", "limit": null})).is_err());
+        let probe = json!({
+            "instanceId": "acp", "ready": true, "icon": null, "authMethods": [],
+            "models": [], "currentModelId": null, "configOptions": []
+        });
+        assert!(decode::<AcpRegistryProbeResult>(probe.clone()).is_ok());
+        for key in ["icon", "currentModelId"] {
+            let mut missing = probe.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                decode::<AcpRegistryProbeResult>(missing).is_err(),
+                "missing {key}"
+            );
+        }
+        for key in ["agentVersion", "modelOptionIds"] {
+            let mut null = probe.clone();
+            null[key] = Value::Null;
+            assert!(
+                decode::<AcpRegistryProbeResult>(null).is_err(),
+                "null {key}"
+            );
+        }
+        let method = json!({"id": "a", "name": "A", "type": "agent"});
+        assert!(decode::<AcpRegistryProbeAuthMethod>(method).is_err());
+        assert!(
+            serde_json::from_value::<ProviderOptionChoice>(
+                json!({"id": "a", "label": "A", "description": null})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<ProviderOptionDescriptor>(
+                json!({"type": "boolean", "id": "a", "label": "A", "currentValue": null})
+            )
+            .is_err()
+        );
     }
 }

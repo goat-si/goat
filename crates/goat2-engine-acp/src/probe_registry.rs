@@ -27,9 +27,9 @@ use super::models::{
     with_learned_model_options,
 };
 use super::support::{
-    CommandResult, auth_status, bounded_opaque_value, bounded_text, child_environment,
-    instance_environment, is_missing_probe_tool_result, regex_is, resolve_executable,
-    resolve_provider_probe_timeout, safe_process_cwd,
+    CommandResult, auth_status, bounded_opaque_value, bounded_text, command_environments,
+    is_missing_probe_tool_result, regex_is, resolve_executable, resolve_provider_probe_timeout,
+    safe_process_cwd,
 };
 use super::{AcpProbeFailure, ProbeConfig, checked_at_now, effective_command, probe_spec};
 use crate::engine::{AcpEngineFactory, AcpSession};
@@ -921,9 +921,8 @@ pub async fn check_registry_provider_status(
     if (local && program.trim().is_empty()) || (!local && agent_id.trim().is_empty()) {
         return finish(Inspection::Unconfigured, None, None, None, None);
     }
-    let instance_env = instance_environment([command.env.as_slice()]);
-    let child_env = child_environment([command.env.as_slice()]);
-    let Some(resolved) = resolve_executable(&command.program, &child_env) else {
+    let (instance_env, child_env) = command_environments(&command);
+    let Some(resolved) = resolve_executable(&command.program, Some(&cwd), &child_env) else {
         let runner = Path::new(&program)
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

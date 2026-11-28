@@ -365,6 +365,50 @@ async fn registry_agent_crash_at_start() {
     );
 }
 
+/// The probe looks for the agent where and as it will run it: a relative path in the configured
+/// working directory, and only an executable file on PATH (v1 AntigravityInstallationLookup.ts:60-70
+/// checks the execute bit; final review finding 19).
+#[cfg(unix)]
+#[tokio::test]
+async fn registry_probe_resolves_the_agent_as_it_will_run() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(MOCK, dir.path().join("agent")).unwrap();
+    let result = probe(
+        registry_factory("./agent", &[], &[], true),
+        config(dir.path()),
+    )
+    .await;
+    assert_eq!(result.status, ServerProviderState::Ready, "{result:?}");
+    assert_eq!(
+        result.binary_path.as_deref().map(Path::new),
+        Some(dir.path().join("agent").as_path())
+    );
+
+    let plain = dir.path().join("plain");
+    let runnable = dir.path().join("runnable");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::fs::create_dir_all(&runnable).unwrap();
+    std::fs::write(plain.join("mock-agent"), "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(
+        plain.join("mock-agent"),
+        std::fs::Permissions::from_mode(0o644),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(MOCK, runnable.join("mock-agent")).unwrap();
+    let path = format!("{}:{}", plain.display(), runnable.display());
+    let result = probe(
+        registry_factory("mock-agent", &[], &[("PATH", &path)], true),
+        config(dir.path()),
+    )
+    .await;
+    assert_eq!(result.status, ServerProviderState::Ready, "{result:?}");
+    assert_eq!(
+        result.binary_path.as_deref().map(Path::new),
+        Some(runnable.join("mock-agent").as_path())
+    );
+}
+
 #[tokio::test]
 async fn disabled_instances_run_nothing() {
     let dir = tempfile::tempdir().unwrap();

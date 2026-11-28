@@ -83,6 +83,9 @@ struct PendingUrlAuth {
 pub struct RuntimeCoordinator<C = Value, L = Value> {
     foreground_starts: broadcast::Sender<String>,
     active_foreground: Mutex<HashMap<String, usize>>,
+    /// How many foreground starts each agent has had; a probe whose subscription lagged compares
+    /// it instead of the start events it missed.
+    foreground_generations: Mutex<HashMap<String, u64>>,
     commands_updates: broadcast::Sender<(String, C)>,
     commands: Mutex<HashMap<String, C>>,
     live_updates: broadcast::Sender<LiveUpdate<L>>,
@@ -99,6 +102,7 @@ impl<C: Clone + Send + 'static, L: Clone + Send + 'static> Default for RuntimeCo
         Self {
             foreground_starts: broadcast::channel(UPDATE_CAPACITY).0,
             active_foreground: Mutex::default(),
+            foreground_generations: Mutex::default(),
             commands_updates: broadcast::channel(UPDATE_CAPACITY).0,
             commands: Mutex::default(),
             live_updates: broadcast::channel(UPDATE_CAPACITY).0,
@@ -174,12 +178,24 @@ impl<C: Clone + Send + 'static, L: Clone + Send + 'static> RuntimeCoordinator<C,
             counts: &self.active_foreground,
             agent_id: agent_id.to_owned(),
         };
+        *lock(&self.foreground_generations)
+            .entry(agent_id.to_owned())
+            .or_default() += 1;
         let _ = self.foreground_starts.send(agent_id.to_owned());
         start.await
     }
 
+    fn foreground_generation(&self, agent_id: &str) -> u64 {
+        lock(&self.foreground_generations)
+            .get(agent_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// v1 `AcpRegistryRuntimeCoordinator.ts:165-183`: None when a foreground start of the agent is
-    /// running or begins before the probe finishes (the probe is dropped).
+    /// running or begins before the probe finishes (the probe is dropped). v1's subscription is
+    /// unbounded; here a subscription that lagged rechecks the agent's start count, so a start
+    /// pushed out of the channel still stops the probe (final review finding 23).
     pub async fn run_background_probe<T>(
         &self,
         agent_id: &str,
@@ -187,6 +203,7 @@ impl<C: Clone + Send + 'static, L: Clone + Send + 'static> RuntimeCoordinator<C,
     ) -> Option<T> {
         // Subscribe first so foreground starts cannot slip between the state check and probe.
         let mut starts = self.foreground_starts.subscribe();
+        let generation = self.foreground_generation(agent_id);
         if lock(&self.active_foreground).contains_key(agent_id) {
             return None;
         }
@@ -194,7 +211,12 @@ impl<C: Clone + Send + 'static, L: Clone + Send + 'static> RuntimeCoordinator<C,
             loop {
                 match starts.recv().await {
                     Ok(id) if id == agent_id => return,
-                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Ok(_) => continue,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if self.foreground_generation(agent_id) != generation {
+                            return;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Closed) => std::future::pending::<()>().await,
                 }
             }
@@ -503,6 +525,24 @@ mod tests {
         c.with_foreground_startup("a", async {}).await;
         assert_eq!(probe.await.unwrap(), None);
         assert!(lock(&c.active_foreground).is_empty());
+    }
+
+    /// A probe whose subscription lagged past the foreground start of its agent still stops
+    /// (v1 AcpRegistryRuntimeCoordinator.ts:165-183 waits on an unbounded subscription; final
+    /// review finding 23).
+    #[tokio::test]
+    async fn a_lagged_probe_still_sees_the_foreground_start_of_its_agent() {
+        let c = Coordinator::new();
+        let mut probe = std::pin::pin!(c.run_background_probe("a", std::future::pending::<u8>()));
+        // First poll: subscribed, no foreground start yet.
+        assert!(futures::poll!(probe.as_mut()).is_pending());
+        c.with_foreground_startup("a", async {}).await;
+        for n in 0..UPDATE_CAPACITY + 1 {
+            c.with_foreground_startup(&format!("other-{n}"), async {})
+                .await;
+        }
+        // The start of "a" was pushed out of the channel before the probe saw it.
+        assert_eq!(futures::poll!(probe.as_mut()), std::task::Poll::Ready(None));
     }
 
     #[tokio::test]
