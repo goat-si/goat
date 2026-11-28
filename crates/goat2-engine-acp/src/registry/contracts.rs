@@ -10,8 +10,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
 use super::schema::{
-    Checked, SchemaError, each, field, max_items, max_len, min_len, pattern, trim_in_place,
-    trimmed_non_empty,
+    Checked, SchemaError, each, field, max_items, max_len, min_len, pattern, secret_max_len,
+    trim_in_place, trimmed_non_empty,
 };
 
 /// v1 `acpRegistry.ts:50-51`.
@@ -785,7 +785,7 @@ impl Contract for AcpRegistryConfigurableProvider {
         field("current", || {
             opt(&mut self.current, |c| {
                 field("apiType", || provider_protocol(&mut c.api_type))?;
-                field("baseUrl", || url(&c.base_url))
+                field("baseUrl", || secret_max_len(&c.base_url, URL_MAX))
             })
         })
     }
@@ -856,7 +856,7 @@ impl Contract for AcpRegistrySetProviderInput {
         field("projectId", || check_entity_id(&mut self.project_id))?;
         field("providerId", || provider_id(&mut self.provider_id))?;
         field("apiType", || provider_protocol(&mut self.api_type))?;
-        field("baseUrl", || url(&self.base_url))?;
+        field("baseUrl", || secret_max_len(&self.base_url, URL_MAX))?;
         field("headers", || {
             let Some(headers) = self.headers.take() else {
                 return Ok(());
@@ -866,7 +866,7 @@ impl Contract for AcpRegistrySetProviderInput {
                 let mut name = key.clone();
                 field(&key, || {
                     trimmed_non_empty(&mut name, Some(128))?;
-                    max_len(&value, 8_192)
+                    secret_max_len(&value, 8_192)
                 })?;
                 checked.insert(name, value);
             }
@@ -1123,6 +1123,22 @@ impl Contract for AcpRegistryOperationError {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    /// Round 7 part 7.1: an oversized header value or base URL is reported by its length, never
+    /// quoted (headers are write-only credentials; a base URL may carry a token).
+    #[test]
+    fn oversized_provider_secrets_are_not_quoted() {
+        let secret = "tok-".to_owned() + &"s".repeat(9_000);
+        let input = json!({"instanceId": "i", "projectId": "p", "providerId": "x",
+            "apiType": "openai", "baseUrl": "https://a.example", "headers": {"Authorization": secret}});
+        let error = decode::<AcpRegistrySetProviderInput>(input).unwrap_err();
+        assert!(!error.message.contains("tok-"), "{}", error.message);
+        let url = format!("https://a.example/?key=tok-{}", "u".repeat(3_000));
+        let input = json!({"instanceId": "i", "projectId": "p", "providerId": "x",
+            "apiType": "openai", "baseUrl": url});
+        let error = decode::<AcpRegistrySetProviderInput>(input).unwrap_err();
+        assert!(!error.message.contains("tok-"), "{}", error.message);
+    }
 
     #[test]
     fn search_input_trims_and_bounds_limit() {

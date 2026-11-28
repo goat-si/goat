@@ -418,11 +418,25 @@ pub trait PromptOutcomeCheck: Send {
 }
 
 /// The environment the agent process runs with: the launch's variables over the inherited ones.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct AgentEnv {
     pub set: Vec<(String, String)>,
     pub removed: Vec<String>,
     pub removed_prefixes: Vec<String>,
+}
+
+/// Names only, as [LaunchCommand]'s Debug: the values can be credentials.
+impl std::fmt::Debug for AgentEnv {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AgentEnv")
+            .field(
+                "set_names",
+                &self.set.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            )
+            .field("removed", &self.removed)
+            .field("removed_prefixes", &self.removed_prefixes)
+            .finish()
+    }
 }
 
 impl AgentEnv {

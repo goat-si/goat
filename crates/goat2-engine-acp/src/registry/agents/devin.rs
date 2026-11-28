@@ -47,14 +47,18 @@ pub fn normalize_devin_session_update(mut notification: Value) -> Value {
     notification
 }
 
-/// v1 `devinAcp.ts:32-37`: a generic `Tool` title takes Devin's inference tool name.
+/// v1 `devinAcp.ts:32-37`: a missing, empty or generic `Tool` title takes Devin's inference tool
+/// name (v1 `!tool.title` is true for "", devinAcp.ts:34; round 7 part 7.4).
 pub fn normalize_devin_tool_call(mut tool: ToolState) -> ToolState {
     let name = record(tool.meta.as_ref())
         .and_then(|m| m.get("cognition.ai/inferenceToolName"))
         .and_then(Value::as_str)
         .map(str::to_owned);
     if let Some(name) = name
-        && tool.title.as_deref().is_none_or(|t| t == "Tool")
+        && tool
+            .title
+            .as_deref()
+            .is_none_or(|t| t.is_empty() || t == "Tool")
     {
         tool.title = Some(name);
     }
@@ -153,6 +157,12 @@ mod tests {
         );
         assert_eq!(
             normalize_devin_tool_call(tool(named.clone(), Some("Tool")))
+                .title
+                .as_deref(),
+            Some("grep")
+        );
+        assert_eq!(
+            normalize_devin_tool_call(tool(named.clone(), Some("")))
                 .title
                 .as_deref(),
             Some("grep")

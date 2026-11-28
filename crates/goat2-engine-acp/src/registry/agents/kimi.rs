@@ -383,7 +383,8 @@ impl PromptOutcomeCheck for KimiCheck {
     }
 }
 
-#[cfg(test)]
+// Log identity is Unix only here (round 7 part 7.3); the tests unwrap `watch`.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use serde_json::json;

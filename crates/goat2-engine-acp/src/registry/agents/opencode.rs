@@ -19,7 +19,7 @@ const COMPANION_SUFFIX: &str = "_custom";
 /// Multi-select forms stay with the generic mapping (v1 `opencodeAcp.ts:54-136`).
 pub fn extract_opencode_elicitation_form(params: &Value) -> Option<NativeElicitationForm> {
     static QUESTION_ID: OnceLock<Regex> = OnceLock::new();
-    let question_id = QUESTION_ID.get_or_init(|| Regex::new(r"^q\d+$").expect("regex"));
+    let question_id = QUESTION_ID.get_or_init(|| Regex::new(r"^q[0-9]+$").expect("regex"));
     let properties = form_properties(params)?;
     let mut questions: Vec<UserInputQuestion> = Vec::new();
     let mut with_companion = HashSet::new();

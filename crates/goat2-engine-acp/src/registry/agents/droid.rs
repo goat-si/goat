@@ -29,7 +29,7 @@ pub fn extract_droid_elicitation_form(params: &Value) -> Option<NativeElicitatio
         .collect::<Option<_>>()?;
     let mut questions = Vec::new();
     for (id, field) in properties {
-        if !pattern(&QUESTION_ID, r"^question_[1-9]\d*$").is_match(id) {
+        if !pattern(&QUESTION_ID, r"^question_[1-9][0-9]*$").is_match(id) {
             continue;
         }
         let field = field.as_object()?;
@@ -41,7 +41,7 @@ pub fn extract_droid_elicitation_form(params: &Value) -> Option<NativeElicitatio
         let mut choices = Vec::new();
         for choice in field.get("oneOf")?.as_array()? {
             let value = choice.get("const")?.as_str()?;
-            if !pattern(&CHOICE_ID, r"^(?:option_\d+|other)$").is_match(value) {
+            if !pattern(&CHOICE_ID, r"^(?:option_[0-9]+|other)$").is_match(value) {
                 return None;
             }
             choices.push((value, non_blank(choice.get("title"))?));

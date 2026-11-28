@@ -478,6 +478,8 @@ async fn claude_acp_v1_keeps_agent_calls_as_tools() {
 
 /// v1 droidAcp.ts / ompAcp.ts / opencodeAcp.ts: each agent's own question form is asked and
 /// answered in its own shape.
+// Unix only: symlinks and Kimi log identity (see provenance/reg-agents.md, round 7 part 7.3).
+#[cfg(unix)]
 #[tokio::test]
 async fn agent_question_forms_round_trip() {
     let cases = [
@@ -586,6 +588,8 @@ async fn agent_question_forms_round_trip() {
 }
 
 /// v1 kimiAcp.ts: an `end_turn` for a turn Kimi's log says failed fails the turn and restarts Kimi.
+// Unix only: symlinks and Kimi log identity (see provenance/reg-agents.md, round 7 part 7.3).
+#[cfg(unix)]
 #[tokio::test]
 async fn kimi_failed_turn_in_its_log_fails_the_turn() {
     let dir = tempfile::tempdir().unwrap();
@@ -631,6 +635,8 @@ async fn kimi_failed_turn_in_its_log_fails_the_turn() {
 }
 
 /// A completed Kimi turn keeps its outcome and its process.
+// Unix only: symlinks and Kimi log identity (see provenance/reg-agents.md, round 7 part 7.3).
+#[cfg(unix)]
 #[tokio::test]
 async fn kimi_completed_turn_stays_done() {
     let dir = tempfile::tempdir().unwrap();

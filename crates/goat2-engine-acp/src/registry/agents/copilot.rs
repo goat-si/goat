@@ -383,11 +383,13 @@ impl CopilotRouting {
         normalized
     }
 
-    /// v1 `releaseRuntime` (:139-149).
-    pub fn release(&self, session_id: &str) {
+    /// v1 `releaseRuntime` (:139-149) clears the whole runtime: every session and remembered
+    /// identity. A flavor serves one agent process (catalog launch), so releasing its session
+    /// releases them all (round 7 part 7.2).
+    pub fn release(&self, _session_id: &str) {
         let mut routing = self.routing.lock().expect("copilot routing");
-        routing.sessions.remove(session_id);
-        routing.pending.retain(|(session, _)| session != session_id);
+        routing.sessions.clear();
+        routing.pending.clear();
     }
 }
 
@@ -526,6 +528,11 @@ mod tests {
             routing.normalize_session_update(chunk("agent_message_chunk", "x"))["sessionId"],
             "s"
         );
+        // Round 7 part 7.2: every session of the runtime is forgotten.
+        {
+            let state = routing.routing.lock().unwrap();
+            assert!(state.sessions.is_empty() && state.pending.is_empty());
+        }
     }
 
     #[test]

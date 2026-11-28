@@ -13,7 +13,7 @@ use crate::flavor::NativeElicitationForm;
 /// (v1 `ompAcp.ts:25-66`).
 pub fn extract_omp_elicitation_form(params: &Value) -> Option<NativeElicitationForm> {
     static QUESTION_ID: OnceLock<Regex> = OnceLock::new();
-    let question_id = QUESTION_ID.get_or_init(|| Regex::new(r"^q\d+$").expect("regex"));
+    let question_id = QUESTION_ID.get_or_init(|| Regex::new(r"^q[0-9]+$").expect("regex"));
     let properties = form_properties(params)?;
     let mut questions: Vec<UserInputQuestion> = Vec::new();
     for (id, field) in properties {

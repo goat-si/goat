@@ -85,6 +85,19 @@ pub fn max_len(value: &str, max: usize) -> Checked<()> {
     }
 }
 
+/// [max_len] for a secret (a provider header, a base URL that may carry a token): the message
+/// names the length only, where Effect's `isMaxLength` message quotes the value (v1
+/// acpRegistry.ts:243-249; round 7 part 7.1).
+pub fn secret_max_len(value: &str, max: usize) -> Checked<()> {
+    if js_len(value) <= max {
+        Ok(())
+    } else {
+        Err(SchemaError::new(format!(
+            "Expected a value with a length of at most {max}"
+        )))
+    }
+}
+
 pub fn min_len(value: &str, min: usize) -> Checked<()> {
     if js_len(value) >= min {
         Ok(())
