@@ -147,7 +147,7 @@
         "url": {
           "maxLength": 16384,
           "minLength": 1,
-          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
           "type": "string"
         }
       },
@@ -2097,7 +2097,7 @@
               "description": "v1 `SignInUrl`: http(s) only.",
               "maxLength": 16384,
               "minLength": 1,
-              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
               "type": "string"
             }
           },
@@ -2122,7 +2122,7 @@
               "description": "v1 `SignInUrl`: http(s) only.",
               "maxLength": 16384,
               "minLength": 1,
-              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
               "type": "string"
             },
             "userCode": {
@@ -2260,7 +2260,7 @@
           "description": "v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.",
           "maxLength": 16384,
           "minLength": 1,
-          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://(?:[\\s\\S]*[^\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])?$",
           "type": [
             "string",
             "null"

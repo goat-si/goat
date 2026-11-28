@@ -51,7 +51,9 @@ pub struct AcpRegistryUrlAuthAction {
     #[schemars(
         with = "String",
         length(min = 1, max = 16384),
-        regex(pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://")
+        regex(
+            pattern = r"^[Hh][Tt][Tt][Pp][Ss]?://(?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+        )
     )]
     pub url: String,
     pub message: String,
