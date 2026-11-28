@@ -12,7 +12,9 @@
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -p tsconfig.build.json"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@muse-code/sdk": "1.4.6"
+  },
   "devDependencies": {
     "@goat2/contracts-rs": "workspace:*",
     "@types/node": "catalog:",
