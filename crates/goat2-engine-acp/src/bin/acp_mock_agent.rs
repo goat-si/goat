@@ -41,6 +41,16 @@
 //!   (default `end_turn`) and `GOAT_ACP_XAI_AGENT_RESULT` set its `stopReason` and `agentResult`.
 //! - `GOAT_ACP_STDERR_LINE=<text>` (GOAT 2): print this line on stderr at start.
 //! - `GOAT_ACP_STDOUT_LINE=<text>` (GOAT 2): print this non-JSON line on stdout at start.
+//! - `GOAT_ACP_GROK_SCENARIO=<name>` (GOAT 2): xAI Grok flows that end with
+//!   `_x.ai/session/prompt_complete` and leave `session/prompt` open, as Grok does (frame shapes from
+//!   v1 `xaiAcpExtension.test.ts` and `acpMockGrokScenarios.ts`): `subagent-hydrate`,
+//!   `subagent-finished`, `subagent-notice`, `background`, `wake`, `monitor`, `monitor-persistent`,
+//!   `kill`, `hold`, `plan-file`, `tools`.
+//! - `GOAT_ACP_GROK_MODELS=1` (GOAT 2): session setup reports Grok session models (`grok-4`, efforts
+//!   low/high); `GOAT_ACP_REJECT_SET_MODEL_META=1` answers a `session/set_model` with `_meta` with an
+//!   error.
+//! - `inspect --json` arguments (GOAT 2): print `GOAT_ACP_GROK_INSPECT_JSON` (default no skills) and
+//!   exit, like `grok inspect --json`.
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
@@ -187,14 +197,18 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                 agent.error(&id, -32000, "Authentication required");
                 return;
             }
-            agent.respond(
-                &id,
-                json!({
-                    "sessionId": "mock-session-1",
-                    "modes": agent.modes(),
-                    "configOptions": agent.model_options()
-                }),
-            );
+            let mut result = json!({
+                "sessionId": "mock-session-1",
+                "modes": agent.modes(),
+                "configOptions": agent.model_options()
+            });
+            if flag("GOAT_ACP_GROK_MODELS") {
+                result["models"] = json!({"currentModelId": "grok-4", "availableModels": [
+                    {"modelId": "grok-4", "name": "Grok 4", "_meta": {"reasoningEffort": "low",
+                        "reasoningEfforts": [{"value": "low"}, {"value": "high"}]}}
+                ]});
+            }
+            agent.respond(&id, result);
         }
         "session/load" | "session/resume" => {
             let session = params
@@ -226,6 +240,10 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
             agent.respond(&id, json!({"configOptions": agent.model_options()}));
         }
         "session/set_model" => {
+            if flag("GOAT_ACP_REJECT_SET_MODEL_META") && params.get("_meta").is_some() {
+                agent.error(&id, -32602, "Unsupported reasoning effort");
+                return;
+            }
             if let Some(value) = params.get("modelId").and_then(Value::as_str) {
                 *agent.model.lock().unwrap() = value.to_owned();
             }
@@ -233,6 +251,156 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
         }
         "session/prompt" => prompt(agent, id, params),
         _ => agent.error(&id, -32601, &format!("Method not found: {method}")),
+    }
+}
+
+const GROK_TASK: &str = "11111111-2222-3333-4444-555555555555";
+
+fn text_chunk(agent: &Agent, session: &str, text: &str) {
+    agent.update(
+        session,
+        json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}),
+    );
+}
+
+fn user_chunk(agent: &Agent, session: &str, text: &str) {
+    agent.update(
+        session,
+        json!({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}}),
+    );
+}
+
+/// A Grok subagent spawn that returns at once (v1 `isXAiAsyncSpawnAck`).
+fn grok_spawn(agent: &Agent, session: &str) {
+    agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "spawn-1", "title": "Task", "status": "pending",
+        "rawInput": {"prompt": "Count the files", "description": "File counter"}}));
+    agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "spawn-1", "status": "completed",
+        "rawOutput": {"text": format!("Subagent started in background.\nsubagent_id: {GROK_TASK}")}}));
+}
+
+/// A background shell command (`BackgroundTaskStarted`, task `call-1-0`).
+fn grok_background_command(agent: &Agent, session: &str) {
+    agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "bg-1", "title": "Terminal", "kind": "execute",
+        "status": "pending", "rawInput": {"command": "npm run build"}}));
+    agent.update(
+        session,
+        json!({"sessionUpdate": "tool_call_update", "toolCallId": "bg-1", "status": "completed",
+        "rawOutput": {"type": "BackgroundTaskStarted", "task_id": "call-1-0"}}),
+    );
+}
+
+fn grok_task_completed(agent: &Agent, session: &str, task_id: &str, output: &str) {
+    agent.notify(
+        "x.ai/task_completed",
+        json!({"sessionId": session, "update": {"sessionUpdate": "task_completed",
+        "task_snapshot": {"task_id": task_id, "output": output, "exit_code": 0, "kind": "bash"}}}),
+    );
+}
+
+fn grok_prompt_complete(agent: &Agent, session: &str, prompt_id: Option<&str>) {
+    agent.notify(
+        "_x.ai/session/prompt_complete",
+        json!({"sessionId": session, "promptId": prompt_id, "stopReason": "end_turn"}),
+    );
+}
+
+/// `GOAT_ACP_GROK_SCENARIO` (GOAT 2).
+fn grok_scenario(agent: &Agent, session: &str, prompt_id: Option<&str>, scenario: &str) {
+    match scenario {
+        "subagent-hydrate" => {
+            grok_spawn(agent, session);
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "poll-1",
+                "title": "get_command_or_subagent_output", "status": "completed", "rawInput": {"task_ids": [GROK_TASK]},
+                "rawOutput": {"Result": {"task_id": GROK_TASK, "status": "completed", "output": "42 files"}}}));
+            text_chunk(agent, session, "counted");
+            grok_prompt_complete(agent, session, prompt_id);
+        }
+        "subagent-finished" => {
+            grok_spawn(agent, session);
+            text_chunk(agent, session, "spawned");
+            grok_prompt_complete(agent, session, prompt_id);
+            text_chunk(agent, session, "after answer");
+            agent.notify("_x.ai/session_notification", json!({"sessionId": session, "update": {
+                "sessionUpdate": "subagent_finished", "child_session_id": GROK_TASK, "status": "completed", "output": "done counting"}}));
+        }
+        "subagent-notice" => {
+            grok_spawn(agent, session);
+            user_chunk(
+                agent,
+                session,
+                &format!("Background subagent {GROK_TASK} (File counter) completed successfully"),
+            );
+            grok_prompt_complete(agent, session, prompt_id);
+        }
+        "background" => {
+            grok_background_command(agent, session);
+            text_chunk(agent, session, "build started");
+            grok_prompt_complete(agent, session, prompt_id);
+            text_chunk(agent, session, "after answer");
+            grok_task_completed(agent, session, "call-1-0", "build ok");
+        }
+        "wake" => {
+            grok_background_command(agent, session);
+            grok_prompt_complete(agent, session, prompt_id);
+            grok_task_completed(agent, session, "call-1-0", "build ok");
+            agent.notify("session/update", json!({"sessionId": session, "_meta": {"promptId": "task-completed-call-1-0"},
+                "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "wake report"}}}));
+        }
+        "monitor" | "monitor-persistent" => {
+            let persistent = scenario == "monitor-persistent";
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "monitor-1", "title": "Tool", "status": "completed",
+                "rawInput": {"variant": "Monitor", "description": "watch build", "persistent": persistent},
+                "rawOutput": {"text": format!("Monitor started (task {GROK_TASK})")}}));
+            user_chunk(
+                agent,
+                session,
+                &format!("<monitor-event task_id=\"{GROK_TASK}\">build ok</monitor-event>"),
+            );
+            grok_prompt_complete(agent, session, prompt_id);
+            text_chunk(agent, session, "after answer");
+            if !persistent {
+                grok_task_completed(agent, session, GROK_TASK, "monitor done");
+            }
+        }
+        "kill" => {
+            grok_background_command(agent, session);
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "kill-1", "title": "kill_command_or_subagent",
+                "status": "completed", "rawInput": {"variant": "KillTask", "task_ids": ["call-1-0"]},
+                "rawOutput": {"type": "KillTask", "Result": {"outcome": "killed"}}}));
+            grok_prompt_complete(agent, session, prompt_id);
+        }
+        "hold" => {
+            grok_background_command(agent, session);
+            grok_prompt_complete(agent, session, prompt_id);
+            text_chunk(agent, session, "waiting");
+        }
+        "plan-file" => {
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "write-plan", "title": "Write plan.md",
+                "kind": "edit", "status": "completed",
+                "rawInput": {"file_path": "/tmp/mock-home/.grok/sessions/s1/plan.md", "content": "# File plan\n\n- step one\n"}}));
+            let reply = agent.request(
+                "_x.ai/exit_plan_mode",
+                json!({"sessionId": session, "toolCallId": "plan-2", "planContent": null}),
+            );
+            text_chunk(agent, session, &format!("xai plan: {reply}\n"));
+            grok_prompt_complete(agent, session, prompt_id);
+        }
+        "tools" => {
+            let command = format!("echo {}", "a".repeat(100));
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "long-1", "title": "Terminal", "kind": "execute",
+                "status": "completed", "rawInput": {"command": command}, "rawOutput": {"exitCode": 0, "stdout": "a"}}));
+            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "mcp-1", "title": "use_tool", "status": "pending",
+                "_meta": {"x.ai/tool": {"name": "use_tool"}}}));
+            agent.update(
+                session,
+                json!({"sessionUpdate": "tool_call_update", "toolCallId": "mcp-1",
+                "rawInput": {"tool_name": "goat__thread_read", "tool_input": {"id": "t1"}}}),
+            );
+            agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "mcp-1", "status": "completed",
+                "rawOutput": {"type": "MCP", "output": {"OkayOutput": "read ok"}}}));
+            grok_prompt_complete(agent, session, prompt_id);
+        }
+        other => text_chunk(agent, session, &format!("unknown grok scenario {other}")),
     }
 }
 
@@ -302,6 +470,11 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
     if flag("GOAT_ACP_EMIT_XAI_ASK_USER_QUESTION") {
         let reply = agent.request("_x.ai/ask_user_question", json!({"sessionId": session, "toolCallId": "ask-1", "questions": [{"question": "Which color?", "options": [{"label": "Red"}, {"label": "Blue"}]}]}));
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("xai question: {reply}\n")}}));
+    }
+    if let Some(scenario) = env("GOAT_ACP_GROK_SCENARIO") {
+        grok_scenario(&agent, &session, prompt_id.as_deref(), &scenario);
+        let _ = cancel_rx.recv();
+        return;
     }
     if flag("GOAT_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG") {
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "hello from grok"}}));
@@ -409,6 +582,15 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
 }
 
 fn main() {
+    // `grok inspect --json` (GOAT 2): the skill catalog for the prompt rewrite.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["inspect", "--json"] {
+        println!(
+            "{}",
+            env("GOAT_ACP_GROK_INSPECT_JSON").unwrap_or_else(|| "{\"skills\": []}".into())
+        );
+        return;
+    }
     let agent = Arc::new(Agent {
         out: Mutex::new(std::io::stdout()),
         next_id: AtomicU64::new(0),
