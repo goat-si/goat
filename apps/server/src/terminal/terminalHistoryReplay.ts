@@ -83,8 +83,11 @@ function shouldStripDcsSequence(content: string): boolean {
   return /^[01]?[$+][qr]/.test(content);
 }
 
+const LONE_SHORT_RGB_SETTER =
+  /^\d+;rgb:(?![\da-f]{4}\/[\da-f]{4}\/[\da-f]{4}$)[\da-f]{1,4}\/[\da-f]{1,4}\/[\da-f]{1,4}$/i;
+
 function shouldStripOscSequence(content: string): boolean {
-  return /^(10|11|12);(?:\?|rgb:)/.test(content);
+  return /^(10|11|12);(?:\?|rgb:)/.test(content) && !LONE_SHORT_RGB_SETTER.test(content);
 }
 
 function isOscPaletteQuery(content: string): boolean {

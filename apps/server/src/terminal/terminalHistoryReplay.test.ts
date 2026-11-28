@@ -219,3 +219,9 @@ it("replays a bounded unfinished sequence when attaching", () => {
   const held = sanitizeTerminalHistoryChunk("", "\u001b]" + "x".repeat(CAP)).pendingControlSequence;
   expect(unfinishedSequenceReplay(held)).toBe("\u001b]");
 });
+
+it("retains short RGB setters and strips color replies and queries", () => {
+  const setters = "\u001b]11;rgb:44/55/66\u0007\u001b]12;rgb:A/BC/def\u001b\\";
+  const queries = "\u001b]11;rgb:ffff/ffff/ffff\u0007\u001b]10;rgb:1/2/3\n;?\u0007";
+  expect(sanitizeTerminalHistoryChunk("", setters + queries).visibleText).toBe(setters);
+});
