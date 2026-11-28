@@ -209,6 +209,31 @@ test("an older idle status response cannot overtake a newer reconciliation", asy
   } finally { await session.shutdown(); }
 });
 
+test("newer idle reconciliation can finish while the superseded read is stalled", async () => {
+  fake.reset(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const prompt = fake.holdPrompt(); fake.setNativeStatus(session.engineRef, "idle"); const first = fake.holdStatus(true);
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "steer", text: "unread-steer", attachments: [] }]); await prompt.reached;
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); prompt.release();
+      assert.equal((await steering).status, "accepted"); await first.reached;
+      const second = fake.holdStatus(true);
+      try {
+        await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await second.reached;
+        second.release(); await new Promise<void>((resolve) => setImmediate(resolve));
+        const settled = events.findIndex((event) => event.type === "steer_updated");
+        const terminal = events.findIndex((event) => event.type === "turn_finished");
+        assert.ok(settled >= 0 && terminal > settled);
+      } finally { second.release(); }
+    } finally { first.release(); prompt.release(); }
+  } finally { await session.shutdown(); }
+});
+
 test("steer message reconciliation keeps the event reader available for newer activity", async () => {
   fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
