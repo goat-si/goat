@@ -3,6 +3,35 @@ import { describe, expect, it } from "vite-plus/test";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 
 describe("normalizeDesktopUpdateReleaseNotes", () => {
+  it.each([
+    [
+      "GOAT 0.1.14\n\nUTC date: 2026-11-26\n\n",
+      "| Platform | File |\n| --- | --- |\n| mac | GOAT.dmg |",
+      "- A faster sidebar.\n- Keyboard navigation.",
+    ],
+    [
+      "<p>GOAT 0.1.14</p><p>UTC date: 2026-11-26</p>",
+      "<table><thead><tr><th>Platform</th><th>File</th></tr></thead><tbody><tr><td>mac</td><td>GOAT.dmg</td></tr></tbody></table>",
+      "<ul><li>A faster sidebar.</li><li>Keyboard navigation.</li></ul>",
+    ],
+  ])(
+    "separates highlights from the publisher's installer inventory (%#)",
+    (header, table, change) => {
+      const notes = (body: string) =>
+        normalizeDesktopUpdateReleaseNotes(
+          header + body + "\n" + table + "\nmacOS: signed and notarized.",
+          "0.1.14",
+          "latest",
+        ).releaseNotes;
+      expect(notes("")).toEqual([]);
+      expect(notes("Search now covers all projects.")[0]?.items).toEqual([
+        "Search now covers all projects.",
+      ]);
+      expect(notes(change)).toMatchObject([
+        { version: "0.1.14", items: ["A faster sidebar.", "Keyboard navigation."], totalItems: 2 },
+      ]);
+    },
+  );
   it("shows the newest changes and counts all real changes", () => {
     const result = normalizeDesktopUpdateReleaseNotes(
       [

@@ -44,7 +44,7 @@ import {
   shouldContinueDesktopUpdateCheckAnimation,
   shouldShowDesktopUpdateCheckIcon,
 } from "./DesktopUpdateStatusIcon";
-import { SidebarUpdateReleaseNotes } from "./SidebarUpdateReleaseNotes";
+import { SidebarUpdateReleaseNotes, UpdateCardReleaseLink } from "./SidebarUpdateReleaseNotes";
 import { SidebarUpdateCapsule } from "./SidebarUpdateCapsule";
 import { type UpdateDialogSelection, UpdateEverythingDialog } from "./UpdateEverythingDialog";
 import {
@@ -341,7 +341,7 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
   const [dismissedNotice, setDismissedNotice] = useState(() =>
     window.sessionStorage.getItem("desktop-update-notice"),
   );
-  const noticeVersion = state?.downloadedVersion ?? state?.availableVersion;
+  const noticeVersion = state && getDesktopUpdateDownloadedVersion(state);
   const noticeKey = noticeVersion && state ? JSON.stringify([state.channel, noticeVersion]) : null;
   const isDownloadFailure = state?.errorContext === "download";
   const [failureDismissed, setFailureDismissed] = useState(
@@ -745,27 +745,30 @@ function SidebarUpdateControl({ placement }: { placement: SidebarUpdatePlacement
               </button>
             </div>
             <p className="mt-1 text-muted-foreground">{getDesktopUpdateButtonTooltip(state, gt)}</p>
-            {isDownloading ? (
-              <progress
-                className="mt-2 w-full"
-                aria-label={gt("Downloading update")}
-                value={state.downloadPercent ?? undefined}
-                max={100}
-              />
-            ) : (
-              <button
-                type="button"
-                className="mt-2 rounded-md bg-primary px-3 py-1 text-primary-foreground"
-                disabled={isInteractionDisabled}
-                onClick={() => void handleAction(true)}
-              >
-                {action === "install"
-                  ? gt("Restart to update")
-                  : state.errorContext === "download"
-                    ? gt("Retry")
-                    : gt("Download")}
-              </button>
-            )}
+            <div className="flex flex-wrap items-center gap-x-3">
+              {isDownloading ? (
+                <progress
+                  className="mt-2 w-full"
+                  aria-label={gt("Downloading update")}
+                  value={state.downloadPercent ?? undefined}
+                  max={100}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="mt-2 rounded-md bg-primary px-3 py-1 text-primary-foreground"
+                  disabled={isInteractionDisabled}
+                  onClick={() => void handleAction(true)}
+                >
+                  {action === "install"
+                    ? gt("Restart to update")
+                    : state.errorContext === "download"
+                      ? gt("Retry")
+                      : gt("Download")}
+                </button>
+              )}
+              <UpdateCardReleaseLink key={noticeKey} state={state} />
+            </div>
           </aside>,
           document.body,
         )}

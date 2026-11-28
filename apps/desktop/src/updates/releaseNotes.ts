@@ -144,9 +144,30 @@ function extractReleaseNoteItems(note: string | null | undefined): ExtractedRele
   // Generated summaries fold GitHub's full list under this exact <details> block.
   const summaryEnd = note.search(/<details>\s*<summary>\s*Full changelog\s*<\/summary>/i);
   if (summaryEnd >= 0) return extractReleaseNoteSummary(note.slice(0, summaryEnd));
+  // The publisher appends an installer inventory to both Markdown and GitHub's HTML feed.
+  // Its version, date, download rows and signing notice are not changes to the app.
+  const inventory = note.search(
+    /^\s*\|\s*Platform\s*\|\s*File\s*\|\s*$|<table\b[^>]*>\s*(?:<thead\b[^>]*>\s*)?<tr\b[^>]*>\s*<th\b[^>]*>\s*Platform\s*<\/th>\s*<th\b[^>]*>\s*File\s*<\/th>/im,
+  );
+  if (inventory >= 0) {
+    const header = stripMarkup(note.slice(0, inventory)).trim();
+    const metadata = /^GOAT v?\d+\.\d+\.\d+\S*\s+UTC date: \d{4}-\d{2}-\d{2}(?=\s|$)/i.exec(header);
+    if (metadata) {
+      const lines = header
+        .slice(metadata[0].length)
+        .split("\n")
+        .map((line) => line.trim().replace(/^(?:[-*]|\d+[.)])\s+/, ""))
+        .filter((line) => !/^#{1,6}\s+/.test(line) && !isIgnoredReleaseNoteLine(line));
+      return {
+        items: lines.slice(0, MAX_RELEASE_NOTE_ITEMS_PER_GROUP).map(truncateReleaseNoteItem),
+        totalItems: lines.length,
+      };
+    }
+  }
+  const content = stripMarkup(note);
   const items: string[] = [];
   let totalItems = 0;
-  for (const rawLine of stripMarkup(note).split("\n")) {
+  for (const rawLine of content.split("\n")) {
     const item = rawLine
       .trim()
       .replace(/^[-*]\s+/, "")
