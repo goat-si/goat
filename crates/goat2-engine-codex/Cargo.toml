@@ -1,10 +1,27 @@
 [package]
 name = "goat2-engine-codex"
 version = "0.0.0"
-description = "Codex app-server driver on the official codex-app-server-protocol crate."
+description = "Codex app-server driver: per-thread process, JSON-RPC over stdio, pinned codex 0.167.0 schema."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
+async-trait = "0.1"
+goat2-engine-api = { path = "../goat2-engine-api" }
+goat2-contracts = { path = "../goat2-contracts" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+jsonschema = { version = "0.63", default-features = false }
+
+[[bin]]
+name = "goat2-fake-codex"
+path = "src/bin/fake_codex.rs"
