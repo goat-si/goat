@@ -37,6 +37,7 @@ pub(super) async fn probe(
         profile_id: None,
         workspace_id: None,
         endpoint: None,
+        action: None,
     };
     let output = match output {
         Ok(output) => output,
