@@ -160,12 +160,15 @@ impl Providers {
         &self,
         instance_id: &str,
     ) -> Result<(Arc<dyn EngineFactory>, ProviderTarget), String> {
-        let state = self.state.lock().expect("providers");
-        let Some(instance) = state
-            .instances
-            .iter()
-            .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
-        else {
+        let instance = {
+            let state = self.state.lock().expect("providers");
+            state
+                .instances
+                .iter()
+                .find(|i| i.instance_id == instance_id && valid_instance_id(&i.instance_id))
+                .cloned()
+        };
+        let Some(instance) = instance else {
             return Err(format!("provider {instance_id} is not set up in this host"));
         };
         if !instance.enabled {
@@ -176,7 +179,8 @@ impl Providers {
             .get(&instance.driver)
             .cloned()
             .ok_or_else(|| format!("this host has no {} driver", instance.driver))?;
-        Ok((factory, self.target_of(instance)))
+        // Folder work outside the providers lock.
+        Ok((factory, self.target_of(&instance)?))
     }
 
     /// Refuse an instance id no listed instance has (before any probe starts).
@@ -227,21 +231,29 @@ impl Providers {
         let probes =
             futures_util::future::join_all(targets.iter().map(|(i, generation)| async move {
                 let factory = self.factories[&i.driver].as_ref();
-                let target = self.target_of(i);
-                let probe = if i.enabled {
-                    probe(factory, &target).await
+                // A turned-off instance gets no folder; one whose home cannot be prepared is
+                // never probed (it would fall back to the shared home's credentials).
+                let (probe, target) = if !i.enabled {
+                    (
+                        status_only(ServerProviderState::Disabled, "Turned off in settings."),
+                        None,
+                    )
                 } else {
-                    status_only(ServerProviderState::Disabled, "Turned off in settings.")
+                    match self.target_of(i) {
+                        Ok(target) => (probe(factory, &target).await, Some(target)),
+                        Err(why) => (status_only(ServerProviderState::Error, &why), None),
+                    }
                 };
                 // Sign-in methods for an instance with no flow yet (v1 lists them idle).
                 // Bounded like the probe: a hanging driver never stalls the whole list.
-                let methods = if i.enabled && factory.setup().can_authenticate {
-                    tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target))
-                        .await
-                        .ok()
-                        .and_then(Result::ok)
-                } else {
-                    None
+                let methods = match target {
+                    Some(target) if factory.setup().can_authenticate => {
+                        tokio::time::timeout(PROBE_DEADLINE, factory.auth_methods(&target))
+                            .await
+                            .ok()
+                            .and_then(Result::ok)
+                    }
+                    _ => None,
                 };
                 (i.instance_id.clone(), *generation, probe, methods)
             }))
@@ -267,13 +279,12 @@ impl Providers {
             // be discarded by a newer refresh or setting, and an empty or partial first list
             // would read as "no providers".
             if !state.ready {
-                let factories = &self.factories;
-                let probes = &state.probes;
-                state.ready = state
+                let ready = state
                     .instances
                     .iter()
-                    .filter(|i| factories.contains_key(&i.driver))
-                    .all(|i| probes.contains_key(&i.instance_id));
+                    .filter(|i| self.listed(i))
+                    .all(|i| state.probes.contains_key(&i.instance_id));
+                state.ready = ready;
             }
         }
         self.publish(host);
@@ -300,9 +311,12 @@ impl Providers {
             return Ok(running);
         }
         let (tx, rx) = mpsc::unbounded_channel();
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_start(&self.target_of(&instance), method_id, tx)).await?,
+            bounded(factory.auth_start(&target, method_id, tx)).await?,
         );
         self.record_auth(host, instance_id, state.clone())?;
         let watching = host.clone();
@@ -320,9 +334,12 @@ impl Providers {
         flow_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
         let state = clean_auth(
             instance_id,
-            bounded(factory.auth_cancel(&self.target_of(&instance), flow_id)).await?,
+            bounded(factory.auth_cancel(&target, flow_id)).await?,
         );
         // Cancelling an older flow never hides the one that runs now.
         self.record_auth_if(host, instance_id, state.clone(), |current| {
@@ -337,10 +354,10 @@ impl Providers {
         instance_id: &str,
     ) -> Result<ProviderAuthState, ProviderRefusal> {
         let (instance, factory) = self.lookup(instance_id)?;
-        let state = clean_auth(
-            instance_id,
-            bounded(factory.auth_logout(&self.target_of(&instance))).await?,
-        );
+        let target = self
+            .target_of(&instance)
+            .map_err(ProviderRefusal::Internal)?;
+        let state = clean_auth(instance_id, bounded(factory.auth_logout(&target)).await?);
         self.record_auth(host, instance_id, state.clone())?;
         // Re-probed in a task: this answers a command and must not wait on a probe.
         let probing = host.clone();
@@ -502,6 +519,17 @@ impl Providers {
         }
         {
             let mut state = self.state.lock().expect("providers");
+            // Ids name folders, and macOS folders ignore case: two ids that differ only in
+            // case would share one home (and its credentials).
+            if let Some(other) = state.instances.iter().find(|i| {
+                i.instance_id != next.instance_id
+                    && i.instance_id.eq_ignore_ascii_case(&next.instance_id)
+            }) {
+                return Err(ProviderRefusal::Invalid(format!(
+                    "instanceId {} differs from the existing {} only in letter case",
+                    next.instance_id, other.instance_id
+                )));
+            }
             // Saved first: a failed save changes nothing.
             let mut instances = state.instances.clone();
             match instances
@@ -754,26 +782,34 @@ impl Providers {
     /// The instance as a driver runs it. A non-default instance gets its private home,
     /// created (mode 0700) before it is handed over; the default instance (id = driver kind)
     /// uses the driver's shared home. A home is never deleted here: credentials stay until the
-    /// person signs out.
-    fn target_of(&self, instance: &ProviderInstance) -> ProviderTarget {
-        let home = (instance.instance_id != instance.driver
-            && valid_instance_id(&instance.instance_id))
-        .then(|| {
+    /// person signs out. Err when the home cannot be prepared (the message names no path):
+    /// the caller reports it and never falls back to the shared home.
+    fn target_of(&self, instance: &ProviderInstance) -> Result<ProviderTarget, String> {
+        if !valid_instance_id(&instance.instance_id) {
+            return Err(format!(
+                "provider {} is not a valid instance id",
+                instance.instance_id
+            ));
+        }
+        let home = if instance.instance_id == instance.driver {
+            None
+        } else {
             let home = self.homes.join(&instance.instance_id);
-            if let Err(err) = create_private_dir(&home) {
+            if let Err(err) = prepare_home(&self.homes, &home) {
                 // No path in the log: home paths stay out of tracing.
-                tracing::warn!(instance = %instance.instance_id, error = ?err.kind(), "provider home not created");
+                tracing::warn!(instance = %instance.instance_id, error = %err, "provider home not prepared");
+                return Err("Could not prepare this provider's private home folder.".into());
             }
-            home
-        });
-        ProviderTarget {
+            Some(home)
+        };
+        Ok(ProviderTarget {
             instance_id: ProviderInstanceId::new(instance.instance_id.clone()),
             // Instances carry no launch settings yet: the driver's default binary and environment.
             launch: None,
             home,
             // Provider settings carry no shared home yet: the driver's default.
             shared_home: None,
-        }
+        })
     }
 }
 
@@ -786,18 +822,42 @@ pub fn valid_instance_id(id: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(path)
+/// Create `root` and `home` (its direct child) as private folders, or check existing ones:
+/// each must be a real folder, never a symlink (which could point the home outside
+/// `root`), and ends up mode 0700. Errors name no path.
+fn prepare_home(root: &Path, home: &Path) -> std::io::Result<()> {
+    for dir in [root, home] {
+        plain_dir_or_absent(dir)?;
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(dir) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+        // Checked again after creating: nothing may have swapped in a link meanwhile.
+        plain_dir_or_absent(dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(path)
+    Ok(())
+}
+
+fn plain_dir_or_absent(dir: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => Err(std::io::Error::other(
+            "a provider home folder is a link or not a folder",
+        )),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
