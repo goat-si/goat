@@ -151,6 +151,7 @@
       "type": "object"
     },
     "CredentialOwner": {
+      "description": "v1 `ProviderAuthState.credentialOwner`.",
       "enum": [
         "provider",
         "t3"
@@ -291,6 +292,7 @@
       "type": "object"
     },
     "ProviderAuthInteraction": {
+      "description": "v1 `ProviderAuthInteraction`: what the person must do next in a sign-in flow.",
       "oneOf": [
         {
           "properties": {
@@ -400,6 +402,7 @@
       ]
     },
     "ProviderAuthMethod": {
+      "description": "v1 `ProviderAuthMethod`: one way to sign in.",
       "properties": {
         "accountEmail": {
           "type": [
@@ -437,6 +440,7 @@
       "type": "object"
     },
     "ProviderAuthMethodType": {
+      "description": "v1 `ProviderAuthMethod.type`.",
       "enum": [
         "agent",
         "terminal",
@@ -445,6 +449,7 @@
       "type": "string"
     },
     "ProviderAuthPhase": {
+      "description": "v1 `ProviderAuthState.phase`.",
       "enum": [
         "idle",
         "starting",
@@ -457,6 +462,7 @@
       "type": "string"
     },
     "ProviderAuthState": {
+      "description": "v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.",
       "properties": {
         "authorizationUrl": {
           "type": [
@@ -594,6 +600,7 @@
       "type": "object"
     },
     "ProviderCredentialField": {
+      "description": "v1 credentials interaction field.",
       "properties": {
         "label": {
           "type": "string"
@@ -613,6 +620,7 @@
       "type": "object"
     },
     "ProviderInstallPhase": {
+      "description": "v1 `ProviderInstallState.phase`.",
       "enum": [
         "idle",
         "downloading",
@@ -625,6 +633,7 @@
       "type": "string"
     },
     "ProviderInstallSource": {
+      "description": "v1 `ProviderInstallState.source`.",
       "enum": [
         "managed",
         "local"
@@ -632,6 +641,7 @@
       "type": "string"
     },
     "ProviderInstallState": {
+      "description": "v1 `ProviderInstallState` (`provider_install_*` results).",
       "properties": {
         "canRemove": {
           "type": "boolean"
@@ -683,6 +693,7 @@
           ]
         },
         "totalBytes": {
+          "default": null,
           "format": "uint64",
           "maximum": 9007199254740991,
           "minimum": 0,
@@ -909,6 +920,7 @@
       "type": "object"
     },
     "ProviderSetup": {
+      "description": "v1 `ServerProvider.setup`.",
       "properties": {
         "canAuthenticate": {
           "type": "boolean"
@@ -1404,6 +1416,7 @@
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One row of the `providers` frame: the v1 `ServerProvider` fields the UI needs, with the probe result\nand any running sign-in or install flow.",
   "properties": {
     "acpAgentId": {
       "type": [
