@@ -10,7 +10,8 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
  * refused at admission, nothing sent), `idempotency_conflict` (same `clientRequestId`, different
  * arguments), `notes_changed` (stale notes revision); `failed_precondition` / `not_queued` (the input left the queue, or
  * `reorder_queued` did not list exactly the queued inputs); `resource_exhausted` / `child_budget`,
- * `payload_too_large`; `invalid_request` / `invalid_request`; `internal` / `internal`.
+ * `payload_too_large`; `unavailable` / `not_available` (the command's host module has not
+ * landed yet); `invalid_request` / `invalid_request`; `internal` / `internal`.
  */
 export type CommandError = { code: AgentSurfaceErrorCode, 
 /**
