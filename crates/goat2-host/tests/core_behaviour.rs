@@ -3042,7 +3042,9 @@ async fn a_slow_probe_never_overwrites_a_newer_setting() {
     fake.set_probe(Ok(ready_probe("0.167.0")));
     fake.set_probe_delay(Duration::from_millis(400));
     let t = open_at(&path, Some(dir), fake, 1).await;
-    // Let the startup probe start (it reads the settings, then waits on the slow probe).
+    // The first subscription starts the initial probes; let that slow probe start (it reads
+    // the settings, then waits).
+    let _rx = t.host.watch_providers();
     tokio::time::sleep(Duration::from_millis(50)).await;
     t.host
         .command(set_instance("over-2", "codex", "codex", false))

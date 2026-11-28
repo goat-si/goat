@@ -74,6 +74,8 @@ pub struct Providers {
     factories: BTreeMap<String, Arc<dyn EngineFactory>>,
     state: Mutex<State>,
     list: watch::Sender<ProviderList>,
+    /// Set by the first subscription, which starts the initial probes.
+    initial_probe: std::sync::atomic::AtomicBool,
 }
 
 impl Providers {
@@ -123,11 +125,19 @@ impl Providers {
                 ready: false,
             }),
             list: watch::channel(None).0,
+            initial_probe: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     pub fn subscribe(&self) -> watch::Receiver<ProviderList> {
         self.list.subscribe()
+    }
+
+    /// True exactly once: the caller starts the initial probes.
+    pub fn claim_initial_probe(&self) -> bool {
+        !self
+            .initial_probe
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The latest published list (`None` before the first probes finished).

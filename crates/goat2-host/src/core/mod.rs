@@ -309,11 +309,9 @@ impl Host {
         commands::load_bots(self)?;
         commands::rebuild_dedupe(self).await;
         self.spawn_memory_sampler();
-        let host = self.clone();
-        let probes = tokio::spawn(async move {
-            let _ = host.inner.providers.refresh(&host, None).await;
-        });
-        self.track(&probes);
+        // Providers are probed on demand (first subscription or an explicit refresh), never at
+        // startup: a probe runs the provider's CLI, which a host that nobody shows providers to
+        // (tests, parity replays) must not do.
         self.inner.stall.note(
             "startup",
             serde_json::json!({ "ms": started.elapsed().as_millis() as u64, "threads": self.inner.store.cards().len() }),
@@ -377,6 +375,21 @@ impl Host {
 
     pub(crate) fn send(&self, id: &ThreadId, msg: Msg) -> bool {
         self.actor(id).is_some_and(|tx| tx.send(msg).is_ok())
+    }
+
+    /// Subscribe to the providers list; the first subscription starts the initial probes.
+    pub(crate) fn providers_subscribe(
+        &self,
+    ) -> tokio::sync::watch::Receiver<crate::providers::ProviderList> {
+        let rx = self.inner.providers.subscribe();
+        if self.inner.providers.claim_initial_probe() {
+            let host = self.clone();
+            let probes = tokio::spawn(async move {
+                let _ = host.inner.providers.refresh(&host, None).await;
+            });
+            self.track(&probes);
+        }
+        rx
     }
 
     /// Append and broadcast. Every log write goes through here.

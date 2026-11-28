@@ -788,7 +788,7 @@ impl WsHost for Host {
     }
 
     fn watch_providers(&self) -> tokio::sync::watch::Receiver<crate::providers::ProviderList> {
-        self.inner.providers.subscribe()
+        self.providers_subscribe()
     }
 
     fn stalled_ms_since(&self, since: std::time::Instant) -> u64 {
