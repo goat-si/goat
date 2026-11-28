@@ -1844,6 +1844,28 @@ async fn a_sign_in_outside_a_turn_lasts_until_the_engine_stops() {
     assert!(!data_contains(&t, "SECRET-STATE"));
 }
 
+#[tokio::test]
+async fn a_sign_in_url_only_in_the_message_stays_out_of_the_log() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "auth-message", Some("hello")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::AuthRequired {
+            turn_id: t.fake.active_turn(&id),
+            url: None,
+            message: "Open https://host.invalid/device/SECRET-PATH to sign in".into(),
+        },
+    );
+    eventually("needs you: signin", || signins(&t, &id).len() == 1).await;
+    assert_eq!(
+        signins(&t, &id)[0].summary,
+        "Open the sign-in link to sign in"
+    );
+    assert!(t.host.signin_links().is_empty(), "no url field, no link");
+    assert!(!data_contains(&t, "SECRET-PATH"));
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
