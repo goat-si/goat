@@ -8,6 +8,7 @@ pub mod engine;
 pub mod flavor;
 pub mod items;
 pub mod mcp;
+pub mod mcp_over_acp;
 pub mod normalize;
 pub mod policy;
 pub mod probe;

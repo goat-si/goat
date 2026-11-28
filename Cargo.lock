@@ -669,6 +669,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
+ "goat2-acp-mcp-bridge",
  "goat2-contracts",
  "goat2-engine-api",
  "libc",

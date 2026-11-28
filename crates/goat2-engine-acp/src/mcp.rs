@@ -6,9 +6,8 @@
 //!    (v1 passes `httpMcpServers` only for `preferHttpMcp`, registry `mcpTransport.ts:16-27`).
 //!    Agents that advertise HTTP still routinely drop injected HTTP servers (v1 comment,
 //!    `mcpContext.ts:39-44`), so HTTP is never the default.
-//! 2. MCP-over-ACP when the agent advertises `mcpCapabilities.acp` (v1 `mcpOverAcpBridge.ts`). GOAT 2
-//!    does not serve MCP-over-ACP yet; such agents take the stdio bridge, which still gives them
-//!    every GOAT tool.
+//! 2. MCP-over-ACP when the agent advertises `mcpCapabilities.acp` (v1 `mcpOverAcpBridge.ts`, served
+//!    by [crate::mcp_over_acp]).
 //! 3. Otherwise the stdio bridge (`goat2-acp-mcp-bridge`, v1 `goat acp-mcp-bridge`), which relays
 //!    JSON-RPC to the same authenticated endpoint. The credential travels in the server's
 //!    environment, never on its command line (v1 `cli/acpMcpBridge.ts:8`).
@@ -19,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use agent_client_protocol::v1::schema::{
-    EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerStdio,
+    EnvVariable, HttpHeader, McpServer, McpServerAcp, McpServerHttp, McpServerStdio,
 };
 use goat2_engine_api::{EngineError, SessionSpec};
 
@@ -77,7 +76,7 @@ impl McpBridgeCommand {
 }
 
 /// The `Authorization` header value for GOAT's endpoint (v1 `authorizationHeader`).
-fn authorization(spec: &SessionSpec) -> String {
+pub fn authorization(spec: &SessionSpec) -> String {
     format!("Bearer {}", spec.mcp.bearer_token)
 }
 
@@ -96,6 +95,12 @@ pub fn mcp_servers_for(
             McpServerHttp::new(SERVER_NAME, spec.mcp.url.clone())
                 .headers(vec![HttpHeader::new("Authorization", authorization(spec))]),
         )]);
+    }
+    if init.mcp_acp {
+        return Ok(vec![McpServer::Acp(McpServerAcp::new(
+            SERVER_NAME,
+            SERVER_NAME,
+        ))]);
     }
     let Some(bridge) = bridge else {
         return Err(EngineError::StartFailed(format!(

@@ -9,6 +9,8 @@
 //!
 //! - `GOAT_ACP_AGENT_VERSION`: `agentInfo.version` (default `0.0.0`).
 //! - `GOAT_ACP_MCP_HTTP=1`: advertise `mcpCapabilities.http`.
+//! - `GOAT_ACP_MCP_ACP=1` (GOAT 2): advertise `mcpCapabilities.acp`; with `GOAT_ACP_EMIT_MCP_OVER_ACP=1` a prompt runs
+//!   `mcp/connect`, `initialize`, `tools/list` and `mcp/disconnect` over ACP and prints `mcp tools: <names>`.
 //! - `GOAT_ACP_AUTH_METHOD_ID=<id>`: advertise an agent auth method; `session/new` answers -32000
 //!   until `authenticate` with it.
 //! - `GOAT_ACP_SYSTEM_PROMPT=1` (GOAT 2): advertise `sessionCapabilities.systemPrompt`.
@@ -144,7 +146,7 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
             let mut caps = json!({
                 "loadSession": env("GOAT_ACP_LOAD_SESSION").as_deref() != Some("0"),
                 "promptCapabilities": {"image": true, "embeddedContext": true},
-                "mcpCapabilities": {"http": flag("GOAT_ACP_MCP_HTTP")},
+                "mcpCapabilities": {"http": flag("GOAT_ACP_MCP_HTTP"), "acp": flag("GOAT_ACP_MCP_ACP")},
                 "sessionCapabilities": {}
             });
             if flag("GOAT_ACP_SYSTEM_PROMPT") {
@@ -303,6 +305,25 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         ] {
             agent.update(&session, notice);
         }
+    }
+    if flag("GOAT_ACP_EMIT_MCP_OVER_ACP") {
+        let connected = agent.request("mcp/connect", json!({"serverId": "goat"}));
+        let connection = connected["connectionId"].clone();
+        let init = agent.request("mcp/message", json!({"connectionId": connection, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "mock", "version": "0"}}}));
+        let _ = init;
+        let listed = agent.request(
+            "mcp/message",
+            json!({"connectionId": connection, "method": "tools/list"}),
+        );
+        let names: Vec<String> = listed["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_owned))
+            .collect();
+        let _ = agent.request("mcp/disconnect", json!({"connectionId": connection}));
+        agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": format!("mcp tools: {}\n", names.join(","))}}));
     }
     if flag("GOAT_ACP_EMIT_XAI_EXIT_PLAN_MODE") {
         let reply = agent.request("_x.ai/exit_plan_mode", json!({"sessionId": session, "toolCallId": "plan-1", "planContent": "# Plan\n\n1. Do it"}));

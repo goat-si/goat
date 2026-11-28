@@ -47,6 +47,8 @@ pub struct InitializeInfo {
     /// `sessionCapabilities.systemPrompt` (ACP 1.22): the agent takes `systemPrompt` on new/load/resume.
     pub system_prompt: bool,
     pub mcp_http: bool,
+    /// `mcpCapabilities.acp`: the agent takes MCP servers served over the ACP connection.
+    pub mcp_acp: bool,
     pub mcp_sse: bool,
     pub prompt_image: bool,
     pub prompt_audio: bool,
@@ -104,6 +106,7 @@ impl InitializeInfo {
             session_delete: present(session.get("delete")),
             system_prompt: present(session.get("systemPrompt")),
             mcp_http: mcp.get("http").and_then(Value::as_bool) == Some(true),
+            mcp_acp: mcp.get("acp").and_then(Value::as_bool) == Some(true),
             mcp_sse: mcp.get("sse").and_then(Value::as_bool) == Some(true),
             prompt_image: prompt.get("image").and_then(Value::as_bool) == Some(true),
             prompt_audio: prompt.get("audio").and_then(Value::as_bool) == Some(true),

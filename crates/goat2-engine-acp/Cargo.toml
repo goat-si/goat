@@ -8,7 +8,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
-agent-client-protocol = "=5.6.1"
+agent-client-protocol = { version = "=5.6.1", features = ["unstable_mcp_over_acp"] }
+goat2-acp-mcp-bridge = { path = "../goat2-acp-mcp-bridge" }
 async-trait = "0.1"
 futures = "0.3"
 goat2-contracts = { path = "../goat2-contracts" }

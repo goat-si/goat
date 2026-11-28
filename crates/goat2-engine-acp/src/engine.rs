@@ -217,6 +217,8 @@ struct Shared {
     shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
     /// Bumped when the agent advertises commands or config options (probes wait on it).
     advertised: watch::Sender<u64>,
+    /// GOAT's MCP endpoint served over this connection, when the agent took it that way.
+    mcp_over_acp: OnceLock<Arc<crate::mcp_over_acp::McpOverAcp>>,
 }
 
 fn emit(shared: &Shared, event: EngineEvent) {
@@ -274,6 +276,12 @@ impl Shared {
     // ---- inbound -------------------------------------------------------------------------
 
     fn on_notification(self: &Arc<Self>, method: &str, params: Value) {
+        if let ("mcp/message", Some(bridge)) = (method, self.mcp_over_acp.get().cloned()) {
+            tokio::spawn(async move {
+                let _ = bridge.notify(&params).await;
+            });
+            return;
+        }
         match method {
             "session/update" => {
                 let params = self
@@ -429,6 +437,28 @@ impl Shared {
     }
 
     fn on_request(&self, method: &str, params: Value, responder: ValueResponder) {
+        if let ("mcp/connect" | "mcp/message" | "mcp/disconnect", Some(bridge)) =
+            (method, self.mcp_over_acp.get().cloned())
+        {
+            let method = method.to_owned();
+            tokio::spawn(async move {
+                let result = match method.as_str() {
+                    "mcp/connect" => bridge.connect(&params),
+                    "mcp/message" => bridge.message(&params).await,
+                    _ => bridge.disconnect(&params).await,
+                };
+                let _ = match result {
+                    Ok(value) => responder.respond(value),
+                    Err(message) => {
+                        responder.respond_with_error(agent_client_protocol::Error::new(
+                            agent_client_protocol::ErrorCode::INTERNAL_ERROR,
+                            message,
+                        ))
+                    }
+                };
+            });
+            return;
+        }
         match method {
             "session/request_permission" => self.on_permission(params, responder),
             "elicitation/create" => self.on_elicitation(params, responder, false),
@@ -999,6 +1029,9 @@ impl Shared {
     }
 
     async fn stop(&self, reason: String) {
+        if let Some(bridge) = self.mcp_over_acp.get() {
+            bridge.dispose().await;
+        }
         if let Some(tx) = self.shutdown_tx.lock().expect("shutdown").take() {
             let _ = tx.send(());
         }
@@ -1552,6 +1585,7 @@ impl AcpEngineFactory {
             resolver: self.resolver.clone(),
             shutdown_tx: Mutex::new(None),
             advertised: watch::channel(0).0,
+            mcp_over_acp: OnceLock::new(),
         });
 
         let stderr_hook = {
@@ -1820,6 +1854,17 @@ impl AcpEngineFactory {
         });
         let mcp_servers =
             crate::mcp::mcp_servers_for(&init, spec, flavor.as_ref(), self.mcp_bridge.as_ref())?;
+        if mcp_servers
+            .iter()
+            .any(|s| matches!(s, agent_client_protocol::v1::schema::McpServer::Acp(_)))
+        {
+            let _ = shared
+                .mcp_over_acp
+                .set(Arc::new(crate::mcp_over_acp::McpOverAcp::new(
+                    spec.mcp.url.clone(),
+                    crate::mcp::authorization(spec),
+                )));
+        }
 
         let resume_id = spec
             .resume
