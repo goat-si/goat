@@ -221,3 +221,31 @@ per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine g
 ## Provider and bot runtime contracts (lane C)
 
 Source goat v1 `916b5ccc1b2`: `packages/contracts/src/{providerSetup,acpRegistry,server,rpc,channelBotNotes,channelGateway,botProfile}.ts` and `apps/server/src/channels/ChannelSessionFirst.ts`. Provider and bot runtime shapes are adapted to the additive GOAT 2 wire; detailed lifts and deviations are in `crates/goat2-contracts/PROVENANCE.md`.
+
+## goat2-engine-claude (lane P2-A, 2026-11-28)
+
+Source: `goat-si/goat` origin/dev `916b5ccc1b2`. `A/` = `apps/server/src/orchestration-v2/Adapters/`, `D/` = `apps/server/src/provider/Drivers/`. Wire shapes come from the TS Agent SDK v1 runs (`@anthropic-ai/claude-agent-sdk@0.3.276` `sdk.d.ts`/`sdk.mjs`) and lane D's `docs/parity/claude-stream-json.md`.
+
+| GOAT 2 path | Source | How |
+|---|---|---|
+| `crates/goat2-engine-claude/src/capabilities.rs`, `tests/fixtures/v1-claude-capabilities.json` | A/ClaudeAdapterV2.ts:436-531 `ClaudeProviderCapabilitiesV2` | ported to Rust, every flag equal; JSON evaluated from the v1 literal, test compares both ways |
+| `src/launch.rs` argv | SDK `ProcessTransport.initialize` + A/ClaudeAdapterV2.ts:575-760 `makeClaudeQueryOptions`, :778-830 `claudeMcpQueryOverrides` | ported: stream-json flags, adaptive thinking + summarized display, effort, model, `--permission-prompt-tool stdio`, `--resume=`/`--session-id=`, `--allowedTools mcp__goat__*`, `--tools default`, permission mode, `--include-partial-messages`, `--add-dir`, `--settings` |
+| `src/launch.rs` permission mode | A/ClaudeAdapterV2.ts:1338-1384 `permissionModeForClaudeRuntimePolicy` | ported for runtimeMode only (GOAT 2 has no approval/sandbox/interaction policy) |
+| `src/launch.rs` launch-arg folds | A/ClaudeAdapterV2.ts:606-621,674-679; A/ClaudeLaunchArgs.ts:56-131 | ported: `--permission-mode`, `--dangerously-skip-permissions`, `--append-system-prompt(-file)` (v1 error texts verbatim), `--settings`, `--add-dir`, `--thinking-display` |
+| `src/launch.rs` environment | D/ClaudeHome.ts:49-89 `CLAUDE_HOST_SESSION_VARIABLES`, `mergeClaudeProcessEnvironment` (`CLAUDE_CODE_ENTRYPOINT=t3-code` verbatim); A/claudeMcpProxyBypass.ts; A/ClaudeAdapterV2.ts:533-556 (`MCP_CONNECTION_NONBLOCKING=0` on resume) | ported |
+| `src/launch.rs` `CompiledModel` | apps/server/src/claudeModelOptions.ts:31-79 `compileClaudeModelSelection` | adapted: model id as written, `effort`/`thinking`/`fastMode` options; no catalog alias resolution |
+| `src/engine.rs` boot | A/ClaudeAgentSdkQueryRunner.ts:75-76 (5 min boot, 90 s MCP), :500-540 (MCP servers sent with `mcp_set_servers` on stdin, never argv or env); A/ClaudeAdapterV2.ts:719-735 (appended system prompt; the SDK sends it as initialize `appendSystemPrompt`) | ported. The lane brief named `--mcp-config`; v1 keeps the bearer out of argv and the owner confirmed following v1 |
+| `src/engine.rs` MCP server config | A/ClaudeAdapterV2.ts:778-830 (`goat` http server, `Authorization` header, 65 min `timeout`) | ported |
+| `src/engine.rs` turns and steering | A/ClaudeUserMessage.ts; A/ClaudeTurnCursor.ts (synthetic `turn:` ids); A/ClaudeAdapterV2.ts:9899-10061 (steer = `priority:"next"` user frame with uuid, echo = acceptance); A/ClaudePromptFrames.ts:32-84; A/ClaudeSteerLifecycle.ts (hold a result while a steer is queued, drop refused/cancelled/discarded steers) | ported |
+| `src/engine.rs` interrupt | A/ClaudeAdapterV2.ts:9755-9815 (active turn only), `CLAUDE_STOP_CONFIRM_TIMEOUT_MS` (10 s) | ported; a turn the CLI does not settle is settled as interrupted after the deadline |
+| `src/engine.rs` `can_use_tool` | A/ClaudeAdapterV2.ts:8241-8520 (AskUserQuestion, ExitPlanMode denial text, removal check, approval prompt choice, no-active-turn and computer-use denials); A/ClaudeApproval.ts (presentation, `permissionResultFromDecision`, session grants, removal denial text) | ported; v1 never offers `acceptAlways` to Claude, GOAT 2 reads it as accept-for-session |
+| `src/engine.rs` result status and failure text | A/ClaudeResultFailure.ts:13-212 | ported (`terminalResultError` texts verbatim, 429/529 texts); no usage-limit reset-time parsing |
+| `src/engine.rs` sign-in message | D/ClaudeHome.ts:131-140 `claudeSignedOutMessage` | verbatim text |
+| `src/items.rs` | A/ClaudeToolFrames.ts:72-503 (classification, command/file/summary/web search, subagent report cleanup, async launch ack); A/ClaudeAdapterV2.ts:1917-2016 (questions, answers, todo steps), :2166-2175 (plan) | ported; tool output stays out of items (`outputOmitted`), as in the Codex driver |
+| `src/probe.rs`, `data/model-manifest.claudeAgent.json` | apps/server/src/provider/ClaudeProvider.ts:861-885 (messages); apps/server/src/provider/model-manifest.json `providers.claudeAgent` | manifest verbatim; probe adapted to `claude --version` / `claude auth status` instead of an SDK query |
+| `src/process.rs` | GOAT 2 `crates/goat2-engine-codex/src/process.rs` (lane B, branch `goat2_engine_codex` c297ed6) | copied verbatim (drivers may not depend on each other) |
+| `src/bin/fake_claude.rs` | A/ClaudeAdapterV2.testkit.ts:488-890 `makeReplayQueryRunner` (strict cursor, uuid replacement) | adapted to the wire: translates v1 SDK-level transcript frames to stream-json |
+| `tests/fixtures/v1/*.ndjson` | apps/server/src/orchestration-v2/testkit/fixtures/{simple,multi_turn,multi_turn_restart,queued_turn,claude_idle_resume,subagent,tool_call_restricted_granular,tool_call_denied_write,message_steering,turn_interrupt,claude_result_is_error}/claude_transcript.ndjson | verbatim |
+| `tests/fixtures/wire/auth_failure_2_1_332.ndjson` | real `claude` 2.1.332 stdout, logged-out home, 2026-11-28 | captured; init lists trimmed, home path anonymised |
+
+New in GOAT 2: the other `tests/fixtures/wire/*` (hand-written from 2.1.332 frame shapes seen in the capture: `command_lifecycle`, `set_model`/`set_permission_mode`/`mcp_set_servers` responses), `src/protocol.rs` framing, `src/util.rs`.
