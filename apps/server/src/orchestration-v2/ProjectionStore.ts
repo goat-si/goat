@@ -170,6 +170,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { mapShellChunks } from "./shellChunks.ts";
 import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
@@ -7166,7 +7167,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           providerThreadRows: retainedProviderRows,
           pendingTurnItemRows: retainedPendingRows,
         });
-      const states = yield* Effect.forEach(retainedRows, (row) =>
+      const states = yield* mapShellChunks(retainedRows, (row) =>
         shellThreadStateFromRow({
           row,
           runsByThreadId,
@@ -7178,17 +7179,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       );
       const statesByThreadId = new Map(states.map((state) => [state.thread.id, state]));
 
-      const shells = states
-        .filter((state) => targetThreadIds.has(state.thread.id))
-        .map((state) =>
-          shellFromState({
-            state,
-            visibleItemCount: visibleItemCountForShell({
-              threadId: state.thread.id,
-              statesByThreadId,
+      const shells = yield* mapShellChunks(
+        states.filter((state) => targetThreadIds.has(state.thread.id)),
+        (state) =>
+          Effect.sync(() =>
+            shellFromState({
+              state,
+              visibleItemCount: visibleItemCountForShell({
+                threadId: state.thread.id,
+                statesByThreadId,
+              }),
             }),
-          }),
-        );
+          ),
+      );
 
       return {
         schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
