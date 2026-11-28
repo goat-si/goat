@@ -116,6 +116,7 @@ describe("key names before a call reaches the driver", () => {
     assert.isTrue(driverPressesKeypad("0.38.0-goat.4"));
     assert.isTrue(driverPressesKeypad("0.40.1-goat.1"));
     assert.isTrue(driverPressesKeypad("0.62.0-goat.1"));
+    assert.isTrue(driverPressesKeypad("0.62.0-goat.2"));
     for (const key of ["KP_0", "KP_9", "KP_Add", "kp_decimal"]) {
       const line = call("press_key", { ...window, key });
       assert.deepEqual(resolveKeyCall(line, { keypad: true }), { line }, key);
