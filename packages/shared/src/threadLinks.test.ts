@@ -156,6 +156,15 @@ describe("thread links", () => {
         "After [New](goat-thread://v1/t1)",
       ].join("\n"),
     );
+    const nested = [
+      "> > ```md",
+      ">> [old](goat-thread://v1/t1)",
+      ">>```",
+      "> > [old](goat-thread://v1/t1)",
+    ];
+    expect(relabelThreadLinks(nested.join("\n"), () => "New")).toBe(
+      [...nested.slice(0, 3), "> > [New](goat-thread://v1/t1)"].join("\n"),
+    );
     for (const escaped of [
       "\\``[old](goat-thread://v1/t1)`",
       "\\```[old](goat-thread://v1/t1)``",
@@ -173,6 +182,8 @@ describe("thread links", () => {
       ["> ```", ` > ${hidden}`, "> ```", after],
       ["- ```bash", "  echo hi", "  ```", "", after],
       ["- > ```md", `  > ${hidden}`, "  > ```", "", after],
+      [">> ```md", `> > ${hidden}`, ">> ```", `> ${after}`],
+      ["> > ~~~", `>> ${hidden}`, ">> ~~~", after],
       ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
       ["````md", "```", hidden, "````", after],
       ["Use ~~~ to mark it.", after],

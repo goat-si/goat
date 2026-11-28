@@ -15,6 +15,14 @@ const THREAD_HREF = String.raw`(?:${THREAD_LINK_PROTOCOLS.join("|")}):\/\/v1\/`;
 // A label stops at any bracket, so a run of unclosed brackets is scanned once, not once per bracket.
 const LABEL = String.raw`[^[\]\n]*`;
 const LIST_MARKERS = String.raw`(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*`;
+const QUOTE_PREFIX = new RegExp(String.raw`^([ \t]*${LIST_MARKERS})(>(?:[ \t]*>)+)`, "gm");
+// Move inter-marker spacing before the quote so fence depth matches and offsets stay intact. A label
+// may span \r or U+2028, which multiline `^` follows, so labels and output are read from the original.
+const threadLinkSource = (markdown: string) =>
+  markdown.replace(QUOTE_PREFIX, (_source, indent: string, quote: string) => {
+    const markers = quote.replace(/[ \t]/g, "");
+    return indent + " ".repeat(quote.length - markers.length) + markers;
+  });
 // CommonMark fences start on their own line (optional blockquotes, indentation, or list markers)
 // and close on a line with at least as many of the same marker; backtick info strings hold no `.
 // Quote markers are compared from the first `>`, so lines may indent them differently.
@@ -217,9 +225,11 @@ export function threadLinkIds(markdown: string): ReadonlyArray<ThreadId> {
 
 function* threadLinkMatches(markdown: string) {
   const pattern = new RegExp(THREAD_LINK_OUTSIDE_CODE);
+  const source = threadLinkSource(markdown);
+
   let lines: ReturnType<typeof codeSpanLines> | undefined;
   let lineIndex = 0;
-  for (let match = pattern.exec(markdown); match !== null; match = pattern.exec(markdown)) {
+  for (let match = pattern.exec(source); match !== null; match = pattern.exec(source)) {
     const spanTicks = match.groups?.spanTicks;
     if (spanTicks !== undefined) {
       lines ??= codeSpanLines(markdown);
@@ -268,6 +278,7 @@ export function relabelThreadLinks(
     const label = title(threadId)?.trim();
     if (!label) continue;
     result += markdown.slice(cursor, match.index) + formatThreadLink(threadId, label);
+
     cursor = match.index + match[0].length;
   }
   return cursor === 0 ? markdown : result + markdown.slice(cursor);
