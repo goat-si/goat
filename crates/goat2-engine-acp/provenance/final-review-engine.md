@@ -30,3 +30,42 @@ GOAT v1 at goat-si/goat origin/dev `916b5ccc1b2`. Findings are the final review'
 | D1 | src/probe_grok.rs (acp_initialize_only), src/engine.rs (read_frame) | packages/effect-acp/src/_internal/strictParser.ts:18-30 | ported-to-Rust |
 | D2 | src/probe_support.rs (redact_home, probe_homes, spawn_failure_message_with_homes), src/probe_fx.rs, src/probe_grok.rs | packages/provider-core/src/server/spawnFailure.ts:130-144 | adapted (home prefix shown as ~) |
 | tests | src/bin/acp_mock_agent.rs (GOAT_ACP_ENV_LOG_PATH, GOAT_ACP_ENV_LOG_NAMES) | apps/server/scripts/acp-mock-agent.ts (scenario style) | written new (GOAT 2 knobs) |
+
+## Final review 7 (head 3a2bd238f2)
+
+Each high and medium finding has a regression test that failed on the unfixed code.
+
+| Finding | GOAT 2 | v1 source | Kind |
+|---|---|---|---|
+| 2.1 | src/process.rs (without_host_identity), src/probe_support.rs (is_host_identity): GOAT2_HOST_TOKEN | lane B goat2-engine-codex/src/process.rs:65 (GOAT 2; v1 has no such token) | ported from lane B; tests process::tests::the_host_ui_token_is_not_inherited_but_other_host_settings_are, catalog_tests::a_base_environment_holding_the_host_token_does_not_pass_it_to_the_agent |
+| 2.2 | src/policy.rs (PathSet, known_changed_paths) | packages/provider-acp/src/server/clientPolicy.ts:122-128,139-209 | adapted (a set, stops past 256 paths); test many_distinct_locations_are_unknown_quickly |
+| 2.3 | src/wire.rs (find_model_config_option, parse_modes) | packages/provider-acp/src/server/runtimeModel.ts:428-435,478-517 | ported-to-Rust |
+| 2.4 | goat2-acp-mcp-bridge src/lib.rs: unused HttpRelay::send and initialize removed | - | removed (no caller) |
+| 2.5 | src/stderr.rs (home_directories, account_home) | packages/provider-acp/src/server/stderr.ts:22 (os.homedir()) | ported-to-Rust (getpwuid_r) |
+| 3.1 | src/subagents.rs (root_tool after the turn keeps no tool) | packages/provider-acp/src/server/adapter.ts:3741-3775 | ported-to-Rust; test a_report_between_turns_is_not_a_tool_of_the_next_turn |
+| 3.2 | src/subagents.rs (apply refuses a terminal change outside the owning turn) | adapter.ts:4664-4666 (updateCarryoverSubagentStatus), 1800-1813 | ported-to-Rust; test a_late_report_does_not_rewrite_an_interrupted_subagent |
+| 3.3 | src/mcp_over_acp.rs (dispose stops calls, refuses later connects and calls) | adapter.ts:5547; mcpOverAcpBridge.ts:121-123 | adapted; test dispose_stops_calls_in_flight_and_later_connects |
+| 3.5 | src/subagents.rs (prune, launch ids per turn) | adapter.ts per-turn context.subagents and carryover | adapted |
+| 4.1 | src/agents/grok_tools.rs (background_tool_mutations), src/flavor.rs (BackgroundMutation.append_output: Arc<str>) | provider-grok/xaiAcpExtension.ts:602-657 | adapted (one summary, one ended mutation per task, 64 per message); test repeated_monitor_ends_stay_bounded |
+| 4.2 | src/flavor.rs (PromptComplete/PromptFailed.session_id), src/engine.rs, src/agents/grok.rs | provider-grok/xaiAcpExtension.ts:19-24,1381-1390 | ported-to-Rust; tests a_prompt_completion_for_another_session_does_not_settle_the_turn, prompt_completions_carry_their_session_and_need_a_string_prompt_id |
+| 4.3 | src/agents/xai_requests.rs | provider-grok/xaiAcpExtension.ts:875-880; provider-grok/adapter.ts:214 | ported-to-Rust |
+| 4.4 | src/agents/grok.rs (finish_launch writes the referrer last) | provider-grok/acpSupport.ts:155-159 | ported-to-Rust |
+| 5a.1 | src/agents/antigravity.rs (initialize_refusal redacts the home) | apps/server/src/provider/Drivers/AntigravityDriver.ts:408-427 | adapted (home as ~); test the_runtime_refusal_hides_the_home_directory |
+| 5a.2 | src/agents/antigravity.rs (release_runtime, MAX_TRACKED_SESSIONS) | AntigravityAdapterV2.ts:168-172 | adapted |
+| 5a.3 | src/agents/antigravity_files.rs (lexically_resolved) | AntigravityClientFiles.ts:45 | ported-to-Rust |
+| 5a.6 | src/agents/antigravity.rs, src/flavor.rs (Debug of AntigravityLaunch, LaunchCommand, AgentEnv without values) | - | written new |
+| 5a.7 | src/agents/antigravity_auth.rs (with_linux_ca_bundle) | apps/server/src/provider/antigravityAuthSupport.ts:401-420 | ported-to-Rust |
+| 5b.1 | src/agents/fx.rs (fx_subagent_outcome) | packages/provider-fx/src/server/adapter.ts:114 | ported-to-Rust (a lone high surrogate escape is dropped); test subagent_calls_become_child_work |
+| 6a.1 | src/registry/install.rs (extraction_error_text, lock_timeout_message) | AcpRegistrySupport.ts:1173-1176,1411-1416 | adapted (paths relative to the destination, home as ~); test an_extraction_error_does_not_name_the_destination |
+| 6a.2 | src/registry/install.rs (run_command in its own process group, GroupGuard) | @effect/platform-node-shared 4.1.2 NodeChildProcessSpawner.js:372,384,497; AcpRegistrySupport.ts:739 | adapted (Unix; Windows kills the direct child); test dropping_a_command_kills_its_process_group |
+| 6b.1 | src/registry/catalog.rs (local agent id is the executable name) | packages/provider-acp-registry/src/server/adapter.ts:213-215 | adapted; test a_local_agent_id_has_no_path |
+| 6b.2 | src/registry/catalog.rs (override error) | AcpRegistrySupport.ts:1769 | adapted (home as ~) |
+| 6b.3, 6b.4, 6b.5 | src/registry/cache.rs (file I/O outside the state lock, fresh check before the fetch permit, request and body timeouts) | registryIndexCache.ts:116-128,176-205; AcpRegistrySupport.ts:653-690 | ported-to-Rust; test a_fresh_search_does_not_wait_for_a_running_fetch |
+| 6b.6 | src/registry/catalog.rs (uninstall validates before the permit) | AcpRegistrySupport.ts:1876-1879 | adapted |
+| 7.1 | src/registry/schema.rs (secret_max_len), src/registry/contracts.rs | acpRegistry.ts:243-249 | adapted (length only) |
+| 7.2 | src/registry/agents/copilot.rs (release clears the runtime) | copilotAcp.ts:139-149 | ported-to-Rust |
+| 7.4, 7.5 | src/registry/agents/devin.rs, droid.rs, omp.rs, opencode.rs | devinAcp.ts:34; droidAcp.ts:35; ompAcp.ts:33; opencodeAcp.ts:38 | ported-to-Rust |
+| 8a.1 | src/probe_registry.rs (discover_model_options), src/engine.rs (AcpSession::set_config_option) | packages/provider-acp-registry/src/server/modelDiscovery.ts:33-91; AcpSessionRuntime.ts:1023-1075 | ported-to-Rust; tests model_discovery_restores_an_original_named_default, model_discovery_resends_the_original_after_an_unseen_switch |
+| 8a.2 | src/probe.rs (ProbeConfig.sensitive_env), src/probe_registry.rs | minimaxCodeUsageEnrichment.ts:7-35 | ported-to-Rust |
+| 8a.3 | src/engine.rs (with_advertisement_graces), tests/probe.rs | probe.ts:500-516,535-569 | written new (test seam) |
+| 8b.3 | src/bin/acp_mock_agent.rs (chosen Grok model, GOAT_ACP_MODEL_VALUES, GOAT_ACP_SET_CONFIG_BARE) | apps/server/scripts/acp-mock-agent.ts:451-461 | ported-to-Rust; the two knobs are GOAT 2 additions |

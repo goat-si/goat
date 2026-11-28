@@ -7,8 +7,8 @@ Every GOAT 2 file of the Grok slice, with the v1 source it was lifted from. v1 p
 | GOAT 2 path | v1 path@916b5ccc1b2 (lines) | Method |
 | --- | --- | --- |
 | src/agents/grok.rs (capabilities, launch, auth policy, initialize/cancel meta, restart/preserve/defer flags, image prompts, permission disposition, approval options, prompt meta, hook wiring) | provider-grok/adapter.ts:92-127,232-243,347-475; provider-grok/acpSupport.ts:30-33,125-245 | ported-to-Rust |
-| src/agents/grok.rs (prompt completion: `prompt_complete`, `turn_completed`, `rate_limit` / `error` failures) | provider-grok/xaiAcpExtension.ts:16-24,57-76,1236-1301,1429-1482; provider-grok/adapter.ts:433-446 | ported-to-Rust (GOAT 2 matches by prompt id; v1 also by session) |
-| src/agents/grok_tools.rs | provider-grok/xaiAcpExtension.ts:98-379,526-859; provider-grok/xaiMcpToolCall.ts:1-57; provider-grok/commandTitle.ts:1-7 | ported-to-Rust (JS regex lookaheads rewritten by hand; UTF-16 title cut kept) |
+| src/agents/grok.rs (prompt completion: `prompt_complete`, `turn_completed`, `rate_limit` / `error` failures) | provider-grok/xaiAcpExtension.ts:16-24,57-76,1236-1301,1429-1482; provider-grok/adapter.ts:433-446 | ported-to-Rust (matched by session and prompt id as v1, xaiAcpExtension.ts:1381-1390; a session has one prompt pending, which is v1 exactly-one rule for a completion without a prompt id; a non-string `promptId` is dropped as v1 decode does) |
+| src/agents/grok_tools.rs | provider-grok/xaiAcpExtension.ts:98-379,526-859; provider-grok/xaiMcpToolCall.ts:1-57; provider-grok/commandTitle.ts:1-7 | ported-to-Rust (JS regex lookaheads rewritten by hand; UTF-16 title cut kept; final review 7: an injected message ends at most 64 monitors, one per task, sharing one summary, where v1 copies the message per match) |
 | src/agents/grok_notifications.rs | provider-grok/xaiAcpExtension.ts:28-87,382-524 | ported-to-Rust (Effect schema decode checked field by field; v1 wake `report` dropped, no consumer) |
 | src/agents/grok_plan.rs | provider-grok/xaiAcpExtension.ts:957-1090; provider-grok/adapter.ts:451-461 | ported-to-Rust |
 | src/agents/grok_model.rs | provider-grok/adapter.ts:250-345; provider-grok/acpSupport.ts:247-325; provider-grok/status.ts:134-206 (`grokReasoningOptionsFromModel` values only) | ported-to-Rust |
@@ -22,6 +22,7 @@ Every GOAT 2 file of the Grok slice, with the v1 source it was lifted from. v1 p
 | src/bin/acp_mock_agent.rs (`GOAT_ACP_GROK_KILL_TASK_SHAPE`, `GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL`, `GOAT_ACP_EMIT_GROK_BACKGROUND_TASK_STARTED` / `GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION`, Grok models) | apps/server/scripts/acpMockGrokScenarios.ts:1-69; apps/server/scripts/acp-mock-agent.ts:431-461,1836-1980; apps/server/scripts/acpMockScenarioOptions.ts:11-18 | ported-to-Rust (v1 env names; v1's 120 ms pause before the monitor poll dropped) |
 | src/bin/acp_mock_agent.rs (`GOAT_ACP_GROK_SCENARIO`, `GOAT_ACP_GROK_MODELS`, `GOAT_ACP_REJECT_SET_MODEL_META`, `inspect --json`) | frame shapes from provider-grok/xaiAcpExtension.test.ts and provider-grok/skills.test.ts | written new (GOAT 2 scenarios, marked) |
 | tests/grok.rs | behaviours of provider-grok/adapter.test.ts, xaiAcpExtension.test.ts, skills.test.ts | written new against the v1 behaviour cited in each test |
+| tests/grok_launch_env.rs | provider-grok/auth.ts:57-64; provider-grok/acpSupport.ts:164-168 (behaviours) | written new against the v1 behaviour cited in the file |
 
 ## Not carried, and why
 

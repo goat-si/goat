@@ -1,4 +1,4 @@
-//! Per-run temp directories for registry agents, from v1 `registryRuntimeTemp.ts` (all 146 lines)
+//! Per-run temp directories for registry agents, from v1 `registryRuntimeTemp.ts` (1-122; 124-146 are in catalog.rs `prepare_runtime_spawn`)
 //! at 916b5ccc1b2. Only `antigravity-acp` gets one (v1 `:134`): its TMPDIR (TEMP/TMP on Windows)
 //! points into a directory removed when the run ends; directories of dead GOAT processes are
 //! retired at startup and removed in the background.
