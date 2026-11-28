@@ -32,7 +32,7 @@
 | `src/probe_antigravity.rs` | apps/server/src/provider/AntigravityProvider.ts:49-58, 182-196, 388-475; Drivers/AntigravityDriver.ts:661-726; antigravityAuthSupport.ts:112-144; AntigravityInstallation.ts:272-308 | ported-to-Rust; managed-release lookup and harness-sibling checks not ported |
 | `src/probe_minimax.rs` | packages/provider-acp-registry/src/server/minimaxCodeAccountQuota.ts:13-306; minimaxCodeUsageEnrichment.ts:7-59 | ported-to-Rust with an HTTP seam (`QuotaHttp`) |
 | `src/bin/acp_mock_agent.rs` probe scenarios (`GOAT_ACP_EXIT_AT_START`, `_ARGV_LOG_PATH`, `_INITIALIZE_META`, `_AUTH_METHODS`, `_AUTH_REQUIRED`, `_LOGOUT`, `_SESSION_MODELS`, `_NO_MODEL_OPTION`, `_THOUGHT_LEVEL`, `_LATE_MODELS`, `_MOCK_CLI*`) | apps/server/scripts/acp-mock-agent.ts (scenario style) | GOAT 2 additions |
-| `tests/probe_status.rs` | v1 status tests' cases (provider-grok status.test.ts, provider-fx status.test.ts, provider-acp-registry probe/driverSnapshots tests) | adapted to the fake agent |
+| `tests/probe_status.rs` | the v1 rules cited in each test's doc comment | written new for GOAT 2 (v1's own status tests were not ported) |
 
 Not ported, and why:
 - `probeManagement.ts` (session list/delete, provider list/set/disable, logout): management operations, not part of `probe()`.

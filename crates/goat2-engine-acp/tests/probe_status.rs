@@ -15,6 +15,10 @@ use goat2_contracts::{
 use goat2_engine_acp::agents::{antigravity::Antigravity, fx::Fx, grok::Grok};
 use goat2_engine_acp::probe::ProbeConfig;
 use goat2_engine_acp::probe::antigravity::{AUTH_UNCHECKED_MESSAGE, AntigravityProbeSettings};
+use goat2_engine_acp::probe::minimax::{
+    MiniMaxCodeQuotaReader, QuotaHttp, QuotaReading, QuotaRequest, QuotaResponse,
+};
+use goat2_engine_acp::probe::registry::check_registry_provider_status;
 use goat2_engine_acp::registry::RegistryAgentFlavor;
 use goat2_engine_acp::registry::index::{RegistrySettings, Source};
 use goat2_engine_acp::{AcpEngineFactory, LaunchCommand};
@@ -387,6 +391,79 @@ async fn disabled_instances_run_nothing() {
         Some("ACP Registry is disabled in GOAT settings.")
     );
     assert!(!log.exists());
+}
+
+/// v1 snapshotReadiness.ts:13-20: a registry instance without an agent.
+#[tokio::test]
+async fn registry_instance_without_agent_is_unconfigured() {
+    let dir = tempfile::tempdir().unwrap();
+    let factory = AcpEngineFactory::new(Arc::new(RegistryAgentFlavor {
+        agent_id: String::new(),
+        command: LaunchCommand::new(MOCK, Vec::<String>::new()),
+        local: false,
+    }));
+    let result = probe(factory, config(dir.path())).await;
+    assert_eq!(result.status, ServerProviderState::Warning);
+    assert!(!result.installed);
+    assert_eq!(
+        result.message.as_deref(),
+        Some(
+            "Select an ACP Registry agent or configure a local ACP executable before starting a thread."
+        )
+    );
+}
+
+struct NoNetwork(std::sync::atomic::AtomicUsize);
+
+#[async_trait::async_trait]
+impl QuotaHttp for NoNetwork {
+    async fn send(&self, _request: QuotaRequest) -> Option<QuotaResponse> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        None
+    }
+}
+
+/// v1 minimaxCodeUsageEnrichment.ts:37-58: the quota is read only for `mcode acp` with the setting on
+/// and an explicit profile; a profile that is not there reads as signed out.
+#[tokio::test]
+async fn minimax_quota_is_read_only_under_v1_conditions() {
+    let dir = tempfile::tempdir().unwrap();
+    let http = Arc::new(NoNetwork(Default::default()));
+    let reader = MiniMaxCodeQuotaReader::new(http.clone());
+    let settings = |read: bool| RegistrySettings {
+        source: Source::Local,
+        command_path: "/usr/local/bin/mcode".into(),
+        command_args: vec!["acp".into()],
+        read_mini_max_code_quota: read,
+        ..Default::default()
+    };
+    let status = |read: bool| {
+        let mut config = cli_config(
+            dir.path(),
+            MOCK,
+            &[
+                ("GOAT_ACP_EMIT_COMMANDS", "1"),
+                ("MINIMAX_DATA_DIR", "/goat2-test-no-such-profile"),
+            ],
+        );
+        config.registry = Some(settings(read));
+        if let Some(launch) = config.launch.as_mut() {
+            launch.args = vec!["acp".into()];
+        }
+        config
+    };
+    let factory = registry_factory(MOCK, &["acp"], &[], true);
+    let on = check_registry_provider_status(&factory, &status(true), Some(&reader)).await;
+    assert_eq!(on.usage, Some(QuotaReading::SignedOut));
+    assert_eq!(
+        on.provider.status,
+        ServerProviderState::Ready,
+        "{:?}",
+        on.provider
+    );
+    let off = check_registry_provider_status(&factory, &status(false), Some(&reader)).await;
+    assert_eq!(off.usage, None);
+    assert_eq!(http.0.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
 /// v1 deepSeekProbeHistory.ts: `dsh acp` gets a temporary history patch that is removed afterwards.
