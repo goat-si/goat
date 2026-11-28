@@ -294,6 +294,9 @@ it.effect("rescans tools using PATH refreshed from the login shell", () => {
     );
   }).pipe(
     Effect.provide(SourceControlDiscovery.layer.pipe(Layer.provide(layerDiscovery(runProcess)))),
+    Effect.provideService(SpawnExecutableResolution, (command) =>
+      command !== "jj" || env.PATH?.includes("/new/bin") ? `/new/bin/${command}` : undefined,
+    ),
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.Environment, env),
   );
