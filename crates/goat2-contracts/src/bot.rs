@@ -39,10 +39,14 @@ pub struct BotProfile {
     pub session_thread_id: ThreadId,
     /// v1 `defaultModelSelection`.
     pub default_model_selection: ModelSelection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    #[serde(deserialize_with = "crate::serde_util::instructions::deserialize")]
-    #[schemars(length(max = 16384))]
+    /// v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::serde_util::instructions"
+    )]
+    #[ts(optional, as = "Option<String>")]
+    #[schemars(with = "Option<String>", length(max = 16384))]
     pub instructions: Option<String>,
 }
 

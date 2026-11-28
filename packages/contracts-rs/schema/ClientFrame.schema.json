@@ -370,6 +370,7 @@
           ]
         },
         "instructions": {
+          "description": "v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes.",
           "maxLength": 16384,
           "type": [
             "string",
@@ -726,6 +727,7 @@
         },
         "limit": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -904,6 +906,7 @@
         },
         "limit": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },

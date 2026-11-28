@@ -1542,6 +1542,24 @@ export const log_event__request_opened = {
   "type": "request.opened"
 } satisfies LogEvent;
 
+export const log_event__request_opened_context = {
+  "context": "Both options pass tests; Postgres needs a server.",
+  "itemId": null,
+  "kind": "decision",
+  "options": [
+    {
+      "consequence": "Continue",
+      "id": "yes",
+      "label": "Proceed"
+    }
+  ],
+  "recommended": "yes",
+  "requestId": "example",
+  "runId": null,
+  "summary": "example",
+  "type": "request.opened"
+} satisfies LogEvent;
+
 export const log_event__request_resolved = {
   "optionId": "yes",
   "outcome": "decided",
@@ -2298,6 +2316,27 @@ export const log_line__request_opened = {
   "v": 1
 } satisfies LogLine;
 
+export const log_line__request_opened_context = {
+  "at": "2026-11-28T10:00:00Z",
+  "context": "Both options pass tests; Postgres needs a server.",
+  "itemId": null,
+  "kind": "decision",
+  "options": [
+    {
+      "consequence": "Continue",
+      "id": "yes",
+      "label": "Proceed"
+    }
+  ],
+  "recommended": "yes",
+  "requestId": "example",
+  "runId": null,
+  "seq": 1,
+  "summary": "example",
+  "type": "request.opened",
+  "v": 1
+} satisfies LogLine;
+
 export const log_line__request_resolved = {
   "at": "2026-11-28T10:00:00Z",
   "optionId": "yes",
@@ -2617,6 +2656,198 @@ export const provider_probe_result__registry_signin = {
 } satisfies ProviderProbeResult;
 
 export const server_provider_entry__codex = {
+  "capabilities": {
+    "approvals": {
+      "approvalCallbacksAreLiveOnly": true,
+      "approvalsCanOriginateFromSubagents": true,
+      "approvalsHaveNativeRequestIds": true,
+      "supportsApplyPatchApproval": true,
+      "supportsCommandApproval": true,
+      "supportsFileChangeApproval": true,
+      "supportsFileReadApproval": false
+    },
+    "checkpointing": {
+      "appCanCheckpointFilesystem": true,
+      "providerCanReadConversationSnapshot": true,
+      "providerCanRollbackConversation": true,
+      "providerRollbackReturnsSnapshot": false,
+      "supportsNestedCheckpointScopes": false
+    },
+    "context": {
+      "acceptsDeveloperContext": true,
+      "acceptsSyntheticUserContext": true,
+      "acceptsSystemContext": false,
+      "canConsumeHandoffSummaries": true,
+      "canGenerateSummaries": true,
+      "maxRecommendedHandoffChars": null,
+      "supportsDeltaHandoff": true,
+      "supportsFullThreadHandoff": true
+    },
+    "identity": {
+      "nativeItemIds": "strong",
+      "nativeRequestIds": "strong",
+      "nativeThreadIds": "strong",
+      "nativeTurnIds": "strong"
+    },
+    "memory": {
+      "generateMemorySummary": true,
+      "mcp": true,
+      "resolveMemoryConflict": true,
+      "snapshot": true
+    },
+    "planning": {
+      "emitsPlanUpdated": true,
+      "emitsProposedPlan": true,
+      "emitsTodoList": true,
+      "planDeltasHaveItemIds": true,
+      "supportsStructuredQuestions": true
+    },
+    "runtimePolicy": {
+      "enforcement": "client-boundary"
+    },
+    "sessions": {
+      "executionLocation": "local",
+      "followUp": {
+        "reason": "available",
+        "supported": true
+      },
+      "ownsProcess": true,
+      "pendingRequestsSurviveRestart": false,
+      "sourceRestriction": "published-ref",
+      "supportsModelSwitchInSession": true,
+      "supportsMultipleProviderThreadsPerSession": false,
+      "supportsProviderSwitchingViaHandoff": false,
+      "supportsRuntimeModeSwitchInSession": true
+    },
+    "streaming": {
+      "emitsMessageCompleted": true,
+      "streamsAssistantText": true,
+      "streamsPlanText": true,
+      "streamsReasoning": true,
+      "streamsToolOutput": true
+    },
+    "subagents": {
+      "canCloseSubagents": true,
+      "canForkSubagentThread": false,
+      "canWaitForSubagents": true,
+      "emitsSubagentLifecycle": true,
+      "exposesSubagentThreadIds": true,
+      "supportsSubagents": true
+    },
+    "threads": {
+      "canCreateEmptyThread": true,
+      "canForkFromSubagentThread": false,
+      "canForkFromTurn": false,
+      "canForkThread": true,
+      "canForkWhileSourceRunning": true,
+      "canReadThreadSnapshot": true,
+      "canRollbackThread": true,
+      "exposesNativeThreadId": true,
+      "forkHonorsTargetCwd": true
+    },
+    "tools": {
+      "emitsToolCompleted": true,
+      "emitsToolOutput": true,
+      "emitsToolStarted": true,
+      "exposesToolItemIds": true,
+      "supportsDynamicToolCallbacks": true,
+      "supportsMcpTools": true
+    },
+    "turns": {
+      "activeSteeringAcceptsAttachments": true,
+      "activeSteeringDuringCompaction": true,
+      "activeSteeringInterruptsTools": true,
+      "emitsTurnCompleted": true,
+      "emitsTurnStarted": true,
+      "exposesNativeTurnId": true,
+      "supportsActiveSteering": true,
+      "supportsInterrupt": true,
+      "supportsNativeGoals": true,
+      "supportsNativeResume": true,
+      "supportsQueuedMessages": true,
+      "supportsSteeringByInterruptRestart": true,
+      "terminalStatusQuality": "strong"
+    }
+  },
+  "driver": "codex",
+  "enabled": true,
+  "instanceId": "codex",
+  "probe": {
+    "auth": {
+      "canLogout": true,
+      "email": "user@example.com",
+      "label": "Claude Max",
+      "status": "authenticated",
+      "type": "subscription"
+    },
+    "binaryPath": "/opt/homebrew/bin/claude",
+    "checkedAt": "2026-11-28T13:00:00Z",
+    "cli": "present",
+    "installed": true,
+    "models": [
+      {
+        "capabilities": {
+          "optionDescriptors": [
+            {
+              "currentValue": "high",
+              "id": "effort",
+              "label": "Effort",
+              "options": [
+                {
+                  "id": "high",
+                  "isDefault": true,
+                  "label": "High"
+                },
+                {
+                  "id": "max",
+                  "label": "Max"
+                }
+              ],
+              "role": "reasoning",
+              "type": "select"
+            },
+            {
+              "currentValue": false,
+              "id": "fastMode",
+              "label": "Fast mode",
+              "type": "boolean"
+            }
+          ]
+        },
+        "isCustom": false,
+        "isDefault": true,
+        "name": "Claude Opus 5.5",
+        "shortName": "Opus 5.5",
+        "slug": "claude-opus-5-5"
+      },
+      {
+        "badge": "new",
+        "capabilities": null,
+        "isCustom": false,
+        "name": "Claude Sonnet 5",
+        "slug": "claude-sonnet-5"
+      }
+    ],
+    "status": "ready",
+    "version": "2.1.4"
+  }
+} satisfies ServerProviderEntry;
+
+export const server_provider_entry__codex_signing_in = {
+  "authFlow": {
+    "authorizationUrl": "HTTPS://auth.example.com/device?code=ABCD",
+    "expiresAt": "2026-11-28T13:10:00Z",
+    "flowId": "flow-1",
+    "instanceId": "codex",
+    "interaction": {
+      "id": "i2",
+      "type": "deviceCode",
+      "url": "https://auth.example.com/device",
+      "userCode": "ABCD-EFGH"
+    },
+    "message": "Open the link to sign in",
+    "phase": "waiting"
+  },
   "capabilities": {
     "approvals": {
       "approvalCallbacksAreLiveOnly": true,

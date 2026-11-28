@@ -324,6 +324,7 @@
           "$ref": "#/$defs/BotFace"
         },
         "instructions": {
+          "description": "v1 `BotInstructions`: at most 16384 characters and UTF-8 bytes (bytes checked by serde only).",
           "maxLength": 16384,
           "type": [
             "string",
@@ -392,11 +393,13 @@
         },
         "index": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "replacedBy": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -542,11 +545,13 @@
       "properties": {
         "running": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "total": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         }
@@ -892,6 +897,7 @@
         "maxRecommendedHandoffChars": {
           "description": "v1 `NullOr(PositiveInt)`: zero is rejected.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 1,
           "type": [
             "integer",
@@ -1412,6 +1418,7 @@
         "position": {
           "description": "`reorder_queued`: 0-based index in the queue after the change.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -1778,6 +1785,7 @@
         "v": {
           "description": "Line format version, [LOG_FORMAT_VERSION] when written by this build.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         }
@@ -1884,6 +1892,7 @@
         },
         "ordinal": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -2069,6 +2078,10 @@
               "type": "string"
             },
             "url": {
+              "description": "v1 `SignInUrl`: http(s) only.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
               "type": "string"
             }
           },
@@ -2090,6 +2103,10 @@
               "type": "string"
             },
             "url": {
+              "description": "v1 `SignInUrl`: http(s) only.",
+              "maxLength": 16384,
+              "minLength": 1,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
               "type": "string"
             },
             "userCode": {
@@ -2113,7 +2130,9 @@
               "type": "string"
             },
             "outputOffset": {
-              "format": "uint32",
+              "description": "v1 non-negative integer, within the safe wire integer range.",
+              "format": "uint64",
+              "maximum": 9007199254740991,
               "minimum": 0,
               "type": [
                 "integer",
@@ -2221,6 +2240,11 @@
       "description": "v1 `ProviderAuthState` (`provider_auth_*` results). `authorizationUrl` carries an engine `AuthRequired` URL.",
       "properties": {
         "authorizationUrl": {
+          "default": null,
+          "description": "v1 `SignInUrl`: http(s) only; carries an engine `AuthRequired` URL.",
+          "maxLength": 16384,
+          "minLength": 1,
+          "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://",
           "type": [
             "string",
             "null"
@@ -2771,11 +2795,13 @@
       "properties": {
         "attempt": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "maxAttempts": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -2881,6 +2907,14 @@
     "RequestOpened": {
       "description": "`request.opened`: a person is needed.",
       "properties": {
+        "context": {
+          "description": "What the person needs to know to decide (v1 `DecisionItem.context`), at most\n[crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.",
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "anyOf": [
             {
@@ -3670,6 +3704,7 @@
         },
         "openAsks": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
@@ -4235,6 +4270,7 @@
           "properties": {
             "additions": {
               "format": "uint32",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": [
                 "integer",
@@ -4252,6 +4288,7 @@
             },
             "deletions": {
               "format": "uint32",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": [
                 "integer",
@@ -4581,6 +4618,7 @@
         },
         "ordinal": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },

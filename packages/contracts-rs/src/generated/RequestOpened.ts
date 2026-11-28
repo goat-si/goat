@@ -18,6 +18,11 @@ itemId: ItemId | null, kind: RequestKind,
  */
 summary: string, 
 /**
+ * What the person needs to know to decide (v1 `DecisionItem.context`), at most
+ * [crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.
+ */
+context?: string, 
+/**
  * Kind `decision`: the choices offered (v1 `goat_decision_request`).
  */
 options?: Array<DecisionOption>, 
