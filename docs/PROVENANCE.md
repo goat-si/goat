@@ -128,3 +128,17 @@ code-derived spec of these v1 files: `components/Sidebar.tsx` (Activity view: Pr
 `scripts/paper-parts.py` turns those boards into `apps/web/src/paper/parts.tsx`; `apps/web/src/threads/ThreadMode.tsx`
 maps GOAT 2 data (cards, log lines, queue, commands) onto them. Dropped from v1 here: markdown rendering,
 attachments, virtualized lists, thread menus, pinning, PR/machine metadata (machines Planned).
+
+## goat2-engine-acp (lane P2-B), from goat-si/goat origin/dev `916b5ccc1b2`
+
+| GOAT 2 path | Source path (goat origin/dev 916b5ccc1b2) | How |
+|---|---|---|
+| crates/goat2-engine-acp/src/capabilities.rs | packages/provider-acp/src/server/capabilities.ts:15-147,208-223 | ported-to-Rust (capability literal verbatim values, negotiatedCapabilities, ACP_PROMPT_ACTIVITY_UPDATES) |
+| crates/goat2-engine-acp/src/normalize.rs | packages/effect-acp/src/_internal/normalizeV1SessionUpdate.ts | ported-to-Rust |
+| crates/goat2-engine-acp/src/policy.rs | packages/provider-acp/src/server/clientPolicy.ts, permissionOptions.ts | ported-to-Rust (approval/sandbox policy branches reduced to v1's undefined cases) |
+| crates/goat2-engine-acp/src/elicitation.rs | packages/provider-acp/src/server/elicitationForm.ts | ported-to-Rust |
+| crates/goat2-engine-acp/src/items.rs | packages/provider-acp/src/server/runtimeModel.ts:800-1010 (tool state, kind to item type), toolProjection.ts, noticeProjection.ts, unfinishedStop.ts, assistantSegments.ts | adapted (finished items only, GOAT 2 TurnItem) |
+| crates/goat2-engine-acp/src/flavor.rs | packages/provider-acp/src/server/adapterFlavor.ts, AcpSessionRuntime.ts:131-200 | adapted (hooks with a GOAT 2 consumer) |
+| crates/goat2-engine-acp/src/engine.rs | packages/provider-acp/src/server/AcpSessionRuntime.ts (initialize :995-1009, auth :1505-1555, new/load/resume :1557-1613, cancel :117-120), adapter.ts (prompt settle :6850-6925, steer :7788), promptSteering.ts, acpAppContext.ts, packages/effect-acp/src/client.ts + rpc.ts (elicitation methods incl. legacy nested response) | adapted, on Zed agent-client-protocol 5.6.1 |
+| crates/goat2-engine-acp/src/process.rs | lane B crates/goat2-engine-codex/src/process.rs (GOAT 2); v1 packages/provider-acp/src/server/posixProcessTree.ts | adapted (stderr line hook added) |
+| crates/goat2-engine-acp/src/bin/acp_mock_agent.rs | apps/server/scripts/acp-mock-agent.ts, acpMockPrompt.ts, acpMockNotices.ts, acpMockGrokScenarios.ts, acp-mock-prompt-crash.ts, acp-mock-load-replay.ts | ported-to-Rust (scenario subset, v1 env names; GOAT 2 additions marked) |
