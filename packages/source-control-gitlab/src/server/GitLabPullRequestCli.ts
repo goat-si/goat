@@ -1600,6 +1600,14 @@ export const make = Effect.gen(function* () {
       }
       if (input.comments.length > 0) {
         const refs = yield* getDiffRefs(input);
+        if (input.expectedHeadSha !== undefined && refs.headSha !== input.expectedHeadSha) {
+          return yield* new GitLabMutationRefusedError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "submitReview",
+            reasons: [`the head is now ${refs.headSha}, not ${input.expectedHeadSha}`],
+          });
+        }
         // Line codes only steer GitLab's highlight of a range, so an unreadable diff falls back
         // to codes without the other side's counter rather than blocking the review.
         const patch = yield* gitLabPatchCovering(

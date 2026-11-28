@@ -52,6 +52,34 @@ function argsOfCall(index: number): ReadonlyArray<string> {
 }
 afterEach(() => mockedExecute.mockReset());
 layer("GitLabPullRequestCli review", (it) => {
+  it.effect("refuses line comments when the reviewed head has moved", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            mergeRequestJson({
+              diff_refs: { base_sha: "base", head_sha: "newer-head", start_sha: "start" },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const refused = yield* Effect.flip(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "approve",
+          body: "Looks right.",
+          expectedHeadSha: "reviewed-head",
+          comments: [{ path: "src/b.ts", position: { kind: "added", newLine: 12 }, body: "nit" }],
+        }),
+      );
+      expect(refused.message).toContain("the head is now newer-head, not reviewed-head");
+      expect(mockedExecute).toHaveBeenCalledTimes(1);
+    }),
+  );
+
   it.effect("sends a review as its comments, then its summary, then the verdict", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
