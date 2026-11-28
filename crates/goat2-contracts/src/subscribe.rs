@@ -321,7 +321,7 @@ pub enum CommandErrorCode {
     LimitReached,
     PayloadTooLarge,
     /// The same `clientRequestId` was used with different arguments.
-    Conflict,
+    IdempotencyConflict,
     Internal,
 }
 

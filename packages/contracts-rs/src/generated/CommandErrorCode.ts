@@ -3,4 +3,4 @@
 /**
  * Why a command failed.
  */
-export type CommandErrorCode = "invalid_request" | "thread_missing" | "request_missing" | "bot_missing" | "not_queued" | "not_allowed" | "steer_refused" | "limit_reached" | "payload_too_large" | "conflict" | "internal";
+export type CommandErrorCode = "invalid_request" | "thread_missing" | "request_missing" | "bot_missing" | "not_queued" | "not_allowed" | "steer_refused" | "limit_reached" | "payload_too_large" | "idempotency_conflict" | "internal";

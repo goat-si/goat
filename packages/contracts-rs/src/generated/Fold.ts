@@ -2,6 +2,7 @@
 import type { FoldCounters } from "./FoldCounters.ts";
 import type { HeldInputs } from "./HeldInputs.ts";
 import type { InputId } from "./InputId.ts";
+import type { QueuedInput } from "./QueuedInput.ts";
 import type { RequestOpened } from "./RequestOpened.ts";
 import type { RunId } from "./RunId.ts";
 import type { RunOutcome } from "./RunOutcome.ts";
@@ -33,9 +34,10 @@ activeRunInputIds: Array<InputId>,
  */
 activeRunReachedEngine: boolean, 
 /**
- * Inputs accepted but not yet delivered, in order.
+ * Inputs accepted but not yet delivered, in order, with `input.changed` edits applied, so a
+ * client gets the whole queue from a checkpoint.
  */
-queuedInputIds: Array<InputId>, 
+queuedInputs: Array<QueuedInput>, 
 /**
  * Inputs whose delivery is ambiguous, held by a resend request (one hold per run).
  */
