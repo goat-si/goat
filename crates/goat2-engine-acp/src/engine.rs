@@ -1048,8 +1048,9 @@ impl Shared {
                 // accepts or declines. The link goes only through AuthRequired, which the host
                 // keeps in memory (SigninLink: links carry one-time codes and never enter the
                 // thread log); its key is this request, answered by answer_request(key,
-                // Accept | Decline) (engine-api step 3a). Session scope: the host keeps the sign-in
-                // past the end of the turn (host test a_sign_in_outside_a_turn_lasts_until_the_engine_stops).
+                // Accept | Decline) (engine-api step 3a). It names the turn, so the host ties it to
+                // the run and declines it when the run ends (lane C): the agent then hears decline
+                // and no session-level sign-in is left waiting.
                 let Some(url) = text_field(&params, "url") else {
                     drop(state);
                     for event in out {
@@ -1073,7 +1074,7 @@ impl Shared {
                 emit(
                     self,
                     EngineEvent::AuthRequired {
-                        turn_id: None,
+                        turn_id: Some(turn_id),
                         url: Some(url),
                         message: if message.is_empty() {
                             format!("Sign in to {} to continue.", self.flavor.driver())

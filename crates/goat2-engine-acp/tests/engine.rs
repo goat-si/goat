@@ -912,9 +912,9 @@ async fn missing_bridge_fails_closed() {
 }
 
 /// A sign-in page during a turn reaches the host only through AuthRequired (kept in memory, never
-/// in the thread log), at session scope so the link outlives the turn, and the agent's request
-/// stays open until the person answers through the sign-in's key (engine-api step 3a; v1 registry
-/// onUrlElicitation, adapter.ts:5329-5362).
+/// in the thread log), tied to its turn (the host declines it when the run ends), and the agent's
+/// request stays open until the person answers through the sign-in's key (engine-api step 3a; v1
+/// registry onUrlElicitation, adapter.ts:5329-5362).
 #[tokio::test]
 async fn url_elicitation_waits_for_the_persons_answer_without_logging_the_link() {
     for (outcome, expected) in [
@@ -935,7 +935,7 @@ async fn url_elicitation_waits_for_the_persons_answer_without_logging_the_link()
                 turn_id, url, key, ..
             } = &event
             {
-                assert_eq!(*turn_id, None, "session scope");
+                assert!(turn_id.is_some(), "tied to the turn that raised it");
                 assert_eq!(url.as_deref(), Some("https://example.invalid/sign-in"));
                 let key = key.clone().expect("the agent's request is answerable");
                 // Nothing reached the agent yet: it is waiting for the person.
