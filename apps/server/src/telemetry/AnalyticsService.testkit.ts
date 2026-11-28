@@ -73,6 +73,29 @@ type RemoveId = (
   remove: Effect.Effect<void, PlatformError.PlatformError>,
 ) => Effect.Effect<void, PlatformError.PlatformError>;
 
+/** AnalyticsService with `env` as the server environment and the person's stored `consent`. */
+export const layerWithConsent = (
+  client: HttpClient.HttpClient,
+  consent: TelemetryConsent,
+  env: Readonly<Record<string, unknown>> = {},
+  hostEnv: NodeJS.ProcessEnv = {},
+) =>
+  AnalyticsService.layer.pipe(
+    Layer.provideMerge(
+      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-consent-" }),
+    ),
+    Layer.provideMerge(ServerSettings.layerTest({ telemetryConsent: consent })),
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(HostProcess.Platform, "linux"),
+        Layer.succeed(HostProcess.Architecture, "x64"),
+        Layer.succeed(HostProcess.Environment, hostEnv),
+        Layer.succeed(HttpClient.HttpClient, client),
+      ),
+    ),
+  );
+
 /**
  * AnalyticsService for a granted install whose settings writes reach subscribers. Deleting the
  * install id runs `removeId`, which decides whether and when the real removal happens.
@@ -115,6 +138,7 @@ export const layerWithdrawable = (
       Layer.mergeAll(
         Layer.succeed(HostProcess.Platform, "linux"),
         Layer.succeed(HostProcess.Architecture, "x64"),
+        Layer.succeed(HostProcess.Environment, {}),
         Layer.succeed(HttpClient.HttpClient, client),
       ),
     ),

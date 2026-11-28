@@ -27,14 +27,13 @@ import {
   ANALYTICS_EVENT_PROPERTIES,
 } from "@goat/shared/analyticsAllowlist";
 
-import type { TelemetryConsent } from "@goat/contracts";
 import * as FileSystem from "effect/FileSystem";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { getTelemetryIdentity } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
-import { layerWithdrawable } from "./AnalyticsService.testkit.ts";
+import { layerWithConsent, layerWithdrawable } from "./AnalyticsService.testkit.ts";
 import { layerTestLoopback } from "@goat/shared/testing/loopbackHttpServer";
 
 interface RecordedBatchRequest {
@@ -146,27 +145,6 @@ const recordingClient = () => {
   return { bodies, client };
 };
 
-/** AnalyticsService with `env` as the server environment and the person's stored `consent`. */
-const layerWithConsent = (
-  client: HttpClient.HttpClient,
-  consent: TelemetryConsent,
-  env: Readonly<Record<string, unknown>> = {},
-) =>
-  AnalyticsService.layer.pipe(
-    Layer.provideMerge(
-      ServerConfig.ServerConfig.layerTest(process.cwd(), { prefix: "goat-telemetry-consent-" }),
-    ),
-    Layer.provideMerge(ServerSettings.layerTest({ telemetryConsent: consent })),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(HostProcess.Platform, "linux"),
-        Layer.succeed(HostProcess.Architecture, "x64"),
-        Layer.succeed(HttpClient.HttpClient, client),
-      ),
-    ),
-  );
-
 const decodeEvents = (bodies: ReadonlyArray<string>) =>
   Effect.forEach(bodies, (body) => decodeSentBatch(body)).pipe(
     Effect.map((sent) => sent.flatMap((body) => body.batch)),
@@ -267,9 +245,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
               client,
               "granted",
               override ? { GOAT_TELEMETRY_ENABLED: override } : {},
+              { CI: "true" },
             ),
           ),
-          Effect.provideService(HostProcess.Environment, { CI: "true" }),
         );
         assert.equal(bodies.length, expected);
       }
@@ -307,8 +285,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
           yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
           yield* analytics.flush;
         }).pipe(
-          Effect.provide(layerWithConsent(client, consent)),
-          Effect.provideService(HostProcess.Environment, { T3CODE_TELEMETRY_ENABLED: value }), // goat-rename: legacy
+          Effect.provide(
+            layerWithConsent(client, consent, {}, { T3CODE_TELEMETRY_ENABLED: value }), // goat-rename: legacy
+          ),
         );
         assert.deepEqual(bodies, []);
       }),
@@ -526,8 +505,14 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("AnalyticsService
         yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
         yield* analytics.flush;
       }).pipe(
-        Effect.provide(layerWithConsent(client, "granted", { GOAT_TELEMETRY_ENABLED: "true" })),
-        Effect.provideService(HostProcess.Environment, { T3CODE_TELEMETRY_ENABLED: "false" }), // goat-rename: legacy
+        Effect.provide(
+          layerWithConsent(
+            client,
+            "granted",
+            { GOAT_TELEMETRY_ENABLED: "true" },
+            { T3CODE_TELEMETRY_ENABLED: "false" }, // goat-rename: legacy
+          ),
+        ),
       );
       assert.deepEqual(bodies, []);
     }),
