@@ -553,7 +553,9 @@ export class OpenCodeSession implements EngineSession {
       turn.steers.delete(id); setImmediate(() => this.releaseSteer(turn, id));
       if (promptRejected(error)) { turn.admission = previous; return { status: "declined" as const, reason: "OpenCode declined steering" }; }
       this.uncertain = true;
-      if (this.active === turn && turn.admission.id === id && turn.admission.idle && !turn.interrupted) setImmediate(() => { void this.admission(turn, "idle"); });
+      if (this.active === turn && turn.admission.id === id && turn.admission.idle && !turn.interrupted) setImmediate(() => {
+        if (this.active === turn && turn.admission.id === id && turn.admission.idle && !turn.interrupted) void this.admission(turn, "idle");
+      });
       return { status: "unknown" as const, reason: "OpenCode steering admission could not be confirmed" };
     }
   }

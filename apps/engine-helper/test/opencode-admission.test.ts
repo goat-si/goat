@@ -113,6 +113,29 @@ test("native activity after an early idle supersedes it before an uncertain stee
   } finally { await session.shutdown(); }
 });
 
+test("busy supersedes an uncertain steer's deferred idle callback", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const prompt = fake.holdPrompt();
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "unknown", text: "fail-prompt", attachments: [] }]); await prompt.reached;
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); prompt.release();
+      assert.equal((await steering).status, "unknown");
+      await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+      const terminal = events.find((event) => event.type === "turn_finished");
+      assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+      assert.equal(events.filter((event) => event.type === "steer_updated").length, 0);
+    } finally { prompt.release(); }
+  } finally { await session.shutdown(); }
+});
+
 test("busy supersedes an in-flight idle reconciliation for an accepted steer", async () => {
   fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
