@@ -448,3 +448,13 @@ Pi contract gaps: account usage and limits have no engine event. Live tool start
 | `apps/engine-helper/test/fakes/opencode-sdk.ts`, `apps/engine-helper/test/fakes/opencode-server.ts`, `apps/engine-helper/test/opencode.test.ts`, `crates/goat2-engine-sdk/tests/helper_opencode.rs` | `packages/provider-opencode/src/server/adapter.harness.testkit.ts` | new: self-contained scripted SDK and Rust helper replay for the GOAT 2 transport. |
 
 Not lifted: account usage/limits, account pools, text generation, cloud, checkpoints, OpenCode 2 generation, full child-session lifecycle/background wake handling, command routing, full permission-base history reconciliation, admission uncertainty recovery, detailed error classification, tool timing, and model agent descriptors. The context snapshot does not carry v1's separate accumulated turn usage scope, completeness, cache-creation count, or subagent flag (`turnUsage.ts:43-54`; `adapter.ts:524-541`). Compaction is reported via a completed item for v1's client meter rule (`packages/client-runtime/src/state/contextWindow.ts:74-110`); the current GOAT 2 store still retains an older persisted snapshot until new usage arrives, and lane F is lifting that display rule. Native work requiring a continuation is failed visibly (`packages/provider-opencode/src/server/adapter.ts:2322-2347`; `backgroundTurns.ts:35-56`). Attachment paths come from the host resolver; pasted-text source and extracted-text paths are not represented by this contract.
+
+## P2-S opencode2
+
+| GOAT 2 path | Source at 916b5ccc1b2 | How |
+|---|---|---|
+| crates/goat2-engine-sdk/src/capabilities/opencode2.json | packages/provider-opencode/src/server/v2/capabilities.ts:3-96 | verbatim values, TS literal converted to JSON |
+| apps/engine-helper/src/engines/opencode2/select.ts | packages/provider-opencode/src/server/versionProbe.ts:24-180; packages/provider-core/src/server/snapshotProbe.ts:222-228; packages/shared/src/semver.ts:10-65 | adapted version and server probes to plain async Node; standalone selector not yet connected to an engine |
+| apps/engine-helper/test/opencode2-selector.test.ts | packages/provider-core/src/server/snapshotProbe.test.ts:311-337 | adapted version parser examples; server and failure tests new |
+
+Not lifted yet: OpenCode 2 adapter and its services, SDK integration, streaming and item projection, steering, requests, resume, MCP, auth and model probe, Rust integration, and end-to-end tests. This section records incomplete work, not a working engine.
