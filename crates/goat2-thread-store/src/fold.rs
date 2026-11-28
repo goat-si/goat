@@ -181,11 +181,14 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
         }
         LogEvent::ItemCompleted(e) => {
             fold.counters.items += 1;
+            // A late item (its run already finished, e.g. a background subagent) is kept in the
+            // log under its origin run but changes neither the restart evidence nor the excerpt,
+            // so it cannot replace a newer run's answer.
             if is_active(fold, &e.run_id) {
                 fold.active_run_reached_engine = true;
-            }
-            if let TurnItemBody::AssistantMessage { text, .. } = &e.item.body {
-                card.latest_answer_excerpt = clamp_chars(text, CARD_EXCERPT_MAX_CHARS);
+                if let TurnItemBody::AssistantMessage { text, .. } = &e.item.body {
+                    card.latest_answer_excerpt = clamp_chars(text, CARD_EXCERPT_MAX_CHARS);
+                }
             }
         }
         LogEvent::RequestOpened(e) => {

@@ -5,6 +5,36 @@ use goat2_thread_store::StoreError;
 use goat2_thread_store::contract::*;
 
 #[test]
+fn a_late_item_after_its_run_finished_is_kept_but_does_not_replace_a_newer_answer() {
+    // Background subagents can finish after their run (lane E R3): the host appends the item
+    // with its origin run id after that run's run.finished.
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let t = tid("t");
+    store
+        .create_thread(Some(t.clone()), created("late", "/w"))
+        .unwrap();
+    store.append(&t, full_run("r1", "i1", "first")).unwrap();
+    let out = store.append(&t, full_run("r2", "i2", "second")).unwrap();
+    let excerpt = out.card.latest_answer_excerpt.clone();
+    assert!(excerpt.contains("second"), "{excerpt}");
+    let items_before = replay(dir.path(), "t").1.counters.items;
+    let out = store
+        .append(&t, vec![answer("r1", "late", "late answer from r1")])
+        .unwrap();
+    assert_eq!(out.lines[0].event.type_tag(), "item.completed");
+    assert_eq!(out.card.status, ThreadStatus::Idle);
+    assert_eq!(
+        out.card.latest_answer_excerpt, excerpt,
+        "a late item replaced the newer answer"
+    );
+    let (card, fold) = replay(dir.path(), "t");
+    assert_eq!(fold.counters.items, items_before + 1);
+    assert_eq!(card.latest_answer_excerpt, excerpt);
+    assert!(!fold.active_run_reached_engine);
+}
+
+#[test]
 fn append_assigns_seq_after_the_header_epoch() {
     let dir = tempfile::tempdir().unwrap();
     let (store, _) = open(dir.path());
