@@ -162,16 +162,12 @@ async fn a_device_code_sign_in_shows_the_code_and_reports_a_failed_login() {
 }
 
 #[tokio::test]
-async fn cancel_ends_the_flow_and_cancels_codex_login() {
-    let mut entries = session(login_started(
+async fn cancel_ends_the_flow_and_its_codex_login() {
+    let entries = session(login_started(
         2,
         "chatgpt",
         json!({"type": "chatgpt", "loginId": "login-3", "authUrl": "https://auth.openai.com/x"}),
     ));
-    entries.push(expect(
-        json!({"id": 3, "method": "account/login/cancel", "params": {"loginId": "login-3"}}),
-    ));
-    entries.push(emit(json!({"id": 3, "result": {"status": "canceled"}})));
     let f = CodexEngineFactory::new(options(entries));
     let target = default_target();
     let (tx, mut updates) = mpsc::unbounded_channel();
@@ -222,6 +218,20 @@ async fn an_unknown_method_or_an_unusable_login_answer_fails() {
         done.message.as_deref(),
         Some("Sign-in failed. Start again.")
     );
+    // Nor an https URL that is not a URL (the host would drop it and keep "waiting").
+    for bad in ["https://", "https:// auth.openai.com/x", "https://[::::]/"] {
+        let entries = session(login_started(
+            2,
+            "chatgpt",
+            json!({"type": "chatgpt", "loginId": "login-5", "authUrl": bad}),
+        ));
+        let f = CodexEngineFactory::new(options(entries));
+        let (tx, mut updates) = mpsc::unbounded_channel();
+        f.auth_start(&default_target(), None, tx).await.unwrap();
+        let done = next(&mut updates).await.unwrap();
+        assert_eq!(done.phase, ProviderAuthPhase::Failed, "{bad}");
+        assert_eq!(done.authorization_url, None, "{bad}");
+    }
 }
 
 #[tokio::test]
@@ -300,4 +310,233 @@ async fn an_instance_signs_in_inside_its_own_home() {
         root.join("instance").display().to_string()
     );
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+// ---- review r1: races (cancel, logout, factory drop, expiry) ----
+
+/// A wrapper that gives each Codex process its own transcript (t0.json, t1.json, ...) and
+/// records its pid, so a test can see which process ran and whether it has ended.
+#[cfg(unix)]
+struct Multi {
+    dir: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl Multi {
+    fn new(name: &str, transcripts: Vec<Vec<Entry>>) -> (Self, CodexEngineOptions) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("goat2-auth-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (n, entries) in transcripts.into_iter().enumerate() {
+            let mut t = Transcript::new("auth");
+            t.entries = entries;
+            std::fs::write(
+                dir.join(format!("t{n}.json")),
+                serde_json::to_string(&t).unwrap(),
+            )
+            .unwrap();
+        }
+        let wrapper = dir.join("codex");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\nd='{}'\nn=$(cat \"$d/count\" 2>/dev/null || echo 0)\necho $((n+1)) > \"$d/count\"\necho $$ > \"$d/pid$n\"\nGOAT2_FAKE_CODEX_TRANSCRIPT=\"$d/t$n.json\" GOAT2_FAKE_CODEX_REALTIME=1 exec '{}' \"$@\"\n",
+                dir.display(),
+                env!("CARGO_BIN_EXE_goat2-fake-codex")
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let options = CodexEngineOptions {
+            program: wrapper,
+            kill_grace: Duration::from_millis(500),
+            client_version: "0.0.0".into(),
+            ..CodexEngineOptions::default()
+        };
+        (Self { dir }, options)
+    }
+
+    fn pid(&self, n: usize) -> i32 {
+        std::fs::read_to_string(self.dir.join(format!("pid{n}")))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    fn alive(&self, n: usize) -> bool {
+        // SAFETY: signal 0 only checks the process exists.
+        unsafe { libc::kill(self.pid(n), 0) == 0 }
+    }
+
+    async fn ended(&self, n: usize) -> bool {
+        for _ in 0..60 {
+            if !self.alive(n) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+}
+
+#[cfg(unix)]
+impl Drop for Multi {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// A login that would complete 400 ms after it starts (then be confirmed), if nothing stopped it.
+#[cfg(unix)]
+fn completing_login(login: &str) -> Vec<Entry> {
+    let mut entries = session(login_started(
+        2,
+        "chatgpt",
+        json!({"type": "chatgpt", "loginId": login, "authUrl": "https://auth.openai.com/x"}),
+    ));
+    entries.push(Entry::EmitInbound {
+        label: None,
+        frame: json!({"method": "account/login/completed",
+            "params": {"loginId": login, "success": true, "error": null}}),
+        after_ms: Some(400),
+    });
+    entries.push(expect(
+        json!({"id": 3, "method": "account/read", "params": {}}),
+    ));
+    entries.push(emit(
+        json!({"id": 3, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+    ));
+    entries
+}
+
+/// Review r1 P1: after cancel answers, the flow sends nothing (not even a late Waiting or
+/// Verifying), its stream is closed and its Codex has ended.
+#[cfg(unix)]
+#[tokio::test]
+async fn after_cancel_nothing_more_is_sent_and_codex_has_ended() {
+    let (multi, options) = Multi::new("cancel-race", vec![completing_login("l1")]);
+    let f = CodexEngineFactory::new(options);
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, None, tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Waiting
+    );
+    let cancelled = f.auth_cancel(&target, &flow).await.unwrap();
+    assert_eq!(cancelled.phase, ProviderAuthPhase::Cancelled);
+    assert!(
+        !multi.alive(0),
+        "the flow's Codex ended before cancel answered"
+    );
+    // The login would have completed at 400 ms: nothing arrives.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(updates.try_recv().is_err());
+    assert!(next(&mut updates).await.is_none());
+}
+
+/// Review r1 P1: logout during a flow ends it first (its stream gets exactly one terminal
+/// state, Cancelled, and closes; its Codex has ended), then signs out in a new Codex.
+#[cfg(unix)]
+#[tokio::test]
+async fn logout_during_a_flow_ends_it_with_one_terminal_state_first() {
+    let logout = session(vec![
+        expect(json!({"id": 2, "method": "account/logout", "params": {}})),
+        emit(json!({"id": 2, "result": {}})),
+    ]);
+    let (multi, options) = Multi::new("logout-race", vec![completing_login("l2"), logout]);
+    let f = CodexEngineFactory::new(options);
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    f.auth_start(&target, None, tx).await.unwrap();
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Waiting
+    );
+    let out = f.auth_logout(&target).await.unwrap();
+    assert_eq!(out.phase, ProviderAuthPhase::Idle);
+    assert_eq!(out.message.as_deref(), Some("Signed out."));
+    assert!(
+        !multi.alive(0),
+        "the old login's Codex ended before logout ran"
+    );
+    let last = next(&mut updates).await.unwrap();
+    assert_eq!(last.phase, ProviderAuthPhase::Cancelled);
+    assert!(next(&mut updates).await.is_none());
+    // A new flow starts cleanly after it.
+    let (tx, _u) = mpsc::unbounded_channel();
+    assert!(f.auth_start(&target, Some("nope".into()), tx).await.is_ok());
+}
+
+/// Review r1 P1: dropping the factory ends a waiting flow's Codex.
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_the_factory_ends_a_waiting_flow() {
+    let (multi, options) = Multi::new("drop", vec![completing_login("l3")]);
+    let f = CodexEngineFactory::new(options);
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    f.auth_start(&default_target(), None, tx).await.unwrap();
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Waiting
+    );
+    assert!(multi.alive(0));
+    drop(f);
+    assert!(
+        multi.ended(0).await,
+        "the flow's Codex ended with the factory"
+    );
+    assert!(next(&mut updates).await.is_none());
+}
+
+/// Review r1 P1: one deadline, set at start, bounds the whole flow: a login confirmed after it
+/// is not a success, and the expiry is reported at the deadline.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_deadline_bounds_the_whole_flow_including_verification() {
+    let mut entries = session(login_started(
+        2,
+        "chatgpt",
+        json!({"type": "chatgpt", "loginId": "l4", "authUrl": "https://auth.openai.com/x"}),
+    ));
+    entries.push(emit(json!({"method": "account/login/completed",
+        "params": {"loginId": "l4", "success": true, "error": null}})));
+    entries.push(expect(
+        json!({"id": 3, "method": "account/read", "params": {}}),
+    ));
+    // Confirmed only after the deadline.
+    entries.push(Entry::EmitInbound {
+        label: None,
+        frame: json!({"id": 3, "result": {"account": {"type": "apiKey"}, "requiresOpenaiAuth": true}}),
+        after_ms: Some(2_000),
+    });
+    let (multi, mut options) = Multi::new("deadline", vec![entries]);
+    options.auth_timeout = Duration::from_millis(1_000);
+    let f = CodexEngineFactory::new(options);
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let started_at = std::time::Instant::now();
+    f.auth_start(&default_target(), None, tx).await.unwrap();
+    let mut last = None;
+    while let Some(state) = next(&mut updates).await {
+        last = Some(state);
+    }
+    let last = last.unwrap();
+    assert_eq!(last.phase, ProviderAuthPhase::Failed);
+    assert_eq!(
+        last.message.as_deref(),
+        Some("Sign-in expired. Start again.")
+    );
+    assert!(
+        started_at.elapsed() < Duration::from_millis(1_800),
+        "{:?}",
+        started_at.elapsed()
+    );
+    assert!(multi.ended(0).await);
 }

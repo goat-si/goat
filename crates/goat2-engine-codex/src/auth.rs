@@ -2,7 +2,8 @@
 //! holds OpenAI tokens). Each flow runs a short-lived `codex app-server` in the instance's home
 //! (its auth overlay, src/home_layout.rs), so a second account signs in to itself, and Codex
 //! writes the instance's private `auth.json`: `account/login/start` (ChatGPT browser or device
-//! code), `account/login/completed`, `account/login/cancel`, `account/logout`.
+//! code), `account/login/completed`, `account/logout`; a cancelled or expired flow ends its
+//! Codex process, and Codex's login server with it.
 //!
 //! The flow states, phases and messages are v1's provider-auth flow
 //! (packages/provider-core/src/server/providerAuthFlow.ts at goat 916b5ccc): starting ->
@@ -14,6 +15,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use tokio::task::JoinHandle;
 
 use goat2_contracts::{
     CredentialOwner, ProviderAuthInteraction, ProviderAuthMethod, ProviderAuthMethodType,
@@ -39,8 +42,6 @@ use crate::transport::{Connection, Inbound};
 pub const METHOD_CHATGPT: &str = "chatgpt";
 /// ChatGPT sign-in with a one-time code entered on another device or browser.
 pub const METHOD_DEVICE_CODE: &str = "chatgpt-device-code";
-/// v1 providerAuthFlow `timeoutMs` default.
-const FLOW_TIMEOUT: Duration = Duration::from_secs(300);
 /// A Codex answer the flow waits for (initialize, login start, account read, logout).
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -52,22 +53,125 @@ const FAILED: &str = "Sign-in failed. Start again.";
 const EXPIRED: &str = "Sign-in expired. Start again.";
 const CANCELLED: &str = "Sign-in cancelled.";
 const NOT_COMPLETED: &str = "ChatGPT sign-in could not be completed. Start again.";
+/// Beyond the process's own kill grace, how long a canceller waits for the flow to end before
+/// it is aborted (which kills its Codex).
+const STOP_MARGIN: Duration = Duration::from_secs(2);
+/// Logout answers within this, so the host (30 s) always records an outcome.
+const LOGOUT_TIMEOUT: Duration = Duration::from_secs(20);
 const UNKNOWN_METHOD: &str = "The provider did not advertise this sign-in method.";
 const IN_PROGRESS: &str = "Provider setup is already in progress.";
 const NOT_ACTIVE: &str = "This sign-in is no longer active in this client.";
 const SIGNED_OUT: &str = "Signed out.";
 const SIGN_OUT_FAILED: &str = "Could not sign out. Try again.";
 
-/// The sign-in flows running, by provider instance (one at a time each, as v1).
+/// The sign-in flows, one slot per provider instance (v1 keeps one flow per instance).
+///
+/// A slot owns its flow's update sender, so publishing is atomic with ending: once cancel,
+/// logout or the flow itself has ended the flow, nothing more is sent, exactly one terminal state
+/// went out (returned by the canceller, or sent by the flow), and the sender is closed. Starting,
+/// cancelling and signing out an instance are serialized, and a canceller waits for the flow's
+/// Codex to end, so an old login never overlaps a new one or a logout in the same home.
 #[derive(Default)]
 pub struct AuthFlows {
-    active: Mutex<HashMap<String, Active>>,
+    slots: Mutex<HashMap<String, Arc<Slot>>>,
 }
 
-struct Active {
-    flow_id: String,
-    /// Ends the flow quietly: the canceller already answered with the terminal state.
+#[derive(Default)]
+struct Slot {
+    /// Serializes start, cancel and logout for the instance.
+    op: tokio::sync::Mutex<()>,
+    flow: Mutex<Option<Flow>>,
+}
+
+struct Flow {
+    id: String,
+    updates: mpsc::UnboundedSender<ProviderAuthState>,
     stop: Option<oneshot::Sender<()>>,
+    task: Option<JoinHandle<()>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Slot {
+    /// A state for the flow while it is still the active one.
+    fn publish(&self, id: &str, state: ProviderAuthState) {
+        if let Some(flow) = lock(&self.flow).as_ref()
+            && flow.id == id
+        {
+            let _ = flow.updates.send(state);
+        }
+    }
+
+    /// The flow's own end: its terminal state, then its sender closes.
+    fn finish(&self, id: &str, end: ProviderAuthState) {
+        let mut flow = lock(&self.flow);
+        if flow.as_ref().is_some_and(|f| f.id == id)
+            && let Some(f) = flow.take()
+        {
+            let _ = f.updates.send(end);
+        }
+    }
+
+    /// Ends the active flow for a canceller (only the one named, when `expected` is given):
+    /// it is removed so it publishes nothing more, `last` is its terminal state on its stream (if
+    /// any), its sender closes, and its Codex has ended when this returns. `Err` when the named
+    /// flow is not the active one; `Ok(false)` when there was none.
+    async fn end(
+        &self,
+        expected: Option<&str>,
+        last: Option<ProviderAuthState>,
+        grace: Duration,
+    ) -> Result<bool, ()> {
+        let flow = {
+            let mut slot = lock(&self.flow);
+            match (slot.as_ref(), expected) {
+                (Some(f), Some(id)) if f.id != id => return Err(()),
+                (None, Some(_)) => return Err(()),
+                (None, None) => return Ok(false),
+                _ => {}
+            }
+            slot.take()
+        };
+        let Some(Flow {
+            updates,
+            stop,
+            task,
+            ..
+        }) = flow
+        else {
+            return Ok(false);
+        };
+        if let Some(last) = last {
+            let _ = updates.send(last);
+        }
+        drop(updates);
+        if let Some(stop) = stop {
+            let _ = stop.send(());
+        }
+        if let Some(mut task) = task
+            && tokio::time::timeout(grace, &mut task).await.is_err()
+        {
+            // Dropping the flow kills its Codex process group.
+            task.abort();
+            let _ = task.await;
+        }
+        Ok(true)
+    }
+}
+
+impl Drop for AuthFlows {
+    /// The factory is gone: every flow's Codex ends with it.
+    fn drop(&mut self) {
+        for slot in lock(&self.slots).values() {
+            if let Some(mut flow) = lock(&slot.flow).take()
+                && let Some(task) = flow.task.take()
+            {
+                task.abort();
+            }
+        }
+    }
 }
 
 /// v1 Codex sign-in methods (CodexChatGptAuth.ts:820-832 names "Sign in with ChatGPT"), with
@@ -205,25 +309,28 @@ impl Codex {
     }
 }
 
+/// A sign-in URL GOAT shows: the contract's SignInUrl rule and a WHATWG http(s) URL.
+fn sign_in_url(url: String) -> Option<String> {
+    goat2_contracts::serde_util::sign_in_url::check(&url).ok()?;
+    let parsed = url::Url::parse(&url).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then_some(url)
+}
+
 /// The browser or device-code interaction from Codex's login answer; None when it does not
-/// match the pinned LoginAccountResponse or its URL is not http(s).
+/// match the pinned LoginAccountResponse or its URL is not a usable sign-in URL.
 fn interaction(
     flow_id: &str,
     method: &str,
     answer: &Value,
 ) -> Option<(String, ProviderAuthInteraction)> {
     let text = |key: &str| answer.get(key)?.as_str().map(str::to_string);
-    let web = |url: String| {
-        let lower = url.to_ascii_lowercase();
-        (lower.starts_with("https://") || lower.starts_with("http://")).then_some(url)
-    };
     let login_id = text("loginId").filter(|id| !id.is_empty())?;
     match (method, answer.get("type")?.as_str()?) {
         (METHOD_CHATGPT, "chatgpt") => Some((
             login_id,
             ProviderAuthInteraction::Browser {
                 id: flow_id.into(),
-                url: web(text("authUrl")?)?,
+                url: sign_in_url(text("authUrl")?)?,
                 // Codex's own callback server finishes the login; there is nothing to paste.
                 requires_consent: false,
                 accepts_callback: None,
@@ -233,7 +340,7 @@ fn interaction(
             login_id,
             ProviderAuthInteraction::DeviceCode {
                 id: flow_id.into(),
-                url: web(text("verificationUrl")?)?,
+                url: sign_in_url(text("verificationUrl")?)?,
                 user_code: text("userCode").filter(|c| !c.is_empty())?,
             },
         )),
@@ -288,6 +395,14 @@ fn now_ms() -> i64 {
 }
 
 impl AuthFlows {
+    fn slot(&self, instance: &ProviderInstanceId) -> Arc<Slot> {
+        Arc::clone(
+            lock(&self.slots)
+                .entry(instance.as_str().to_string())
+                .or_default(),
+        )
+    }
+
     /// The methods, naming the instance's ChatGPT account when Codex can read it.
     pub async fn methods(
         &self,
@@ -307,9 +422,10 @@ impl AuthFlows {
     }
 
     /// v1 `providerAuthFlow.start`: the starting state now, then waiting, verifying and the end
-    /// on `updates`; the sender is dropped after the end.
-    pub fn start(
-        self: &Arc<Self>,
+    /// on `updates`; the sender is dropped after the end. One deadline, set here, bounds the whole
+    /// flow (v1 times out the scoped flow).
+    pub async fn start(
+        &self,
         options: &CodexEngineOptions,
         target: &ProviderTarget,
         method_id: Option<String>,
@@ -327,45 +443,76 @@ impl AuthFlows {
                 None,
             ));
         }
+        let slot = self.slot(&instance);
+        let _op = slot.op.lock().await;
         let id = flow_id();
-        let expires_ms = now_ms() + FLOW_TIMEOUT.as_millis() as i64;
-        let expires_at = format_rfc3339_ms(expires_ms);
-        let (stop, stopped) = oneshot::channel();
+        // v1 providerAuthFlow timeoutMs (300 s by default).
+        let deadline = Instant::now() + options.auth_timeout;
+        let expires_at = format_rfc3339_ms(now_ms() + options.auth_timeout.as_millis() as i64);
+        let (stop, mut stopped) = oneshot::channel();
         {
-            let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
-            if active.contains_key(instance.as_str()) {
+            let mut flow = lock(&slot.flow);
+            if flow.is_some() {
                 return Err(EngineError::Unavailable(IN_PROGRESS.into()));
             }
-            active.insert(
-                instance.as_str().to_string(),
-                Active {
-                    flow_id: id.clone(),
-                    stop: Some(stop),
-                },
-            );
+            *flow = Some(Flow {
+                id: id.clone(),
+                updates,
+                stop: Some(stop),
+                task: None,
+            });
         }
-        let flows = Arc::clone(self);
-        let options = options.clone();
-        let target = target.clone();
-        let flow = id.clone();
-        let expires = expires_at.clone();
-        tokio::spawn(async move {
-            let end = run(
-                &options, &target, &flow, &method, &expires, &updates, stopped,
-            )
-            .await;
-            let mut active = flows.active.lock().unwrap_or_else(|e| e.into_inner());
-            let ours = active
-                .get(target.instance_id.as_str())
-                .is_some_and(|a| a.flow_id == flow);
-            if ours {
-                active.remove(target.instance_id.as_str());
-                // Only a flow still active publishes its end; a cancelled one was answered.
+        let task = {
+            let slot = Arc::clone(&slot);
+            let options = options.clone();
+            let target = target.clone();
+            let id = id.clone();
+            let expires_at = expires_at.clone();
+            tokio::spawn(async move {
+                let instance = target.instance_id.clone();
+                let expired = || {
+                    state(
+                        &instance,
+                        ProviderAuthPhase::Failed,
+                        Some(&id),
+                        None,
+                        EXPIRED,
+                        None,
+                    )
+                };
+                // Stopped: the canceller already answered; it waits for this task, so the flow's
+                // Codex is gone when the canceller returns.
+                let mut codex = tokio::select! {
+                    biased;
+                    _ = &mut stopped => return,
+                    _ = tokio::time::sleep_until(deadline) => return slot.finish(&id, expired()),
+                    opened = Codex::open(&options, &target) => match opened {
+                        Ok(codex) => codex,
+                        Err(message) => {
+                            let failed = state(&instance, ProviderAuthPhase::Failed, Some(&id), None, &message, None);
+                            return slot.finish(&id, failed);
+                        }
+                    },
+                };
+                let end = tokio::select! {
+                    biased;
+                    _ = &mut stopped => None,
+                    _ = tokio::time::sleep_until(deadline) => Some(expired()),
+                    end = run(&mut codex, &target, &id, &method, &expires_at, &slot) => Some(end),
+                };
+                // The process group has ended before the flow is released, so no old login can
+                // still write credentials once a new flow or a logout may run.
+                codex.close().await;
                 if let Some(end) = end {
-                    let _ = updates.send(end);
+                    slot.finish(&id, end);
                 }
-            }
-        });
+            })
+        };
+        if let Some(flow) = lock(&slot.flow).as_mut()
+            && flow.id == id
+        {
+            flow.task = Some(task);
+        }
         Ok(state(
             &instance,
             ProviderAuthPhase::Starting,
@@ -376,23 +523,20 @@ impl AuthFlows {
         ))
     }
 
-    /// v1 `providerAuthFlow.cancel`: the flow ends now and Codex's login is cancelled.
-    pub fn cancel(
+    /// v1 `providerAuthFlow.cancel`: the flow ends (its Codex with it, which ends Codex's login) and
+    /// the cancelled state is the answer; its stream closes without another state.
+    pub async fn cancel(
         &self,
+        options: &CodexEngineOptions,
         target: &ProviderTarget,
         flow_id: &str,
     ) -> Result<ProviderAuthState, EngineError> {
         let instance = target.instance_id.clone();
-        let mut active = self.active.lock().unwrap_or_else(|e| e.into_inner());
-        match active.get(instance.as_str()) {
-            Some(a) if a.flow_id == flow_id => {}
-            _ => return Err(EngineError::Unavailable(NOT_ACTIVE.into())),
-        }
-        if let Some(mut a) = active.remove(instance.as_str())
-            && let Some(stop) = a.stop.take()
-        {
-            let _ = stop.send(());
-        }
+        let slot = self.slot(&instance);
+        let _op = slot.op.lock().await;
+        slot.end(Some(flow_id), None, options.kill_grace + STOP_MARGIN)
+            .await
+            .map_err(|_| EngineError::Unavailable(NOT_ACTIVE.into()))?;
         Ok(state(
             &instance,
             ProviderAuthPhase::Cancelled,
@@ -403,33 +547,44 @@ impl AuthFlows {
         ))
     }
 
-    /// v1 `providerAuthFlow.logout`: a running flow ends, then Codex signs the instance out.
+    /// v1 `providerAuthFlow.logout`: a running flow ends first (its stream gets the cancelled state
+    /// and closes, its Codex has ended), then Codex signs the instance out, within a bound so the
+    /// host always gets an answer.
     pub async fn logout(
         &self,
         options: &CodexEngineOptions,
         target: &ProviderTarget,
     ) -> Result<ProviderAuthState, EngineError> {
         let instance = target.instance_id.clone();
-        if let Some(mut a) = self
-            .active
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(instance.as_str())
-            && let Some(stop) = a.stop.take()
-        {
-            let _ = stop.send(());
+        let slot = self.slot(&instance);
+        let _op = slot.op.lock().await;
+        let active_id = lock(&slot.flow).as_ref().map(|f| f.id.clone());
+        if let Some(id) = active_id {
+            let last = state(
+                &instance,
+                ProviderAuthPhase::Cancelled,
+                Some(&id),
+                None,
+                CANCELLED,
+                None,
+            );
+            let _ = slot
+                .end(Some(&id), Some(last), options.kill_grace + STOP_MARGIN)
+                .await;
         }
-        let signed_out = match Codex::open(options, target).await {
-            Ok(codex) => {
-                let done = codex
-                    .call(methods::ACCOUNT_LOGOUT, json!({}))
-                    .await
-                    .is_some();
-                codex.close().await;
-                done
-            }
-            Err(_) => false,
-        };
+        let signed_out = tokio::time::timeout(LOGOUT_TIMEOUT, async {
+            let codex = Codex::open(options, target).await.ok()?;
+            let done = codex
+                .call(methods::ACCOUNT_LOGOUT, json!({}))
+                .await
+                .is_some();
+            codex.close().await;
+            Some(done)
+        })
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false);
         let (phase, message) = if signed_out {
             (ProviderAuthPhase::Idle, SIGNED_OUT)
         } else {
@@ -443,93 +598,69 @@ fn redactor(options: &CodexEngineOptions, target: &ProviderTarget) -> Redactor {
     Redactor::for_layout(instance_layout(options, Some(target)).as_ref())
 }
 
-/// One flow: Codex's login, the person's sign-in, Codex's confirmation. Returns the end state, or
-/// None when it was stopped (cancel or logout already answered).
+/// One flow in an open Codex: its login, the person's sign-in, Codex's confirmation; returns
+/// the end state. The caller ends the process.
 async fn run(
-    options: &CodexEngineOptions,
+    codex: &mut Codex,
     target: &ProviderTarget,
     flow_id: &str,
     method: &str,
     expires_at: &str,
-    updates: &mpsc::UnboundedSender<ProviderAuthState>,
-    mut stopped: oneshot::Receiver<()>,
-) -> Option<ProviderAuthState> {
+    slot: &Slot,
+) -> ProviderAuthState {
     let instance = &target.instance_id;
-    let end =
-        |phase, message: &str| Some(state(instance, phase, Some(flow_id), None, message, None));
-    let deadline = Instant::now() + FLOW_TIMEOUT;
-    let mut codex = tokio::select! {
-        _ = &mut stopped => return None,
-        opened = Codex::open(options, target) => match opened {
-            Ok(codex) => codex,
-            Err(message) => return end(ProviderAuthPhase::Failed, &message),
-        },
-    };
+    let end = |phase, message: &str| state(instance, phase, Some(flow_id), None, message, None);
     let params = if method == METHOD_DEVICE_CODE {
         json!({"type": "chatgptDeviceCode"})
     } else {
         json!({"type": "chatgpt"})
     };
-    let answer = tokio::select! {
-        _ = &mut stopped => {
-            codex.close().await;
-            return None;
-        }
-        answer = codex.call(methods::ACCOUNT_LOGIN_START, params) => answer,
-    };
+    let answer = codex.call(methods::ACCOUNT_LOGIN_START, params).await;
     let Some((login_id, interaction)) = answer
         .as_ref()
         .and_then(|a| interaction(flow_id, method, a))
     else {
-        codex.close().await;
         return end(ProviderAuthPhase::Failed, FAILED);
     };
-    let _ = updates.send(state(
-        instance,
-        ProviderAuthPhase::Waiting,
-        Some(flow_id),
-        Some(expires_at),
-        WAITING,
-        Some(interaction),
-    ));
+    slot.publish(
+        flow_id,
+        state(
+            instance,
+            ProviderAuthPhase::Waiting,
+            Some(flow_id),
+            Some(expires_at),
+            WAITING,
+            Some(interaction),
+        ),
+    );
     let completed = loop {
-        tokio::select! {
-            _ = &mut stopped => {
-                let _ = codex.call(methods::ACCOUNT_LOGIN_CANCEL, json!({"loginId": login_id})).await;
-                codex.close().await;
-                return None;
+        match codex.inbound.recv().await {
+            Some(Inbound::Notification(Notification::AccountLoginCompleted {
+                login_id: done,
+                success,
+                ..
+            })) if done.as_deref().is_none_or(|d| d == login_id) => break success,
+            Some(Inbound::Closed) | Some(Inbound::Retired { .. }) | None => {
+                return end(ProviderAuthPhase::Failed, FAILED);
             }
-            _ = tokio::time::sleep_until(deadline) => {
-                let _ = codex.call(methods::ACCOUNT_LOGIN_CANCEL, json!({"loginId": login_id})).await;
-                codex.close().await;
-                return end(ProviderAuthPhase::Failed, EXPIRED);
-            }
-            inbound = codex.inbound.recv() => match inbound {
-                Some(Inbound::Notification(Notification::AccountLoginCompleted { login_id: done, success, .. }))
-                    if done.as_deref().is_none_or(|d| d == login_id) => break success,
-                Some(Inbound::Closed) | Some(Inbound::Retired { .. }) | None => {
-                    codex.close().await;
-                    return end(ProviderAuthPhase::Failed, FAILED);
-                }
-                Some(_) => {}
-            },
+            Some(_) => {}
         }
     };
     if !completed {
-        codex.close().await;
         return end(ProviderAuthPhase::Failed, NOT_COMPLETED);
     }
-    let _ = updates.send(state(
-        instance,
-        ProviderAuthPhase::Verifying,
-        Some(flow_id),
-        Some(expires_at),
-        VERIFYING,
-        None,
-    ));
-    let signed_in = codex.signed_in().await;
-    codex.close().await;
-    if signed_in {
+    slot.publish(
+        flow_id,
+        state(
+            instance,
+            ProviderAuthPhase::Verifying,
+            Some(flow_id),
+            Some(expires_at),
+            VERIFYING,
+            None,
+        ),
+    );
+    if codex.signed_in().await {
         end(ProviderAuthPhase::Succeeded, SUCCEEDED)
     } else {
         end(ProviderAuthPhase::Failed, FAILED)

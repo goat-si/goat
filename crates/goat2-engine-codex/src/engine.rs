@@ -70,6 +70,8 @@ pub struct CodexEngineOptions {
     /// attachment is named unavailable in the text and an image declines the turn, as v1 does
     /// for an unresolvable attachment (CodexAdapterV2.ts:2639-2645).
     pub attachment_resolver: Option<AttachmentResolver>,
+    /// How long a sign-in flow may take from start to end (v1 providerAuthFlow: 300 s).
+    pub auth_timeout: Duration,
 }
 
 impl Default for CodexEngineOptions {
@@ -87,6 +89,7 @@ impl Default for CodexEngineOptions {
             transport: TransportConfig::default(),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
             attachment_resolver: None,
+            auth_timeout: Duration::from_secs(300),
         }
     }
 }
@@ -156,7 +159,9 @@ impl EngineFactory for CodexEngineFactory {
         method_id: Option<String>,
         updates: mpsc::UnboundedSender<goat2_contracts::ProviderAuthState>,
     ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
-        self.auth.start(&self.options, target, method_id, updates)
+        self.auth
+            .start(&self.options, target, method_id, updates)
+            .await
     }
 
     async fn auth_cancel(
@@ -164,7 +169,7 @@ impl EngineFactory for CodexEngineFactory {
         target: &ProviderTarget,
         flow_id: &str,
     ) -> Result<goat2_contracts::ProviderAuthState, EngineError> {
-        self.auth.cancel(target, flow_id)
+        self.auth.cancel(&self.options, target, flow_id).await
     }
 
     async fn auth_logout(

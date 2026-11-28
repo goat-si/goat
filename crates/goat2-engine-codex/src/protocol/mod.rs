@@ -172,7 +172,6 @@ pub mod methods {
     pub const TURN_INTERRUPT: &str = "turn/interrupt";
     pub const ACCOUNT_READ: &str = "account/read";
     pub const ACCOUNT_LOGIN_START: &str = "account/login/start";
-    pub const ACCOUNT_LOGIN_CANCEL: &str = "account/login/cancel";
     pub const ACCOUNT_LOGOUT: &str = "account/logout";
 
     pub const ERROR: &str = "error";
