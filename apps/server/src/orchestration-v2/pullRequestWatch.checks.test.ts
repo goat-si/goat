@@ -51,7 +51,7 @@ const detail = (overrides: Partial<Detail> = {}): Detail => ({
   ...overrides,
 });
 
-const noRemarks = [];
+const noRemarks: readonly [] = [];
 const DEFAULT_POLICY = Schema.decodeSync(PullRequestWatchPolicy)({});
 /** Everything wakes, so the comparison rules are tested apart from the policy. */
 const REACT_ALL: PullRequestWatchPolicy = {
