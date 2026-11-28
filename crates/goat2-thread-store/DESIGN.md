@@ -77,7 +77,8 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    subscribers told, callers waiting on the thread get ThreadMissing) and a failed directory sync or row
    delete is returned afterwards. The row is removed only after the rename is synced; otherwise the dirty
    row stays so the next start decides from what is on disk (folder gone: finish the delete; folder back
-   after a power loss: keep the thread). Marking a create clears any cached card left on the row, and a
+   after a power loss: keep the thread). The trash contents are removed only after the rename is synced;
+   startup syncs the threads directory before it finishes a delete or clears leftover trash. Marking a create clears any cached card left on the row, and a
    `creating` row is never loaded from a cached card.
 
 Lock order: a thread's lock, then the thread map, then the shared lock (card set, index); the thread

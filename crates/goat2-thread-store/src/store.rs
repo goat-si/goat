@@ -712,7 +712,7 @@ impl Store {
                         return Ok(());
                     }
                 } else if dir_meta.is_none() {
-                    lock(&self.shared).index.delete(id.as_str())?;
+                    self.finish_missing_folder_delete(&id)?;
                     report.removed_deleted.push(row.id);
                     return Ok(());
                 } else if log_meta.is_none() {
@@ -742,6 +742,31 @@ impl Store {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A dirty row whose folder is gone: make the rename durable first (a power loss could still
+    /// undo it), then clear this thread's leftover trash and drop the row. A failed sync fails
+    /// `open` and keeps the row.
+    fn finish_missing_folder_delete(&self, id: &ThreadId) -> Result<()> {
+        if self.faults().fail_delete_dir_sync {
+            return Err(StoreError::Io(injected("threads directory sync")));
+        }
+        if self.opts.fsync {
+            sync_dir(&self.threads_dir())?;
+        }
+        let prefix = format!(".trash-{}-", id.as_str());
+        for entry in fs::read_dir(self.threads_dir())? {
+            let entry = entry?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+        lock(&self.shared).index.delete(id.as_str())?;
         Ok(())
     }
 
@@ -865,6 +890,19 @@ impl Store {
         let mut entries: Vec<_> =
             fs::read_dir(self.threads_dir())?.collect::<std::io::Result<_>>()?;
         entries.sort_by_key(|e| e.file_name());
+        // Leftover trash means a delete renamed a folder; make those renames durable before the
+        // contents go, so a power loss cannot bring back an emptied folder.
+        let has_trash = entries.iter().any(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(".trash-"))
+        });
+        if has_trash && self.opts.fsync {
+            if self.faults().fail_delete_dir_sync {
+                return Err(StoreError::Io(injected("threads directory sync")));
+            }
+            sync_dir(&self.threads_dir())?;
+        }
         for entry in entries {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
@@ -991,9 +1029,8 @@ impl Store {
                 .write()
                 .unwrap_or_else(|p| p.into_inner())
                 .remove(id);
-            let mut shared = lock(&self.shared);
-            shared.cards.remove(id);
-            shared.index.delete(id.as_str())?;
+            lock(&self.shared).cards.remove(id);
+            self.finish_missing_folder_delete(id)?;
             report.removed_deleted.push(id.to_string());
             return Ok(());
         }
@@ -2087,7 +2124,11 @@ impl Store {
             b[3].wait();
         }
         drop(slot);
-        let _ = fs::remove_dir_all(&trash);
+        // Remove the contents only once the rename is durable; a power loss that undid an
+        // unsynced rename must find the folder whole.
+        if first_error.is_none() {
+            let _ = fs::remove_dir_all(&trash);
+        }
         first_error.map_or(Ok(()), Err)
     }
 

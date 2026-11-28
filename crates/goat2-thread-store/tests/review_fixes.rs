@@ -901,3 +901,79 @@ fn an_interrupted_recreation_after_a_failed_index_delete_shows_no_old_card() {
     );
     assert!(report.corrupt.is_empty(), "{:?}", report.corrupt);
 }
+
+// Review round 8.
+fn trash_dirs(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir.join("threads"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|n| n.starts_with(".trash-"))
+        .collect()
+}
+
+#[test]
+fn a_delete_whose_rename_was_not_synced_keeps_the_trash_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    store
+        .create_thread(Some(tid("t")), created("keep", "/w"))
+        .unwrap();
+    testing::set_faults(
+        &store,
+        Faults {
+            fail_delete_dir_sync: true,
+            ..Default::default()
+        },
+    );
+    assert!(store.delete_thread(&tid("t")).is_err());
+    let trash = trash_dirs(dir.path());
+    assert_eq!(trash.len(), 1, "trash kept until the rename is durable");
+    assert!(
+        dir.path()
+            .join("threads")
+            .join(&trash[0])
+            .join("goat.jsonl")
+            .exists()
+    );
+}
+
+#[test]
+fn startup_makes_a_rename_durable_before_finishing_the_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("t")), created("keep", "/w"))
+            .unwrap();
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_dir_sync: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&tid("t")).is_err());
+        testing::crash(store);
+    }
+    // The directory still cannot be synced: the delete must not be finished (open fails).
+    assert!(
+        Store::open(
+            dir.path(),
+            StoreOptions {
+                faults: Faults {
+                    fail_delete_dir_sync: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    let (store, report) = open(dir.path());
+    assert_eq!(report.removed_deleted, vec!["t"]);
+    assert!(store.find(&Default::default()).is_empty());
+    assert!(
+        trash_dirs(dir.path()).is_empty(),
+        "the thread's trash is cleared once the rename is durable"
+    );
+}
