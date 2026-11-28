@@ -67,6 +67,7 @@ fn ensure_resend(fold: &mut Fold, run: &RunId) -> usize {
             ),
             options: None,
             recommended: None,
+            context: None,
         });
     }
     if let Some(i) = fold.held_inputs.iter().position(|h| &h.run_id == run) {
