@@ -1155,6 +1155,16 @@ impl Actor {
                     self.requeue_cancelled_steer(&turn_id, input_ids, &reason);
                 }
             },
+            // Engine work outside a GOAT-started turn (Muse, Pi, OpenCode background turns).
+            // Host support is lane E's work item after the providers module and E-WF; until it
+            // lands drivers do not emit these, and anything that arrives is logged and ignored.
+            EngineEvent::SessionRequestOpened { kind, .. } => {
+                tracing::warn!(thread = %self.id, ?kind, "a request outside any turn is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationRequested { .. } => {
+                tracing::warn!(thread = %self.id, "an engine continuation is not handled yet: ignored");
+            }
+            EngineEvent::ContinuationWithdrawn { .. } => {}
             EngineEvent::Exited { reason } => {
                 self.drop_session();
                 if matches!(self.phase, Phase::Running(_)) {

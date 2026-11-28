@@ -84,4 +84,12 @@ async fn probe_and_set_config_default_to_unsupported() {
         MinimalSession.read_item(&locator).await,
         Err(EngineError::Unsupported(_))
     ));
+
+    // An engine that never offers continuations declines one, so the host drops its input.
+    assert!(matches!(
+        MinimalSession
+            .start_continuation("wake-1", Vec::new(), &settings)
+            .await,
+        TurnStartResult::Declined { .. }
+    ));
 }

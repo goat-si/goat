@@ -177,6 +177,39 @@ pub enum EngineEvent {
     },
     /// The engine resolved or withdrew a request by itself.
     RequestClosed { key: String },
+    /// A request the engine raised outside any GOAT-started turn: a background subagent's
+    /// approval (Muse, v1 `provider-muse adapter.ts:1053-1069`, `subagentOrigin`) or an extension
+    /// dialog (Pi, v1 `provider-pi adapter.ts:1712-1757`). It is explicit, so a late in-turn
+    /// `RequestOpened` with a stale `turn_id` never becomes one by accident.
+    ///
+    /// The host files it on the thread with no run (`run_id` None). It counts in
+    /// `card.openAsks` and reaches the inbox like any open request, so the person sees it. It
+    /// lives until the person answers it (`answer_request(key, ..)`), the engine closes it
+    /// (`RequestClosed`), or the session ends. Keys follow the sign-in rules: one request per
+    /// key, each key answered at most once per session. Sent by Muse and Pi; OpenCode only for
+    /// its background turns; never by Codex, Claude or Cursor.
+    /// Host support is lane E's work item (after the providers module and E-WF); until then
+    /// the host logs and ignores it, so drivers keep failing visibly instead of emitting it.
+    SessionRequestOpened {
+        key: String,
+        item_id: Option<ItemId>,
+        kind: RequestKind,
+        summary: String,
+        item: Option<Box<TurnItem>>,
+    },
+    /// The engine finished background work and holds a turn of its own that it wants to run
+    /// (v1 wake offers: `provider-muse adapter.ts:1308-1334`, `wakeOffers.ts:9-35`,
+    /// `provider-core ProviderContinuationRequests.ts:15-59`). The host records it like a child
+    /// wake: `input.accepted { from: system, text, clientRequestId: "continuation:<key>" }`,
+    /// shown in the timeline as a quiet system line, not as a person's message. It runs through
+    /// the normal queue when the thread is free, started with [EngineSession::start_continuation].
+    /// A later `ContinuationRequested` for the thread replaces a pending one (the earlier input
+    /// is cancelled while still queued), as v1's offer/take does. Sent by Muse and Pi; OpenCode
+    /// only for its background turns. Host support: as for [EngineEvent::SessionRequestOpened].
+    ContinuationRequested { key: String, text: String },
+    /// The engine withdrew a pending continuation (v1 clears an offer when its workflow ends):
+    /// the host cancels its input while still queued; once its run has started this is ignored.
+    ContinuationWithdrawn { key: String },
     /// The engine needs the person to sign in (Antigravity authorization URL, ACP authenticate,
     /// Claude "not logged in"). The host records it as `request.opened` kind `signin` on the run
     /// named by `turn_id` when there is one.
@@ -288,6 +321,22 @@ pub trait EngineSession: Send + Sync {
         settings: &TurnSettings,
     ) -> TurnStartResult;
     async fn steer(&self, turn_id: &str, inputs: Vec<EngineInput>) -> SteerResult;
+    /// Run a continuation the engine offered ([EngineEvent::ContinuationRequested]): resume the
+    /// turn it holds under `key`, with `inputs` (the continuation's own input). A driver that
+    /// no longer holds `key` (a restart, a later offer replaced it, the workflow ended) answers
+    /// `Declined`; the host then drops that input and never sends its text as a fresh prompt.
+    /// The default declines, for engines that never offer continuations.
+    async fn start_continuation(
+        &self,
+        key: &str,
+        inputs: Vec<EngineInput>,
+        settings: &TurnSettings,
+    ) -> TurnStartResult {
+        let _ = (key, inputs, settings);
+        TurnStartResult::Declined {
+            reason: "continuation no longer available".into(),
+        }
+    }
     async fn interrupt(&self, turn_id: &str) -> Result<(), EngineError>;
     async fn answer_request(&self, key: &str, answer: RequestAnswer) -> Result<(), EngineError>;
     /// Change model or runtime mode inside the running session (Claude `set_model` /
