@@ -1,6 +1,7 @@
-export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, failure?: string) {
+export function traceFromV1(scenario: any, stored: readonly any[], augmented: any, state: any, threadId: string, messageInputs: ReadonlyMap<string, string>, failure?: string) {
   const events: any[] = [];
-  const sends = scenario.steps.filter((step: any) => step.do === "send");
+  const sendByInput = new Map(scenario.steps.filter((step: any) => step.do === "send").map((step: any) => [step.input, step]));
+  const thread = scenario.steps.find((step: any) => step.thread)?.thread;
   const messageAliases = new Map<string, string>();
   const runAliases = new Map<string, string>();
   const statuses = new Map<string, string>();
@@ -10,7 +11,9 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
     const p = event.payload;
     if (event.threadId !== threadId) continue;
     if (event.type === "message.updated" && p.role === "user" && !messageAliases.has(p.id)) {
-      const step = sends[messageAliases.size];
+      // Bind by the dispatched message id, never by observation order.
+      const input = messageInputs.get(p.id);
+      const step = input === undefined ? undefined : sendByInput.get(input);
       if (!step) throw new Error(`unmapped message ${p.id}`);
       messageAliases.set(p.id, step.input);
       emit({kind: "input.accepted", thread: step.thread, input: step.input, from: "user", mode: step.mode, text: p.text});
@@ -21,7 +24,7 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
       statuses.set(p.id, p.status);
       if (p.status === "queued" && old !== "queued") {
         const input = messageAliases.get(p.userMessageId);
-        if (input) emit({kind: "queue.changed", thread: sends[0].thread, input, op: "enqueued"});
+        if (input) emit({kind: "queue.changed", thread: thread, input, op: "enqueued"});
         else pendingQueuedMessages.add(p.userMessageId);
       }
       if (p.status === "running" && !runAliases.has(p.id)) {
@@ -29,12 +32,12 @@ export function traceFromV1(scenario: any, stored: readonly any[], augmented: an
         if (!input) throw new Error(`unmapped run input ${p.userMessageId}`);
         const run = `r${runAliases.size + 1}`;
         runAliases.set(p.id, run);
-        emit({kind: "run.started", thread: sends[0].thread, run, inputs: [input]});
+        emit({kind: "run.started", thread: thread, run, inputs: [input]});
       }
       if (p.status === "completed" && old !== "completed") {
         const run = runAliases.get(p.id);
         if (!run) throw new Error(`unmapped run ${p.id}`);
-        emit({kind: "run.finished", thread: sends[0].thread, run, status: "done"});
+        emit({kind: "run.finished", thread: thread, run, status: "done"});
       }
     }
   }

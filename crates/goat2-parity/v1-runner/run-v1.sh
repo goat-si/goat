@@ -19,10 +19,13 @@ if [ -e "$root/.git" ] && [ "$allow_git" != true ]; then
   echo 'refusing git checkout without --allow-git-checkout' >&2; exit 1
 fi
 src=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
-dest="$root/apps/server/src/orchestration-v2/testkit/goat2-parity"
+# One directory per run (same depth, so the runner's relative imports resolve) lets
+# concurrent runs share one export without touching each other's copy.
+name="goat2-parity-$$"
+dest="$root/apps/server/src/orchestration-v2/testkit/$name"
 [ -f "$src/ParityScenarios.integration.test.ts" ] || { echo 'v1 replay driver not implemented' >&2; exit 1; }
 mkdir "$dest" || { echo "refusing existing or inaccessible destination: $dest" >&2; exit 1; }
 trap 'rm -rf "$dest"' EXIT HUP INT TERM
 cp "$src"/*.ts "$dest/"
-GOAT2_PARITY_SCENARIO="$scenario" GOAT2_PARITY_OUT="$out" pnpm --dir "$root/apps/server" exec vp test run src/orchestration-v2/testkit/goat2-parity/ParityScenarios.integration.test.ts
+GOAT2_PARITY_SCENARIO="$scenario" GOAT2_PARITY_OUT="$out" pnpm --dir "$root/apps/server" exec vp test run "src/orchestration-v2/testkit/$name/ParityScenarios.integration.test.ts"
 [ -f "$out" ] || { echo 'runner did not produce output' >&2; exit 1; }
