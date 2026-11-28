@@ -1548,6 +1548,31 @@ impl Actor {
                 self.on_turn_start_answer(attempt, result).await;
             }
             Internal::ConfigRead { attempt, summary } => {
+                // What Codex sent before answering config/read is queued: apply it first.
+                while let Ok(inbound) = self.inbound.try_recv() {
+                    Box::pin(self.on_inbound_event(Some(inbound))).await;
+                    if self.exited {
+                        return;
+                    }
+                }
+                let current = self.dispatch.as_ref().is_some_and(|d| {
+                    d.attempt == attempt && matches!(d.phase, DispatchPhase::Configuring)
+                });
+                if !current {
+                    return;
+                }
+                if self.thread_active || self.native_running.is_some() || self.resume_busy {
+                    // A turn GOAT does not own appeared while the setting was read: judge the
+                    // start again before anything is sent (v1 CodexTurnStartGuard.ts:113-116).
+                    if let Some(dispatch) = self.dispatch.as_mut() {
+                        dispatch.phase = DispatchPhase::Guarding {
+                            listed: false,
+                            quiet_wait: None,
+                        };
+                    }
+                    self.advance_dispatch().await;
+                    return;
+                }
                 self.send_configured_turn_start(attempt, summary);
             }
             Internal::SteerAnswered { steer, result } => {

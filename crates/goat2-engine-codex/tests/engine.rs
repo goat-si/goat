@@ -1281,6 +1281,27 @@ async fn an_unexpected_exit_reports_codex_last_stderr_lines() {
     );
 }
 
+#[tokio::test]
+async fn a_foreign_turn_seen_while_the_setting_is_read_refuses_the_start() {
+    // The guard admitted the start, but a turn GOAT does not own started before config/read
+    // answered: the start is judged again and refused; turn/start is never sent.
+    let t = load("codex-0.167.0/basic.json");
+    let thread = recorded_thread(&t);
+    let mut entries = entries_until(&t, |e| method_of(e) == Some("config/read"));
+    let read_id = match entries.last() {
+        Some(Entry::ExpectOutbound { frame, .. }) => frame["id"].clone(),
+        _ => unreachable!(),
+    };
+    entries.push(emit(json!({"method": "thread/status/changed", "params": {"threadId": thread, "status": {"type": "active", "activeFlags": []}}})));
+    entries.push(emit(json!({"method": "turn/started", "params": {"threadId": thread, "turn": {"id": "foreign-turn", "items": [], "status": "inProgress", "error": null}}})));
+    entries.push(emit(json!({"id": read_id, "result": {"config": {}}})));
+    let t = synthetic("foreign-during-config", entries);
+    let h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    refused_start(&h, "goat-input-1").await;
+    // Nothing more was sent: the fake had nothing left to expect.
+    finish(h).await;
+}
+
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
     goat2_contracts::ChatAttachment {
         kind: goat2_contracts::ChatAttachmentType::Image,
