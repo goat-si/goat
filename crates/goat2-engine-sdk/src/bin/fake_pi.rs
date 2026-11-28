@@ -332,6 +332,41 @@ fn main() {
                         finish("done", false);
                         active = false;
                     }
+                    "stream-kinds" => {
+                        emit(json!({"type":"message_start","message":{"role":"assistant"}}));
+                        emit(
+                            json!({"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}),
+                        );
+                        emit(
+                            json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"think "}}),
+                        );
+                        emit(
+                            json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"more"}}),
+                        );
+                        emit(
+                            json!({"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"thinking":"think more"}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_start","toolCallId":"cmd-1","toolName":"bash","args":{"command":"echo"}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_update","toolCallId":"cmd-1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"hé"}]}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_update","toolCallId":"cmd-1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"héllo"}]}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_update","toolCallId":"cmd-1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"éx"}],"details":{"truncation":{"totalBytes":8}}}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_update","toolCallId":"cmd-1","toolName":"bash","partialResult":{"content":[{"type":"text","text":"héllo"}]}}),
+                        );
+                        emit(
+                            json!({"type":"tool_execution_end","toolCallId":"cmd-1","toolName":"bash","result":{"content":[{"type":"text","text":"héllo"}]}}),
+                        );
+                        finish("done", false);
+                        active = false;
+                    }
                     "tool" => {
                         emit(
                             json!({"type":"tool_execution_start", "toolCallId":"tool-1", "toolName":"read", "args":{"path":"example.txt"}}),

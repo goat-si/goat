@@ -1,8 +1,8 @@
 //! Pi RPC integration tests. The fake binary uses only local stdio and dummy credentials.
 use goat2_contracts::{
-    ChatAttachment, ChatAttachmentType, EngineConfig, EngineDriver, EngineRef, InputId,
-    ModelSelection, ProviderInstanceId, ProviderOptionSelection, ProviderOptionSelectionValue,
-    RequestKind, RequestOutcome, RuntimeMode, ThreadId, TurnItemBody,
+    ChatAttachment, ChatAttachmentType, ContentStreamKind, EngineConfig, EngineDriver, EngineRef,
+    InputId, ModelSelection, ProviderInstanceId, ProviderOptionSelection,
+    ProviderOptionSelectionValue, RequestKind, RequestOutcome, RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
     EngineEvent, EngineFactory, EngineHandle, EngineInput, LaunchSpec, McpEndpoint, RequestAnswer,
@@ -288,6 +288,51 @@ async fn start(id: &str) -> EngineHandle {
         .start(spec(id))
         .await
         .expect("fake starts")
+}
+
+async fn assert_stream_kind(kind: ContentStreamKind, expected: &[&str]) {
+    let mut h = start("pi-stream-kinds").await;
+    let turn = accepted(
+        h.session
+            .start_turn(input("stream-kinds"), &settings())
+            .await,
+    );
+    let events = finished(&mut h).await;
+    let deltas: Vec<_> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            EngineEvent::ContentDelta {
+                turn_id,
+                item_id,
+                stream_kind,
+                text,
+            } if *stream_kind == kind => {
+                assert_eq!(turn_id, &turn);
+                Some((i, item_id, text.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        deltas.iter().map(|(_, _, text)| *text).collect::<Vec<_>>(),
+        expected,
+        "{events:?}"
+    );
+    let id = deltas[0].1;
+    assert!(deltas.iter().all(|(_, other, _)| *other == id));
+    assert!(events.iter().enumerate().any(|(i, e)| i > deltas.last().unwrap().0 && matches!(e, EngineEvent::ItemCompleted { turn_id, item, .. } if turn_id == &turn && &item.id == id)), "{events:?}");
+    h.session.shutdown().await;
+}
+
+#[tokio::test]
+async fn thinking_deltas_complete_on_same_item() {
+    assert_stream_kind(ContentStreamKind::ReasoningText, &["think ", "more"]).await;
+}
+
+#[tokio::test]
+async fn command_output_deltas_complete_on_same_item() {
+    assert_stream_kind(ContentStreamKind::CommandOutput, &["hé", "llo", "x"]).await;
 }
 
 #[tokio::test]

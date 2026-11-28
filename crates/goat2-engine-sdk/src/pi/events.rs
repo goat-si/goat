@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use goat2_contracts::{
-    EngineItemLocator, ItemId, MessageId, NativeItemRef, NativeRefStrength, ProviderFailure,
-    ProviderFailureClass, ProviderRequestKind, ProviderRetry, RequestId, RequestKind,
-    SubagentOrigin, ThreadId, TurnItem, TurnItemBody, TurnItemStatus, UserInputOption,
+    ContentStreamKind, EngineItemLocator, ItemId, MessageId, NativeItemRef, NativeRefStrength,
+    ProviderFailure, ProviderFailureClass, ProviderRequestKind, ProviderRetry, RequestId,
+    RequestKind, SubagentOrigin, ThreadId, TurnItem, TurnItemBody, TurnItemStatus, UserInputOption,
     UserInputQuestion,
 };
 use goat2_engine_api::{EngineEvent, TurnOutcome};
@@ -35,6 +35,7 @@ pub(super) struct Translator {
     message: u64,
     streams: BTreeMap<u64, Stream>,
     tools: HashMap<String, Tool>,
+    command_output_bytes: HashMap<String, u64>,
     pending: HashSet<String>,
     compaction: Option<String>,
     interrupted: bool,
@@ -217,6 +218,7 @@ impl Translator {
             message: 0,
             streams: BTreeMap::new(),
             tools: HashMap::new(),
+            command_output_bytes: HashMap::new(),
             pending: HashSet::new(),
             compaction: None,
             interrupted: false,
@@ -237,6 +239,7 @@ impl Translator {
         self.message = 0;
         self.streams.clear();
         self.tools.clear();
+        self.command_output_bytes.clear();
         self.pending.clear();
         self.compaction = None;
         self.interrupted = false;
@@ -427,14 +430,15 @@ impl Translator {
                 let d = &record["assistantMessageEvent"];
                 let kind = s(d, "type").unwrap_or("");
                 let index = d.get("contentIndex").and_then(Value::as_u64).unwrap_or(0);
+                if kind.ends_with("_start") {
+                    if let Some(item) = self.streams.get_mut(&index).filter(|item| !item.done) {
+                        item.text.clear();
+                    }
+                    return out;
+                }
                 if matches!(
                     kind,
-                    "text_start"
-                        | "thinking_start"
-                        | "text_delta"
-                        | "thinking_delta"
-                        | "text_end"
-                        | "thinking_end"
+                    "text_delta" | "thinking_delta" | "text_end" | "thinking_end"
                 ) {
                     let item = self.streams.entry(index).or_insert_with(|| Stream {
                         id: format!("{turn_id}:m{}:c{index}", self.message),
@@ -442,17 +446,24 @@ impl Translator {
                         reasoning: kind.starts_with("thinking"),
                         done: false,
                     });
-                    if kind.ends_with("_start") && !item.done {
-                        item.text.clear();
-                    }
                     if kind.ends_with("_delta") && !item.done {
                         let delta = s(d, "delta").unwrap_or("");
                         item.text.push_str(delta);
-                        if !item.reasoning && !delta.is_empty() {
-                            out.push(EngineEvent::TextDelta {
-                                turn_id: turn_id.into(),
-                                item_id: Self::item_id(turn_id, &item.id),
-                                text: delta.into(),
+                        if !delta.is_empty() {
+                            let item_id = Self::item_id(turn_id, &item.id);
+                            out.push(if item.reasoning {
+                                EngineEvent::ContentDelta {
+                                    turn_id: turn_id.into(),
+                                    item_id,
+                                    stream_kind: ContentStreamKind::ReasoningText,
+                                    text: delta.into(),
+                                }
+                            } else {
+                                EngineEvent::TextDelta {
+                                    turn_id: turn_id.into(),
+                                    item_id,
+                                    text: delta.into(),
+                                }
                             });
                         }
                     }
@@ -516,6 +527,33 @@ impl Translator {
                 } else {
                     &record["partialResult"]
                 };
+                if phase == "tool_execution_update"
+                    && matches!(name.as_str(), "bash" | "powershell")
+                {
+                    let tail = content(&result["content"]);
+                    let total = number(&result["details"]["truncation"], "totalBytes")
+                        .unwrap_or(tail.len() as u64);
+                    let previous = self
+                        .command_output_bytes
+                        .insert(id.to_owned(), total)
+                        .unwrap_or(0);
+                    if total > previous {
+                        let mut start = tail
+                            .len()
+                            .saturating_sub((total - previous).min(usize::MAX as u64) as usize);
+                        while !tail.is_char_boundary(start) {
+                            start += 1;
+                        }
+                        if start < tail.len() {
+                            out.push(EngineEvent::ContentDelta {
+                                turn_id: turn_id.into(),
+                                item_id: Self::item_id(turn_id, id),
+                                stream_kind: ContentStreamKind::CommandOutput,
+                                text: tail[start..].into(),
+                            });
+                        }
+                    }
+                }
                 if name == "subagent"
                     || (self.driver == "omo"
                         && matches!(
