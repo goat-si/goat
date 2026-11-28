@@ -3,6 +3,7 @@ import { apply, botRows, emptyState, emptyThread, type HostState } from "./store
 import { Outbox, type OutboxStorage, type OutboxTarget } from "./outbox.ts";
 import type { ConnectionState, Transport } from "./transport.ts";
 import type { ClientFrame, CommandBody, CommandResult, HostFrame, InputMode, LogLine } from "./wire.ts";
+import type { ProviderCommandBody, ProviderCommandValue, ProvidersFrame, ServerProviderEntry } from "../providers/wire.ts";
 
 export interface CacheSnapshot extends Pick<HostState, "cards" | "bots"> {
   /** Last lines of recently shown threads, so a cold start draws them at once. */
@@ -39,6 +40,9 @@ export class HostClient {
   private watched = new Map<string, number>();
   private pending = new Map<string, (r: CommandResult) => void>();
   private subCounter = 0;
+  private providerWatchers = new Set<(providers: ServerProviderEntry[]) => void>();
+  private providersSubId: string | null = null;
+  private lastProviders: ServerProviderEntry[] | null = null;
   readonly outbox: Outbox;
   private readonly cache: CacheStorage | null;
   commandTimeoutMs = 15000;
@@ -93,6 +97,7 @@ export class HostClient {
       for (const t of Object.values(threads)) {
         if (this.watched.has(t.threadId) && t.subId) this.send({ type: "subscribe_thread", subId: t.subId, threadId: t.threadId, after: t.cursor });
       }
+      if (this.providerWatchers.size > 0) this.subscribeProviders();
     } else if (s === "closed") {
       this.outbox.onDisconnect();
       for (const [reqId, resolve] of this.pending) {
@@ -103,6 +108,13 @@ export class HostClient {
   }
 
   private onFrame(frame: HostFrame) {
+    if ((frame as { type: string }).type === "providers") {
+      const f = frame as unknown as ProvidersFrame;
+      if (f.subId !== this.providersSubId) return; // a stale subscription's list
+      this.lastProviders = f.providers;
+      for (const cb of this.providerWatchers) cb(f.providers);
+      return;
+    }
     if (frame.type === "command_result") {
       this.outbox.onResult(frame);
       const r = this.pending.get(frame.reqId);
@@ -206,6 +218,28 @@ export class HostClient {
     const reqId = newId();
     this.setState({ ...this.snapshot.state, threads: { ...this.snapshot.state.threads, [threadId]: { ...t, pageReqId: reqId } } });
     this.send({ type: "read_page", reqId, threadId, before, limit });
+  }
+
+  /** The host's provider list (providers frame): the latest list now, if any, and every change; resubscribes on reconnect. */
+  watchProviders(cb: (providers: ServerProviderEntry[]) => void): () => void {
+    this.providerWatchers.add(cb);
+    if (this.providerWatchers.size === 1 && this.snapshot.connection === "open") this.subscribeProviders();
+    else if (this.lastProviders) cb(this.lastProviders);
+    return () => {
+      this.providerWatchers.delete(cb);
+      if (this.providerWatchers.size > 0) return;
+      if (this.providersSubId && this.snapshot.connection === "open") this.send({ type: "unsubscribe", subId: this.providersSubId });
+      this.providersSubId = null;
+    };
+  }
+  private subscribeProviders() {
+    this.providersSubId = `providers-${++this.subCounter}`;
+    this.send({ type: "subscribe_providers", subId: this.providersSubId } as unknown as ClientFrame);
+  }
+
+  /** A provider command (docs/part2/provider-wire.md); resolves with its command_result like command(). */
+  providerCommand(body: ProviderCommandBody, clientRequestId = newId()): Promise<CommandResult & { value?: ProviderCommandValue }> {
+    return this.command(body as unknown as CommandBody, clientRequestId) as Promise<CommandResult & { value?: ProviderCommandValue }>;
   }
 
   close() { this.transport.close(); }

@@ -9,9 +9,12 @@ import {
   type ServerProvider as ServerProviderType,
   type ServerSettings,
   DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceId,
+  isUnconfiguredDefaultInstanceEnabled,
 } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { Atom } from "effect/reactivity";
+import type { ProviderPortMethod, ProviderPortStream } from "./surfaces.types.ts";
 
 /** GOAT 2 ProviderProbeResult (crates/goat2-contracts/src/probe.rs on goat2_contracts); v1 ServerProvider subset. */
 export interface Goat2ProviderProbe {
@@ -58,27 +61,15 @@ export interface Goat2ProviderEntry {
   readonly badgeLabel?: string;
   readonly setup?: { readonly canAuthenticate: boolean; readonly canInstall: boolean; readonly documentationUrl?: string };
   readonly probe: Goat2ProviderProbe;
+  /** Running sign-in / install flow (wire ServerProviderEntry.authFlow / .install); read by the port's watch streams. */
+  readonly authFlow?: unknown;
+  readonly install?: unknown;
 }
 
-/** v1 WS method names the lifted provider screens call (packages/contracts/src/rpc.ts WS_METHODS). */
-export type Goat2ProviderMethod =
-  | "server.refreshProviders"
-  | "server.updateProvider"
-  | "server.searchAcpRegistry"
-  | "server.prepareAcpRegistryAgent"
-  | "server.uninstallAcpRegistryManagedBinary"
-  | "server.acceptAcpRegistryUrlAuth"
-  | "server.updateSettings"
-  | "providerInstall.start"
-  | "providerInstall.cancel"
-  | "providerInstall.remove"
-  | "providerAuth.start"
-  | "providerAuth.respond"
-  | "providerAuth.complete"
-  | "providerAuth.cancel"
-  | "providerAuth.logout";
-
-export type Goat2ProviderStream = "providerAuth.subscribe" | "providerInstall.subscribe";
+/** v1 WS method names the lifted provider screens call (packages/contracts/src/rpc.ts WS_METHODS) plus
+ * goat2.setProviderInstance; one definition, shared with GOAT 2 code through surfaces.types.ts. */
+export type Goat2ProviderMethod = ProviderPortMethod;
+export type Goat2ProviderStream = ProviderPortStream;
 
 export interface ProviderPort {
   /** Calls listener with the full provider list now (if known) and on every change. */
@@ -142,9 +133,11 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
     const attach = () => {
       unsubscribe();
       unsubscribe = port
-        ? port.subscribe((entries) =>
-            get.setSelf<ReadonlyArray<ServerProviderType> | null>(entries.map(toServerProvider)),
-          )
+        ? port.subscribe((entries) => {
+            const all = [...entries, ...cloudPlaceholders(entries, entries[0]?.probe.checkedAt ?? new Date().toISOString())];
+            get.set(goat2SettingsAtom, withHostInstances(get.once(goat2SettingsAtom), all));
+            get.setSelf<ReadonlyArray<ServerProviderType> | null>(all.map(toServerProvider));
+          })
         : () => {};
     };
     const stop = onProviderPortChange(attach);
@@ -156,6 +149,65 @@ export const goat2ProvidersAtom: Atom.Atom<ReadonlyArray<ServerProviderType> | n
     return null;
   },
 ).pipe(Atom.keepAlive, Atom.withLabel("goat2:providers"));
+
+/**
+ * v1's cloud defaults (Claude Cloud, Cursor Cloud, Devin Cloud) list themselves whenever their local sibling is on
+ * (contracts settings.ts CLOUD_SIBLING_DRIVERS, implicitDefaultInstance). GOAT 2 runs cloud providers in a later part
+ * (PRD part2/providers), so the host never reports them; instead of v1's endless "Waiting for the server" they show
+ * switched off with that reason. Host-reported entries for these drivers win.
+ */
+export const GOAT2_CLOUD_DRIVERS = ["claudeCloud", "cursorCloud", "devinCloud"] as const;
+export function cloudPlaceholders(entries: ReadonlyArray<Goat2ProviderEntry>, checkedAt: string): Goat2ProviderEntry[] {
+  return GOAT2_CLOUD_DRIVERS.filter((driver) => !entries.some((e) => e.driver === driver)).map((driver) => ({
+    instanceId: driver,
+    driver,
+    enabled: false,
+    probe: {
+      installed: false,
+      version: null,
+      status: "disabled",
+      auth: { status: "unknown" },
+      models: [],
+      checkedAt,
+      message: "Cloud providers come in a later GOAT 2 release.",
+    },
+  }));
+}
+
+/**
+ * v1's provider settings list rows from settings.providerInstances (plus each driver's default slot,
+ * ProviderSettingsPanel.tsx:763-830). On GOAT 2 the host owns the instances, so each entry is folded in: driver,
+ * enablement, display name and the ACP registry agent (v1 acpRegistry config.agentId) come from the host; other
+ * config fields set in this window stay. An enabled, unnamed default slot stays implicit, as in v1.
+ */
+export function withHostInstances(settings: ServerSettings, entries: ReadonlyArray<Goat2ProviderEntry>): ServerSettings {
+  const instances: Record<string, ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]> = {
+    ...settings.providerInstances,
+  };
+  let changed = false;
+  for (const entry of entries) {
+    const existing = instances[entry.instanceId];
+    // v1 lists an unconfigured default slot only for its enabled-by-default drivers (Codex, Claude); every other
+    // instance the host reports is configured here, so it gets a row as it would in v1 once set up.
+    if (!existing && entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
+      && isUnconfiguredDefaultInstanceEnabled(ProviderInstanceId.make(entry.instanceId))) continue;
+    const config = entry.acpAgentId
+      ? { ...((existing?.config as object | undefined) ?? {}), agentId: entry.acpAgentId }
+      : existing?.config;
+    const next = {
+      ...existing,
+      driver: entry.driver as ServerSettings["providerInstances"][keyof ServerSettings["providerInstances"]]["driver"],
+      enabled: entry.enabled,
+      ...(entry.displayName ? { displayName: entry.displayName } : {}),
+      ...(config !== undefined ? { config } : {}),
+    };
+    if (JSON.stringify(next) !== JSON.stringify(existing)) {
+      instances[entry.instanceId] = next;
+      changed = true;
+    }
+  }
+  return changed ? { ...settings, providerInstances: instances as ServerSettings["providerInstances"] } : settings;
+}
 
 /** Server settings the provider screens read and write (favorites, provider instances). */
 export const goat2SettingsAtom: Atom.Writable<ServerSettings, ServerSettings> = Atom.make<ServerSettings>(

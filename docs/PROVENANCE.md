@@ -187,50 +187,51 @@ per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine g
 Source: goat-si/goat `origin/dev` 916b5ccc1b2. Layout: v1 `apps/web/src/<X>` -> `apps/web/src/v1/<X>`, v1 `packages/<pkg>/src/<Y>` -> `apps/web/src/v1/packages/<pkg>/src/<Y>`.
 Every lifted file is **verbatim** (byte-identical, imports included). The exact file list is `scripts/v1-lift.d/*.txt` (base.txt and providers.txt P2-M, timeline.txt and contracts.txt lane F) plus the pure modules `scripts/v1-lift.py` lifts transitively (AUTO_LIFT); `python3 scripts/v1-lift.py --check` fails if any lifted file differs from v1. Imports that leave the lift set resolve to the bridges below through `src/v1/aliases.json` (generated) or one-line re-export files at the mirrored path.
 
-Lifted: 703 files.
+Lifted: 717 files.
 
 | GOAT 2 path (under apps/web/src/v1/) | v1 path @916b5ccc | files | How |
 |---|---|---|---|
-| *.ts (top level) | apps/web/src/*.ts | 18 | verbatim |
+| *.ts (top level) | apps/web/src/* | 18 | verbatim |
 | appearance/ | apps/web/src/appearance/ | 1 | verbatim |
 | assets/fonts/ | apps/web/src/assets/fonts/ | 1 | verbatim |
 | browser/ | apps/web/src/browser/ | 1 | verbatim |
+| cloud/ | apps/web/src/cloud/ | 1 | verbatim |
 | components/ | apps/web/src/components/ | 7 | verbatim |
 | components/chat/ | apps/web/src/components/chat/ | 49 | verbatim |
 | components/pullRequest/ | apps/web/src/components/pullRequest/ | 1 | verbatim |
-| components/settings/ | apps/web/src/components/settings/ | 39 | verbatim |
+| components/settings/ | apps/web/src/components/settings/ | 44 | verbatim |
 | components/solar/ | apps/web/src/components/solar/ | 4 | verbatim |
-| components/ui/ | apps/web/src/components/ui/ | 33 | verbatim |
+| components/ui/ | apps/web/src/components/ui/ | 36 | verbatim |
 | desktop/ | apps/web/src/desktop/ | 1 | verbatim |
-| hooks/ | apps/web/src/hooks/ | 5 | verbatim |
-| lib/ | apps/web/src/lib/ | 11 | verbatim |
+| hooks/ | apps/web/src/hooks/ | 7 | verbatim |
+| lib/ | apps/web/src/lib/ | 12 | verbatim |
 | notes/ | apps/web/src/notes/ | 1 | verbatim |
-| packages/client-runtime/src/ (files) | packages/client-runtime/src/ | 17 | verbatim |
+| packages/client-runtime/src/ | packages/client-runtime/src/ | 17 | verbatim |
 | packages/client-runtime/src/connection/ | packages/client-runtime/src/connection/ | 3 | verbatim |
 | packages/client-runtime/src/environment/ | packages/client-runtime/src/environment/ | 3 | verbatim |
 | packages/client-runtime/src/errors/ | packages/client-runtime/src/errors/ | 6 | verbatim |
 | packages/client-runtime/src/goatBot/ | packages/client-runtime/src/goatBot/ | 8 | verbatim |
 | packages/client-runtime/src/state/ | packages/client-runtime/src/state/ | 9 | verbatim |
 | packages/client-runtime/src/work-log/ | packages/client-runtime/src/work-log/ | 12 | verbatim |
-| packages/contracts/src/ (files) | packages/contracts/src/ | 297 | verbatim |
+| packages/contracts/src/ | packages/contracts/src/ | 297 | verbatim |
 | packages/contracts/src/agentSurface/ | packages/contracts/src/agentSurface/ | 21 | verbatim |
 | packages/contracts/src/agentSurface/entries/ | packages/contracts/src/agentSurface/entries/ | 48 | verbatim |
-| packages/provider-acp-registry/src/ (files) | packages/provider-acp-registry/src/ | 3 | verbatim |
-| packages/provider-claude-cloud/src/ (files) | packages/provider-claude-cloud/src/ | 1 | verbatim |
-| packages/provider-core/src/ (files) | packages/provider-core/src/ | 1 | verbatim |
-| packages/provider-cursor/src/ (files) | packages/provider-cursor/src/ | 2 | verbatim |
-| packages/provider-devin-cloud/src/ (files) | packages/provider-devin-cloud/src/ | 2 | verbatim |
-| packages/provider-fx/src/ (files) | packages/provider-fx/src/ | 2 | verbatim |
-| packages/provider-grok/src/ (files) | packages/provider-grok/src/ | 2 | verbatim |
-| packages/provider-muse/src/ (files) | packages/provider-muse/src/ | 2 | verbatim |
-| packages/provider-opencode/src/ (files) | packages/provider-opencode/src/ | 2 | verbatim |
-| packages/provider-pi/src/ (files) | packages/provider-pi/src/ | 4 | verbatim |
-| packages/shared/src/ (files) | packages/shared/src/ | 64 | verbatim |
+| packages/provider-acp-registry/src/ | packages/provider-acp-registry/src/ | 3 | verbatim |
+| packages/provider-claude-cloud/src/ | packages/provider-claude-cloud/src/ | 1 | verbatim |
+| packages/provider-core/src/ | packages/provider-core/src/ | 1 | verbatim |
+| packages/provider-cursor/src/ | packages/provider-cursor/src/ | 2 | verbatim |
+| packages/provider-devin-cloud/src/ | packages/provider-devin-cloud/src/ | 2 | verbatim |
+| packages/provider-fx/src/ | packages/provider-fx/src/ | 2 | verbatim |
+| packages/provider-grok/src/ | packages/provider-grok/src/ | 2 | verbatim |
+| packages/provider-muse/src/ | packages/provider-muse/src/ | 2 | verbatim |
+| packages/provider-opencode/src/ | packages/provider-opencode/src/ | 2 | verbatim |
+| packages/provider-pi/src/ | packages/provider-pi/src/ | 4 | verbatim |
+| packages/shared/src/ | packages/shared/src/ | 66 | verbatim |
 | packages/source-control-azure-devops/src/shared/ | packages/source-control-azure-devops/src/shared/ | 2 | verbatim |
 | packages/source-control-bitbucket/src/shared/ | packages/source-control-bitbucket/src/shared/ | 2 | verbatim |
 | packages/source-control-core/src/shared/ | packages/source-control-core/src/shared/ | 2 | verbatim |
 | packages/source-control-cursor-origin/src/shared/ | packages/source-control-cursor-origin/src/shared/ | 2 | verbatim |
-| packages/source-control-definitions/src/ (files) | packages/source-control-definitions/src/ | 1 | verbatim |
+| packages/source-control-definitions/src/ | packages/source-control-definitions/src/ | 1 | verbatim |
 | packages/source-control-forgejo/src/shared/ | packages/source-control-forgejo/src/shared/ | 2 | verbatim |
 | packages/source-control-gitcafe/src/shared/ | packages/source-control-gitcafe/src/shared/ | 2 | verbatim |
 | packages/source-control-github/src/shared/ | packages/source-control-github/src/shared/ | 4 | verbatim |
@@ -320,6 +321,16 @@ Each seam file's header states the v1 path it replaces and why; the summary is t
 | state/session.ts | apps/web/src/state/session.ts | Seam for v1 apps/web/src/state/session.ts (goat 916b5ccc1b2): session grants for the one GOAT 2 environment. |
 | terminal/ghostty/surface.ts | apps/web/src/terminal/ghostty/surface.ts | Seam for v1 apps/web/src/terminal/ghostty/surface.ts (goat 916b5ccc1b2). GOAT 2 has no in-app terminal in Part 2, so a terminal sign-in cannot be shown; creating the surface fails and v1's ProviderAuthTerminal says so ("Could not load the sign-in terminal. Cancel and retry sign-in."). |
 | v1-entry.css | - | Entry for the v1 CSS (devlog 070 audit-3 residual): the copied v1 index.css stays byte-identical; Tailwind's source |
+| sidebarProjectGrouping.ts | apps/web/src/sidebarProjectGrouping.ts | Seam for v1 apps/web/src/sidebarProjectGrouping.ts (goat 916b5ccc1b2): settings scope needs only the project snapshot types, not v1's project store. |
+| goat2/BotModelSettings.tsx | - | Settings > GOAT Bot, Model row (Paper board 1QYE-2): v1's settings section and row (components/settings settingsLayout.tsx) with the GOAT 2 model picker. v1's goat-bot page has more rows (reply style, notes); those belong to the bot runtime (lane P2-E) and arrive with it. The choice is sent with change_thread on the bot's thread. |
+| goat2/Goat2ModelPicker.tsx | - | GOAT 2's model picker: v1's ProviderModelPicker with the entries and model options derived exactly as v1's GOAT Bot picker derives them (components/goatBot/useGoatBotModel.ts:28-38 at goat 916b5ccc1b2) for GOAT 2's one environment. The GOAT 2 frame owns where the choice goes (change_thread on the thread, docs/part2/provider-wire.md). |
+| goat2/ProvidersSettingsScreen.tsx | - | GOAT 2's Settings > Providers page: v1's providers route body (routes/_chat.settings.providers.tsx at goat 916b5ccc1b2) for GOAT 2's one environment (no project scopes, so no projectIds), inside the toast providers v1's root mounts (routes/__root.tsx:164-168). v1's SettingsPageShell (breadcrumb header, close button) is app chrome GOAT 2's own top bar replaces (Paper board 1PBB-2), so the panel renders directly in the |
+| goat2/SettingsNavFrame.tsx | apps/web/src/components/settings/SettingsSidebarNav.tsx | Seam for v1 apps/web/src/components/settings/SettingsSidebarNav.tsx (goat 916b5ccc1b2): provide v1 sidebar context at the GOAT 2 surface boundary. |
+| goat2/i18n.tsx | - | v1's gt-react setup (apps/web/src/i18n/initializeI18n.ts + I18nProvider.tsx at goat 916b5ccc1b2) for the lifted surfaces. GOAT 2 is English first (owner rule), and English is v1's source text, so no translation chunk is loaded: v1's initializeGTSPA call with only its default locale, and its GTProvider with empty translations. |
+| components/sidebar/SidebarChrome.tsx | apps/web/src/components/sidebar/SidebarChrome.tsx | Seam for v1 apps/web/src/components/sidebar/SidebarChrome.tsx (goat 916b5ccc1b2): GOAT 2's own rail replaces the utility menu. |
+| components/settings/useAvailableSettingsSearchItems.ts | apps/web/src/components/settings/useAvailableSettingsSearchItems.ts | Seam for v1 apps/web/src/components/settings/useAvailableSettingsSearchItems.ts (goat 916b5ccc1b2): GOAT 2 exposes only the provider settings rows. |
+| components/settings/useSettingsSectionPrefetch.ts | apps/web/src/components/settings/useSettingsSectionPrefetch.ts | Seam for v1 apps/web/src/components/settings/useSettingsSectionPrefetch.ts (goat 916b5ccc1b2): GOAT 2 does not expose v1 route or environment prefetching. |
+| components/clerk/GoatConnectSidebarSignIn.tsx | apps/web/src/components/clerk/GoatConnectSidebarSignIn.tsx | Seam for v1 apps/web/src/components/clerk/GoatConnectSidebarSignIn.tsx (goat 916b5ccc1b2): GOAT 2 has no cloud sign-in UI. |
 
 ### Build wiring for the lifted tree (P2-M for lanes F and P2-M; devlog 070 Revision A2 and audit-3 residuals)
 
@@ -337,3 +348,19 @@ Each seam file's header states the v1 path it replaces and why; the summary is t
 | apps/web/e2e/baseline.spec.ts-snapshots/*.png | - | Recaptured on mac-studio from clean goat2_ui 6f79579 (the origin-Mac captures differ by font rasterization before any change). |
 
 Global names (audit-3 residual): v1's @keyframes (fleet-*, goat-arrive, goat-mobile-*, goat-onboarding-signal, live-activity-focus*, live-tool-shine, preview-loading-progress, scroll-edge-fade, settings-search-target-pulse, sidebar-drag-label-reveal, status-ping, status-pulse, Tailwind's spin) and the Pretendard @font-face stay global. Checked against GOAT 2 CSS and inline styles (apps/web/src outside v1, packages/*): GOAT 2 defines and uses only goat2-spin and goat2-chip-spin and never names Pretendard, so nothing collides.
+
+### GOAT 2 provider surfaces (lane P2-M, 2026-11-29)
+
+New GOAT 2 code around the lifted v1 provider screens; no v1 counterpart unless named.
+
+| GOAT 2 path | v1 source @916b5ccc | How / why |
+|---|---|---|
+| docs/part2/provider-wire.md | packages/contracts/src/{rpc,server,providerSetup,acpRegistry}.ts (names and shapes) | owner-approved provider wire; lane C implements the frames, lane E the host module |
+| apps/web/src/providers/wire.ts | the same v1 shapes, via lane C's generated TS (goat2_contracts_step2 1a1b123) | field-for-field mirror until contracts step 2 reaches goat2 |
+| apps/web/src/providers/hostProviderPort.ts | v1 WS method names (rpc.ts WS_METHODS) | answers the v1 methods the screens call with provider frames; v1 methods GOAT 2 does not serve (provider self-update, credential sign-in steps, install removal) are refused with a sentence |
+| apps/web/src/host/client.ts (watchProviders, providerCommand) | - | providers subscription (resubscribe on reconnect, stale subIds dropped) and provider commands |
+| apps/web/src/host/fakeProviders.ts + fakeHost.ts delegation + HostProvider scenes | Paper boards 1PBB-2 / 1QAN-2 (drawn from v1), v1 model defaults (contracts model.ts:126-160), live ACP registry index | demo provider world for scenes and the prototype; flows step through v1's phases; never signs in or installs for real |
+| apps/web/src/settings/SettingsMode.tsx, App.tsx settings mode, ui-state settingsPath | routes/_chat.settings.providers.tsx | GOAT 2 frame (rail + v1 settings nav + page); Providers and GOAT Bot pages live, other sections Planned |
+| apps/web/src/App.tsx BotModelPicker / BotSettingsPage / useThreadModelChange | components/goatBot/GoatBotModelPicker.tsx | composer chip and bot settings use v1's picker; the choice is change_thread on the bot's thread |
+| apps/web/e2e/providers.spec.ts, src/providers/hostProviderPort.test.ts, src/v1/seam/goat2/providerPort.test.ts | - | the 11 local kinds listed with state, sign-in, registry add, pickers, nav; adapter frames; fake data through v1 schemas |
+| apps/web/e2e/baseline.spec.ts-snapshots (2026-11-29) | - | recaptured after the composer chip became v1's picker trigger (v1 shows the short model name, e.g. "6.1 Sol") |

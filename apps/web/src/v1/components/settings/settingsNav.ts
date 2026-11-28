@@ -1,0 +1,113 @@
+import { msg } from "gt-react";
+
+import type { SettingsPath } from "./settingsSearch";
+
+export interface SettingsNavGroup {
+  readonly label: string;
+  readonly paths: ReadonlyArray<SettingsPath>;
+}
+
+/** Diagnostics stays out of the sidebar; General links to it. */
+export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
+  {
+    label: msg("App"),
+    paths: [
+      "/settings/general",
+      "/settings/appearance",
+      "/settings/keybindings",
+      "/settings/snap-shot",
+      "/settings/beta",
+    ],
+  },
+  {
+    label: msg("Agents"),
+    paths: [
+      "/settings/providers",
+      "/settings/memory",
+      "/settings/integrations",
+      "/settings/source-control",
+    ],
+  },
+  {
+    label: msg("Projects & threads"),
+    paths: ["/settings/projects", "/settings/storage", "/settings/archived"],
+  },
+  {
+    label: msg("Automations"),
+    paths: ["/settings/goat-bot", "/settings/decision-inbox", "/settings/scheduled-tasks"],
+  },
+  {
+    label: msg("Machines"),
+    paths: ["/settings/hub", "/settings/connections"],
+  },
+];
+
+export interface SettingsPageLink {
+  readonly label: string;
+  readonly to: SettingsPath;
+  readonly hash?: string;
+}
+
+export interface SettingsPageLead {
+  readonly text: string;
+  readonly related?: ReadonlyArray<SettingsPageLink>;
+}
+
+/**
+ * One line at the top of each page saying what it holds. "Hub" names one thing everywhere: the
+ * GOAT server phones pair with, which also runs the fleet and whose OpenCodex is the Home.
+ */
+export const SETTINGS_PAGE_LEADS: Readonly<Partial<Record<SettingsPath, SettingsPageLead>>> = {
+  "/settings/general": {
+    text: msg("Defaults for new threads, notifications, updates, and how GOAT behaves day to day."),
+  },
+  "/settings/appearance": { text: msg("Theme, fonts, and layout of this app on this device.") },
+  "/settings/keybindings": { text: msg("Keyboard shortcuts for this app.") },
+  "/settings/snap-shot": { text: msg("Capture part of your screen and attach it to a thread.") },
+  "/settings/providers": {
+    text: msg(
+      "The coding agents GOAT runs, with their accounts and models. Codex can send its model requests through OpenCodex Home, the hub's OpenCodex that keeps every sign-in.",
+    ),
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
+  },
+  "/settings/memory": { text: msg("What agents remember across threads, and who can read it.") },
+  "/settings/integrations": {
+    text: msg(
+      "Tools agents can use besides your code: the browser, GOAT tools, simulators, and computer use.",
+    ),
+  },
+  "/settings/source-control": {
+    text: msg(
+      "Git, pull requests, GitHub accounts, and the text agents write for commits and reviews.",
+    ),
+  },
+  "/settings/projects": { text: msg("Settings for the selected project.") },
+  "/settings/storage": {
+    text: msg("Where worktrees live, when they are cleaned up, and artifacts and logs."),
+  },
+  "/settings/archived": { text: msg("Threads you archived. Restore or delete them here.") },
+  "/settings/goat-bot": {
+    text: msg(
+      "GOAT Bot answers your messages and starts work for you. Runs on picks the environment it lives on, which can differ from the hub.",
+    ),
+  },
+  "/settings/decision-inbox": {
+    text: msg("Questions agents left for you, each with a recommendation and a deadline."),
+  },
+  "/settings/scheduled-tasks": { text: msg("Prompts that run on a schedule.") },
+  "/settings/hub": {
+    text: msg(
+      "The hub is the GOAT server your phone pairs with. It checks your other devices, holds cloud runs, and its OpenCodex is the OpenCodex Home that keeps every sign-in. Make only one environment the hub.",
+    ),
+    related: [
+      { label: msg("Connect your phone"), to: "/settings/connections", hash: "hub-device" },
+      { label: msg("OpenCodex Home for Codex"), to: "/settings/providers" },
+    ],
+  },
+  "/settings/connections": {
+    text: msg(
+      "How this app reaches your environments, and how phones, browsers, and agents reach this one.",
+    ),
+    related: [{ label: msg("Hub"), to: "/settings/hub" }],
+  },
+};

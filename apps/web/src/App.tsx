@@ -14,6 +14,9 @@ import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
 import { NewBotDialog } from "./bot-home/NewBot.tsx";
 import { ThreadMode } from "./threads/ThreadMode.tsx";
 import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
+import { SettingsMode } from "./settings/SettingsMode.tsx";
+import { BotModelSettings, ModelPicker, SettingsSidebarNav, V1Boundary, installProviderPort } from "@v1/surfaces";
+import { hostProviderPort } from "./providers/hostProviderPort.ts";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -32,7 +35,13 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
 function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
   const [ui, setUi] = useUi(store);
   const snap = useHost();
+  const client = useClient();
   const { desktop, build } = useHostContext();
+  // The lifted v1 provider screens read providers through this port (docs/part2/provider-wire.md).
+  useEffect(() => {
+    installProviderPort(hostProviderPort(client));
+    return () => installProviderPort(null);
+  }, [client]);
   const rows = useMemo(() => botRows(snap.state), [snap.state]);
   const main = rows.find((r) => r.role === "main") ?? null;
   const bot = rows.find((r) => r.botId === ui.botId) ?? main;
@@ -65,7 +74,9 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
   ) : null;
   const topRight = (
     <P.TopRight>
-      {bot ? <P.TopTitle face={<Face bot={bot} size={20} />} name={bot.name} button={{}} /> : <span />}
+      {ui.mode === "settings"
+        ? (main ? <P.TopTitle face={<Face bot={main} size={20} />} name="Settings" button={{}} /> : <span />)
+        : bot ? <P.TopTitle face={<Face bot={bot} size={20} />} name={bot.name} button={{}} /> : <span />}
       <P.TopActions split={plannedProps("multiplexer")} share={plannedProps("share")} stamp={stamp}
         panel={btn("Toggle right panel", () => setUi((s) => ({ panelOpen: !s.panelOpen })), { "aria-pressed": ui.panelOpen, "data-active": ui.panelOpen })} />
     </P.TopRight>
@@ -94,7 +105,7 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
         <P.RailRoutines button={plannedProps("routines")} />
         <P.RailMachines button={plannedProps("machines")} />
       </>}
-      bottom={<><P.RailSearch button={plannedProps("search")} /><P.RailSettings button={plannedProps("settings-accounts")} /></>}
+      bottom={<><P.RailSearch button={plannedProps("search")} /><P.RailSettings button={btn("Settings", () => setUi({ mode: "settings" }), { "data-active": ui.mode === "settings", title: "Settings" })} /></>}
     />
   );
 
@@ -106,6 +117,17 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
     return (
       <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
         <ThreadMode ui={ui} setUi={setUi} rail={rail} lights={desktop ? null : <P.ThreadTrafficLights />} stamp={stamp} toggleSidebar={toggleSidebar} />
+      </div>
+    );
+  }
+  if (ui.mode === "settings") {
+    return (
+      <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
+        <SettingsMode ui={ui} setUi={setUi} top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail}
+          nav={<V1Boundary data-settings-nav="" style={{ width: 256, flexShrink: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "auto", background: "var(--sidebar)" }}>
+            <SettingsSidebarNav pathname={ui.settingsPath ?? "/settings/providers"} placement="page" />
+          </V1Boundary>}
+          botPage={(botId) => <BotSettingsPage bot={rows.find((r) => r.botId === botId) ?? main} />} />
       </div>
     );
   }
@@ -235,6 +257,39 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 
 // ---------------------------------------------------------------- chat
 
+/** The composer's model chip: v1's picker over the host's providers (board 1QM8-2). The choice applies from the bot's
+ * next turn through change_thread on its thread (docs/part2/provider-wire.md); before its first thread it is disabled. */
+export function useThreadModelChange(threadId: string | null) {
+  const client = useClient();
+  const [error, setError] = useState<string | null>(null);
+  const change = threadId === null ? null : (selection: { instanceId: string; model: string }) => {
+    setError(null);
+    void client.command({ type: "change_thread", threadId, modelSelection: { instanceId: selection.instanceId, model: selection.model } }).then((r) => {
+      if (!r.ok) setError(r.error?.message ?? "Could not change the model.");
+    });
+  };
+  return { change, error };
+}
+
+/** Settings > GOAT Bot: the bot's model (board 1QYE-2), the same picker and change_thread as the composer. */
+function BotSettingsPage({ bot }: { bot: BotRowData | null }) {
+  const { change } = useThreadModelChange(bot?.threadId ?? null);
+  if (!bot) return <div style={{ padding: 32, color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13 }}>Loading bots…</div>;
+  const selection = bot.card?.engine.modelSelection ?? { instanceId: "codex", model: "gpt-6.1-sol" };
+  return <BotModelSettings botName={bot.name} instanceId={selection.instanceId} model={selection.model} onChange={change} />;
+}
+
+function BotModelPicker({ bot }: { bot: BotRowData }) {
+  const selection = bot.card?.engine.modelSelection ?? { instanceId: "codex", model: "gpt-6.1-sol" };
+  const { change, error } = useThreadModelChange(bot.threadId);
+  return (
+    <V1Boundary style={{ display: "contents" }} title={error ?? undefined}>
+      <ModelPicker composer instanceId={selection.instanceId} model={selection.model} popupAlign="end"
+        ariaLabel={`${bot.name} model: ${selection.model}`} disabled={change === null} onChange={(s) => change?.(s)} />
+    </V1Boundary>
+  );
+}
+
 function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string) => void }) {
   const client = useClient();
   const snap = useHost();
@@ -279,7 +334,7 @@ function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string
           style={{ color: "#0D0D0D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 14, lineHeight: "20px" }} />}
         plus={plannedProps("attachments")}
         send={btn("Send", send, { "aria-disabled": draft.trim() === "", "data-send": "" })}
-        picker={<P.ModelChip glyph={<ProviderGlyph driver="codex" size={16} />} model={bot.card?.engine.modelSelection.model ?? "gpt-6.1-sol"} button={plannedProps("runtime-picker-change")} />} />}
+        picker={<BotModelPicker bot={bot} />} />}
     />
   );
 }
