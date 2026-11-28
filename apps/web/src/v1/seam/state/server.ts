@@ -170,15 +170,25 @@ const updateSettingsCommand: EnvironmentAtomCommand<Target<SettingsUpdateInput>,
         }
       }
       if (unsaved.length) throw new Error(`GOAT does not save this setting yet: ${unsaved.join(", ")}.`);
+      const touched: ProviderInstanceId[] = [];
       for (const id of ids) {
         const before = current.providerInstances[id];
         const after = next.providerInstances[id]!;
         const now = wireInstance(id, after, after.enabled !== false);
         const was = before ? wireInstance(id, before, before.enabled !== false) : null;
-        if (JSON.stringify(now) !== JSON.stringify(was)) await currentProviderPort().call("goat2.setProviderInstance", now);
+        if (JSON.stringify(now) === JSON.stringify(was)) continue;
+        await currentProviderPort().call("goat2.setProviderInstance", now);
+        touched.push(id);
       }
-      registry.set(goat2SettingsAtom, next);
-      return AsyncResult.success(next);
+      // Provider frames may have updated the settings while the host answered; keep them and lay only the instances
+      // this write sent on top (the host's next frame replaces those too).
+      const latest = registry.get(goat2SettingsAtom);
+      const saved = touched.length === 0 ? latest : {
+        ...latest,
+        providerInstances: { ...latest.providerInstances, ...Object.fromEntries(touched.map((id) => [id, next.providerInstances[id]!])) },
+      };
+      registry.set(goat2SettingsAtom, saved);
+      return AsyncResult.success(saved);
     } catch (error) {
       return AsyncResult.failure(Cause.fail(error instanceof Error ? error : new Error(String(error))));
     }

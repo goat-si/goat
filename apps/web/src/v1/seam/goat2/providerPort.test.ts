@@ -48,6 +48,15 @@ describe("provider seam: fake host data through v1 schemas", () => {
     expect(kimiAfter.displayName).toBeUndefined();
     expect(kimiAfter.config).toEqual({ env: "x", agentId: "kimi-code" });
   });
+  it("a default slot with config of its own stays configured when its name is cleared (review 4)", () => {
+    const entries = demoProviderEntries(AT) as unknown as Goat2ProviderEntry[];
+    const named = withHostInstances(DEFAULT_SERVER_SETTINGS, entries.map((e) => (e.instanceId === "codex" ? { ...e, displayName: "Work Codex" } : e)));
+    const codex = named.providerInstances["codex" as never] as Record<string, unknown>;
+    const withConfig = { ...named, providerInstances: { ...named.providerInstances, ["codex" as never]: { ...codex, config: { binaryPath: "/opt/bin/codex" } } } };
+    const after = withHostInstances(withConfig, entries).providerInstances["codex" as never] as Record<string, unknown>;
+    expect(after).toMatchObject({ driver: "codex", enabled: true, config: { binaryPath: "/opt/bin/codex" } });
+    expect(after.displayName).toBeUndefined();
+  });
   it("drivers the host does not report show switched off with the reason; host entries win", () => {
     const codexOnly = demoProviderEntries(AT).filter((e) => e.instanceId === "codex") as unknown as Goat2ProviderEntry[];
     const placeholders = unservedPlaceholders(codexOnly, AT);

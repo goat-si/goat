@@ -43,4 +43,18 @@ describe("seam updateSettings", () => {
     expect(calls).toEqual([]);
     expect(registry.get(goat2SettingsAtom)).toEqual(DEFAULT_SERVER_SETTINGS);
   });
+  it("a provider frame that lands while the host answers is kept; only the sent instance is laid on top (review 4)", async () => {
+    const { registry, run } = setup();
+    const pi = ProviderInstanceId.make("pi");
+    installProviderPort({ subscribe: () => () => {}, watch: () => () => {}, call: async () => {
+      const s = registry.get(goat2SettingsAtom);
+      registry.set(goat2SettingsAtom, { ...s, providerInstances: { ...s.providerInstances, [pi]: { driver: "pi", enabled: false } } as never });
+      return {};
+    } });
+    const r = await run({ patch: {}, providerInstanceMutation: { operation: "upsert", instanceId: "grok", instance: { driver: "grok", enabled: false } } });
+    expect(r._tag).toBe("Success");
+    const instances = registry.get(goat2SettingsAtom).providerInstances;
+    expect(instances[pi]).toMatchObject({ driver: "pi", enabled: false });
+    expect(instances[ProviderInstanceId.make("grok")]).toMatchObject({ driver: "grok", enabled: false });
+  });
 });

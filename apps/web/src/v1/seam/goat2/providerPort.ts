@@ -192,12 +192,15 @@ export function withHostInstances(settings: ServerSettings, entries: ReadonlyArr
   const instances: Record<string, Instance> = {};
   for (const entry of entries) {
     const existing = previous[entry.instanceId];
-    // v1 lists an unconfigured default slot only for its enabled-by-default drivers (Codex, Claude); every other
-    // instance the host reports is configured here, so it gets a row as it would in v1 once set up.
-    if (entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
-      && isUnconfiguredDefaultInstanceEnabled(ProviderInstanceId.make(entry.instanceId))) continue;
     const { displayName: _name, config: oldConfig, ...kept } = (existing ?? {}) as Instance & { displayName?: string; config?: unknown };
     const { agentId: _agent, ...otherConfig } = (oldConfig && typeof oldConfig === "object" ? oldConfig : {}) as Record<string, unknown>;
+    const { driver: _driver, enabled: _enabled, ...otherFields } = kept as Record<string, unknown>;
+    // v1 lists an unconfigured default slot only for its enabled-by-default drivers (Codex, Claude); every other
+    // instance the host reports is configured here, so it gets a row as it would in v1 once set up. A default slot
+    // with config of its own set in this window stays configured, so that config is kept.
+    if (entry.instanceId === entry.driver && entry.enabled && !entry.displayName && !entry.acpAgentId
+      && Object.keys(otherConfig).length === 0 && Object.keys(otherFields).length === 0
+      && isUnconfiguredDefaultInstanceEnabled(ProviderInstanceId.make(entry.instanceId))) continue;
     const config = entry.acpAgentId ? { ...otherConfig, agentId: entry.acpAgentId } : Object.keys(otherConfig).length > 0 ? otherConfig : undefined;
     instances[entry.instanceId] = {
       ...kept,
