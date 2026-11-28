@@ -16,6 +16,13 @@ pub struct Roots {
 }
 
 pub fn check(roots: &Roots, docs: &[PathBuf]) -> Result<String, String> {
+    check_with_options(roots, docs, false)
+}
+pub fn check_with_options(
+    roots: &Roots,
+    docs: &[PathBuf],
+    skip_missing_roots: bool,
+) -> Result<String, String> {
     let mappings = [
         ("claude-agent-sdk-python/", &roots.sdk_py),
         ("@anthropic-ai/claude-agent-sdk@0.3.276/", &roots.sdk_ts),
@@ -26,13 +33,16 @@ pub fn check(roots: &Roots, docs: &[PathBuf]) -> Result<String, String> {
     let mut output = String::new();
     let mut bad = 0;
     let mut ok = 0;
+    let mut skipped = 0;
     if docs.is_empty() {
         return Err("no input files".into());
     }
     for (prefix, root) in mappings {
         if !root.is_dir() {
             output.push_str(&format!("ROOT-MISSING {} -> {}\n", prefix, root.display()));
-            bad += 1;
+            if !skip_missing_roots {
+                bad += 1;
+            }
             continue;
         }
         if root.join(".git").exists() {
@@ -83,10 +93,15 @@ pub fn check(roots: &Roots, docs: &[PathBuf]) -> Result<String, String> {
                 let fail = |reason: &str, out: &mut String| {
                     out.push_str(&format!("{reason} {}:{} {s}\n", doc.display(), line + 1))
                 };
-                match validate(s, &mappings) {
-                    Ok(()) => {
+                match validate(s, &mappings, skip_missing_roots) {
+                    Ok(false) => {
                         ok += 1;
                         count += 1;
+                    }
+                    Ok(true) => {
+                        skipped += 1;
+                        count += 1;
+                        output.push_str(&format!("SKIPPED {}:{} {s}\n", doc.display(), line + 1));
                     }
                     Err(reason) => {
                         bad += 1;
@@ -100,7 +115,10 @@ pub fn check(roots: &Roots, docs: &[PathBuf]) -> Result<String, String> {
             bad += 1;
         }
     }
-    output.push_str(&format!("files={} refs ok={ok} bad={bad}\n", docs.len()));
+    output.push_str(&format!(
+        "files={} refs ok={ok} bad={bad} skipped={skipped}\n",
+        docs.len()
+    ));
     if bad == 0 { Ok(output) } else { Err(output) }
 }
 fn looks_like(s: &str) -> bool {
@@ -115,7 +133,14 @@ fn looks_like(s: &str) -> bool {
                 .is_some_and(|c| !c.is_ascii_whitespace() && *c != b'/')
     })
 }
-fn validate(s: &str, mappings: &[(&str, &PathBuf)]) -> Result<(), String> {
+pub fn validate_v1_ref(s: &str, root: &PathBuf) -> Result<(), String> {
+    validate(s, &[("", root)], false).map(|_| ())
+}
+fn validate(
+    s: &str,
+    mappings: &[(&str, &PathBuf)],
+    skip_missing_roots: bool,
+) -> Result<bool, String> {
     let (path, ranges) = s.rsplit_once(':').ok_or("MALFORMED")?;
     let (base, ext) = path.rsplit_once('.').ok_or("MALFORMED")?;
     if base.is_empty()
@@ -129,6 +154,9 @@ fn validate(s: &str, mappings: &[(&str, &PathBuf)]) -> Result<(), String> {
     }
     if path.starts_with('/') || !path.contains('/') {
         return Err("BARE-OR-ABSOLUTE".into());
+    }
+    if path.split('/').any(|component| component == "..") {
+        return Err("ESCAPE".into());
     }
     let mut numbers = Vec::new();
     for part in ranges.split(',') {
@@ -150,6 +178,12 @@ fn validate(s: &str, mappings: &[(&str, &PathBuf)]) -> Result<(), String> {
         .iter()
         .find(|(p, _)| path.starts_with(p))
         .ok_or("NO-ROOT")?;
+    if numbers.iter().any(|(a, b)| *a == 0 || a > b) {
+        return Err("MALFORMED".into());
+    }
+    if !root.is_dir() && skip_missing_roots {
+        return Ok(true);
+    }
     let root = root.canonicalize().map_err(|_| "NO-ROOT")?;
     let relative = &path[prefix.len()..];
     // Canonicalize the nearest existing parent to detect escapes even for missing leaves.
@@ -177,7 +211,7 @@ fn validate(s: &str, mappings: &[(&str, &PathBuf)]) -> Result<(), String> {
     if numbers.iter().any(|(a, b)| *a == 0 || a > b || *b > n) {
         return Err(format!("RANGE (file has {n} lines)"));
     }
-    Ok(())
+    Ok(false)
 }
 #[allow(dead_code)]
 fn _path(_: &Path) {}

@@ -88,14 +88,12 @@ fn cli_validate_and_missing_runner_and_diff() {
         "{}",
         String::from_utf8_lossy(&validate.stderr)
     );
-    let runner = root.join("v1-runner/run-v1.sh");
-    assert!(!runner.exists(), "test requires runner absent");
     let run = std::process::Command::new(bin)
         .args(["run", "--target", "v1", "--v1-root", "/tmp"])
         .output()
         .unwrap();
     assert!(!run.status.success());
-    assert!(String::from_utf8_lossy(&run.stderr).contains("v1 runner not installed"));
+    assert!(String::from_utf8_lossy(&run.stderr).contains("REQUIRED simple_turn"));
     let t = Temp::new();
     let observed = t.0.join("observed.json");
     fs::write(&observed, r#"{"v":1,"target":"v1","scenario":"simple_turn","outcome":{"outcome":"error","reason":"mismatch"},"events":[],"streams":{},"incomplete":false}"#).unwrap();

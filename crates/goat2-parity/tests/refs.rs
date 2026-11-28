@@ -71,6 +71,33 @@ fn absolute_path_ref_fails() {
     let p = f.doc("absolute.md", "`/tmp/a/f.rs:1`");
     assert!(check(&f.roots, &[p]).is_err());
 }
+#[test]
+fn v1_scenario_refs_check_missing_and_ranges() {
+    let f = Fixture::new();
+    assert!(goat2_parity::refs::validate_v1_ref("a/f.rs:2", &f.roots.v1).is_ok());
+    assert!(goat2_parity::refs::validate_v1_ref("a/missing.rs:1", &f.roots.v1).is_err());
+    assert!(goat2_parity::refs::validate_v1_ref("a/f.rs:3", &f.roots.v1).is_err());
+}
+#[test]
+fn skip_missing_roots_counts_refs_but_preserves_other_errors() {
+    let mut f = Fixture::new();
+    f.roots.sdk_py = f.dir.join("missing");
+    let doc = f.doc(
+        "skip.md",
+        "`claude-agent-sdk-python/a/file.py:1`\n`a/f.rs:1`\n",
+    );
+    assert!(check(&f.roots, std::slice::from_ref(&doc)).is_err());
+    let result = goat2_parity::refs::check_with_options(&f.roots, &[doc], true).unwrap();
+    assert!(
+        result.contains("SKIPPED") && result.contains("skipped=1"),
+        "{result}"
+    );
+    let bad = f.doc(
+        "other.md",
+        "`claude-agent-sdk-python/a/file.py:1`\n`a/f.rs:3`\n",
+    );
+    assert!(goat2_parity::refs::check_with_options(&f.roots, &[bad], true).is_err());
+}
 macro_rules! passing_root {
     ($name:ident, $field:ident, $prefix:literal) => {
         #[test]

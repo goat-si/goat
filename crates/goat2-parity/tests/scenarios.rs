@@ -176,3 +176,24 @@ fn pinned_step_prompts_equal_stored_outbound_frame_text() {
         }
     }
 }
+
+#[test]
+fn scenario_v1_refs_resolve_when_root_available() {
+    let Some(root) = std::env::var_os("GOAT_V1_ROOT") else {
+        println!("SKIPPED scenario v1Refs: GOAT_V1_ROOT unset");
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let scenarios = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scenarios");
+    for entry in std::fs::read_dir(scenarios).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.is_dir() {
+            continue;
+        }
+        let scenario = goat2_parity::scenario::LoadedScenario::load(&path).unwrap();
+        for reference in &scenario.scenario.v1_refs {
+            goat2_parity::refs::validate_v1_ref(reference, &root)
+                .unwrap_or_else(|e| panic!("{}: {reference}: {e}", scenario.scenario.name));
+        }
+    }
+}
