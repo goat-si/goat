@@ -18,6 +18,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import { McpSchema, McpServer } from "effect/ai";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
@@ -623,6 +624,7 @@ it.effect("a drain that loses a thread with delete intent does not invent a fail
       1, 'running', ${at}, 'delete-key', ${at}, ${at}
     )`;
     yield* Effect.gen(function* () {
+      yield* TestClock.adjust("5 seconds");
       const read = yield* Queue.take(f.calls);
       expect(read.call.tool).toBe("goat_origin_reports_wait");
       yield* Queue.offer(
