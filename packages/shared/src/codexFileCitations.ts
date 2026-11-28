@@ -19,7 +19,11 @@ function citationLabel(path: string): string {
 }
 
 function markdownDestinationPath(path: string): string {
-  return path.replaceAll("%", "%25").replaceAll("#", "%23").replaceAll("?", "%3F");
+  const destination = path.replaceAll("%", "%25").replaceAll("#", "%23").replaceAll("?", "%3F");
+  if (/^\/\/[^/\\]+[\/\\][^/\\]/.test(path)) {
+    return `\\\\${destination.slice(2).replaceAll("/", "\\")}`;
+  }
+  return destination;
 }
 
 export function resolveCodexFileCitationLink(

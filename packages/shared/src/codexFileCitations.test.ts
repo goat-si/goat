@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { codexFileCitationMarkdown, resolveCodexFileCitationLink } from "./codexFileCitations.ts";
+import { extractMarkdownLinkHrefs, resolveMarkdownFileLinkTarget } from "./markdownLinks.ts";
 
 describe("resolveCodexFileCitationLink", () => {
   it("resolves the attributes emitted by Codex", () => {
@@ -30,6 +31,33 @@ describe("resolveCodexFileCitationLink", () => {
       label: "main.ts",
       lineRangeStart: 42,
     });
+  });
+
+  it("opens forward-slash UNC citations only in the workspace share", () => {
+    for (const host of ["files", "localhost"]) {
+      const cwd = `\\\\${host}\\team\\repo`;
+      const citation = resolveCodexFileCitationLink({
+        path: `//${host}/team/repo/src/app.ts`,
+        line_range_start: "7",
+      });
+      expect(citation).not.toBeNull();
+      if (!citation) return;
+      const copied = extractMarkdownLinkHrefs(codexFileCitationMarkdown(citation))[0];
+      for (const href of [citation.href, copied]) {
+        expect(resolveMarkdownFileLinkTarget(href, cwd)).toBe(`${cwd}\\src\\app.ts:7`);
+      }
+    }
+    for (const path of [
+      "//other/team/repo/src/app.ts",
+      "//files/other/repo/src/app.ts",
+      "//localhost/team/repo/src/app.ts",
+    ]) {
+      const citation = resolveCodexFileCitationLink({ path, line_range_start: "7" });
+      expect(resolveMarkdownFileLinkTarget(citation?.href, "\\\\files\\team\\repo")).toBeNull();
+    }
+    expect(resolveCodexFileCitationLink({ path: "///Users/me/repo/src/app.ts" })?.href).toBe(
+      "///Users/me/repo/src/app.ts",
+    );
   });
 
   it("rejects missing paths and invalid line numbers", () => {
