@@ -144,6 +144,7 @@ pub fn finished(run: &str, outcome: RunOutcome) -> LogEvent {
         run_id: RunId::new(run),
         outcome,
         reason: None,
+        token_usage: None,
     })
 }
 

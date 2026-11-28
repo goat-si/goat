@@ -39,6 +39,7 @@ pub fn initial(
         card_seq: 0,
         open_asks: 0,
         unread: false,
+        context_usage: None,
     };
     (card, Fold::default())
 }
@@ -247,6 +248,9 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
         }
         LogEvent::RunFinished(e) => {
             if is_active(fold, &e.run_id) {
+                if let Some(usage) = &e.token_usage {
+                    card.context_usage = Some(usage.clone());
+                }
                 let run_inputs = std::mem::take(&mut fold.active_run_input_ids);
                 if fold.active_run_reached_engine {
                     for id in &run_inputs {

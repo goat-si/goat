@@ -482,3 +482,32 @@ fn open_asks_counts_requests_for_a_person_and_not_resend_holds() {
     assert_eq!(store.card(&t).unwrap().unwrap().open_asks, 0);
     assert_eq!(replay(dir.path(), "t").0.open_asks, 0);
 }
+
+#[test]
+fn usage_fold_agrees_with_replay_and_checkpoint_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = open(dir.path());
+    let id = tid("usage");
+    store
+        .create_thread(Some(id.clone()), created("usage", "/w"))
+        .unwrap();
+    let usage: ThreadTokenUsageSnapshot =
+        serde_json::from_value(serde_json::json!({"usedTokens": 23})).unwrap();
+    let mut run = full_run("r1", "i1", "one");
+    if let LogEvent::RunFinished(end) = run.last_mut().unwrap() {
+        end.token_usage = Some(usage.clone());
+    } else {
+        panic!("expected run finished");
+    }
+    let first = store.append(&id, run).unwrap();
+    assert_eq!(first.card.context_usage, Some(usage.clone()));
+    let second = store.append(&id, full_run("r2", "i2", "two")).unwrap();
+    assert_eq!(second.card.context_usage, Some(usage.clone()));
+    assert_eq!(
+        replay(dir.path(), "usage").0.context_usage,
+        Some(usage.clone())
+    );
+    drop(store);
+    let (store, _) = open(dir.path());
+    assert_eq!(store.card(&id).unwrap().unwrap().context_usage, Some(usage));
+}
