@@ -3,4 +3,8 @@
 /**
  * v1 `DecisionEscalateInput` (MCP `decision.escalate`): only the asking thread's parent.
  */
-export type DecisionEscalateInput = { id: string, reason: string, };
+export type DecisionEscalateInput = { id: string, 
+/**
+ * 1 to 2000 characters, not blank.
+ */
+reason: string, };

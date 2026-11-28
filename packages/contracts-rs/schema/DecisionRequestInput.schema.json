@@ -36,6 +36,7 @@
       ]
     },
     "options": {
+      "description": "1 to 20 options (v1); enforced in serde and the JSON Schema.",
       "items": {
         "$ref": "#/$defs/DecisionOption"
       },

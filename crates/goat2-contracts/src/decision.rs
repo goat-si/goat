@@ -127,6 +127,8 @@ pub struct DecisionItem {
 pub struct DecisionRequestInput {
     pub title: String,
     pub context: String,
+    /// 1 to 20 options (v1); enforced in serde and the JSON Schema.
+    #[serde(deserialize_with = "decision_options")]
     #[schemars(length(min = 1, max = 20))]
     pub options: Vec<DecisionOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,7 +163,9 @@ pub struct DecisionAnswerInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub decision: Option<DecisionApprovalAnswer>,
-    #[schemars(length(min = 1, max = 2000))]
+    /// v1 `UserInputResponseReason`: 1 to 2000 characters, not blank.
+    #[serde(deserialize_with = "decision_reason")]
+    #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
 }
 
@@ -170,6 +174,39 @@ pub struct DecisionAnswerInput {
 #[serde(rename_all = "camelCase")]
 pub struct DecisionEscalateInput {
     pub id: String,
-    #[schemars(length(min = 1, max = 2000))]
+    /// 1 to 2000 characters, not blank.
+    #[serde(deserialize_with = "decision_reason")]
+    #[schemars(length(min = 1, max = 2000), regex(pattern = r"\S"))]
     pub reason: String,
+}
+
+const DECISION_OPTIONS_MAX: usize = 20;
+const DECISION_REASON_MAX_CHARS: usize = 2000;
+
+fn decision_options<'de, D>(deserializer: D) -> Result<Vec<DecisionOption>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let options = Vec::<DecisionOption>::deserialize(deserializer)?;
+    if options.is_empty() || options.len() > DECISION_OPTIONS_MAX {
+        return Err(serde::de::Error::custom(format!(
+            "a decision needs 1 to {DECISION_OPTIONS_MAX} options, got {}",
+            options.len()
+        )));
+    }
+    Ok(options)
+}
+
+fn decision_reason<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let reason = String::deserialize(deserializer)?;
+    let chars = reason.chars().count();
+    if chars == 0 || chars > DECISION_REASON_MAX_CHARS || reason.trim().is_empty() {
+        return Err(serde::de::Error::custom(format!(
+            "reason must be 1 to {DECISION_REASON_MAX_CHARS} characters and not blank"
+        )));
+    }
+    Ok(reason)
 }
