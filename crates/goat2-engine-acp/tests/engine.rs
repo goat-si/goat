@@ -23,6 +23,8 @@ struct MockFlavor {
     prefers_http_mcp: bool,
     /// Treat stderr lines starting "LOGIN " as sign-in URLs.
     stderr_url: bool,
+    /// (longest line, total bytes) handed to the stderr hook.
+    stderr_seen: Arc<std::sync::Mutex<(usize, usize)>>,
 }
 
 impl MockFlavor {
@@ -36,6 +38,7 @@ impl MockFlavor {
             restart_after_interrupt: false,
             prefers_http_mcp: false,
             stderr_url: false,
+            stderr_seen: Arc::default(),
         }
     }
 }
@@ -67,6 +70,11 @@ impl AcpFlavor for MockFlavor {
         self.prefers_http_mcp
     }
     fn stderr_auth_url(&self, line: &str) -> Option<String> {
+        {
+            let mut seen = self.stderr_seen.lock().unwrap();
+            seen.0 = seen.0.max(line.len());
+            seen.1 += line.len();
+        }
         self.stderr_url
             .then(|| line.strip_prefix("LOGIN ").map(str::to_owned))
             .flatten()
@@ -966,4 +974,103 @@ async fn stderr_signin_url_reaches_the_host() {
         }
     }
     handle.session.shutdown().await;
+}
+
+const SECRET_LINE: &str = "Invalid project config\nAuthorization: Bearer secret-token-value";
+
+/// Startup errors carry sanitized stderr: the host stores the reason in the thread log (final
+/// review 3 finding 1; v1 AcpJsonRpcConnection.test.ts:1071-1093).
+#[tokio::test]
+async fn startup_failure_reason_has_no_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_STDERR_LINE", SECRET_LINE),
+        ("GOAT_ACP_EXIT_AT_START", "1"),
+    ]);
+    let error = match factory(flavor)
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+    {
+        Ok(_) => panic!("started"),
+        Err(error) => error.to_string(),
+    };
+    assert!(!error.contains("secret-token-value"), "{error}");
+    assert!(error.contains("Bearer [redacted]"), "{error}");
+}
+
+/// An exit during a turn: the turn's failure reason and the exit reason are sanitized too.
+#[tokio::test]
+async fn exit_during_a_turn_has_no_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_CRASH_PROMPT", "1"),
+        (
+            "GOAT_ACP_CRASH_STDERR",
+            "Authorization: Bearer secret-token-value",
+        ),
+    ]);
+    let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let mut reasons = Vec::new();
+    let mut exited = false;
+    while !exited {
+        match next(&mut handle).await {
+            EngineEvent::TurnFinished {
+                outcome: TurnOutcome::Failed { reason },
+                ..
+            } => reasons.push(reason),
+            EngineEvent::Exited { reason } => {
+                reasons.push(reason);
+                exited = true;
+            }
+            _ => {}
+        }
+    }
+    for reason in &reasons {
+        assert!(!reason.contains("secret-token-value"), "{reason}");
+    }
+    assert!(
+        reasons.iter().any(|r| r.contains("[redacted]")),
+        "{reasons:?}"
+    );
+}
+
+/// Megabytes of stderr without a newline neither stall the agent nor end up whole in a reason
+/// (final review 3 finding 2).
+#[tokio::test]
+async fn newline_free_stderr_flood_is_drained_and_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let flavor = MockFlavor::new(&[("GOAT_ACP_FLOOD_STDERR", "4194304")]);
+    let seen = Arc::clone(&flavor.stderr_seen);
+    let mut handle = start(flavor, spec(dir.path(), RuntimeMode::FullAccess)).await;
+    handle
+        .session
+        .start_turn(input("go"), &settings(RuntimeMode::FullAccess))
+        .await;
+    let (_, outcome) = until_finished(&mut handle).await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    // While the agent is still alive, the newline-free run was handed on in bounded pieces.
+    let (longest, total) = *seen.lock().unwrap();
+    assert!(
+        total >= 1024 * 1024,
+        "only {total} bytes read while the agent runs"
+    );
+    assert!(longest <= 32 * 1024, "a {longest}-byte piece");
+    handle.session.shutdown().await;
+
+    let flavor = MockFlavor::new(&[
+        ("GOAT_ACP_FLOOD_STDERR", "4194304"),
+        ("GOAT_ACP_EXIT_AT_START", "1"),
+    ]);
+    let error = match factory(flavor)
+        .start(spec(dir.path(), RuntimeMode::FullAccess))
+        .await
+    {
+        Ok(_) => panic!("started"),
+        Err(error) => error.to_string(),
+    };
+    assert!(error.len() < 8 * 1024, "reason is {} bytes", error.len());
 }

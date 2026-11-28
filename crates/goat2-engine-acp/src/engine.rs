@@ -239,6 +239,8 @@ struct Shared {
     advertised: watch::Sender<u64>,
     /// A provider probe (see [AcpEngineFactory::for_probe]).
     probe: bool,
+    /// The sanitized stderr tail of an agent that exited (the process is gone by then).
+    last_stderr: Mutex<String>,
     /// GOAT's MCP endpoint served over this connection, when the agent took it that way.
     mcp_over_acp: OnceLock<Arc<crate::mcp_over_acp::McpOverAcp>>,
     /// The environment the agent process runs with (v1 `watchPromptOutcome` reads it).
@@ -1906,6 +1908,7 @@ impl AcpEngineFactory {
             advertised: watch::channel(0).0,
             mcp_over_acp: OnceLock::new(),
             probe: self.probe,
+            last_stderr: Mutex::new(String::new()),
             agent_env,
         });
 
@@ -2027,9 +2030,14 @@ impl AcpEngineFactory {
                 .await;
             if let Some(shared) = exit_shared.upgrade() {
                 let stderr = match shared.child.lock().await.as_ref() {
-                    Some(child) => child.stderr_tail(),
+                    Some(child) => {
+                        child.wait_stderr_closed(Duration::from_secs(2)).await;
+                        child.stderr_tail()
+                    }
                     None => String::new(),
                 };
+                // Kept for a handshake that fails because of this exit (sanitized already).
+                *shared.last_stderr.lock().expect("stderr") = stderr.clone();
                 let reason = match result {
                     Ok(()) => "the agent closed its connection".to_owned(),
                     Err(error) => format!("connection failed: {error}"),
@@ -2075,14 +2083,18 @@ impl AcpEngineFactory {
         spec: &SessionSpec,
     ) -> Result<EngineRef, EngineError> {
         let flavor = &self.flavor;
+        // A failed handshake usually means the agent exited: its stderr is read to the end first
+        // (bounded) so the error carries its last words, sanitized (v1 AcpProcessExitedError).
         let stderr = || async {
-            shared
-                .child
-                .lock()
-                .await
-                .as_ref()
-                .map(|c| c.stderr_tail())
-                .unwrap_or_default()
+            let child = shared.child.lock().await;
+            match child.as_ref() {
+                Some(child) => {
+                    child.wait_stderr_closed(Duration::from_secs(2)).await;
+                    child.stderr_tail()
+                }
+                // The exit task already took the process; it kept the tail.
+                None => shared.last_stderr.lock().expect("stderr").clone(),
+            }
         };
         // initialize (v1 AcpSessionRuntime.ts:995-1009, :1427-1442).
         let caps = flavor.client_capabilities();

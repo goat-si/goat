@@ -232,3 +232,4 @@ per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine g
 | crates/goat2-engine-acp/tests/engine.rs (Devin plan bypass, Copilot model resend) | `devinAcp.ts` (58-63); `adapter.ts` (334-361) | adapted |
 
 Per-slice detail and known gaps: crates/goat2-engine-acp/provenance/*.md, crates/goat2-acp-mcp-bridge/provenance/bridge.md.
+| crates/goat2-engine-acp/src/stderr.rs | packages/provider-acp/src/server/stderr.ts (ACP_STDERR_TAIL_MAX_CHARS, appendAcpStderrTail, sanitizeAcpStderrExcerpt); bounded reading per apps/server/src/provider/acp/AcpJsonRpcConnection.test.ts:419-441 | ported-to-Rust |

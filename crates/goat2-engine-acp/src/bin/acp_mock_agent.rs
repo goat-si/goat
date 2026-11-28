@@ -40,7 +40,10 @@
 //! - `GOAT_ACP_EXIT_ON_CANCEL=1`: exit on `session/cancel` instead of answering.
 //! - `GOAT_ACP_IGNORE_CANCEL=1` (GOAT 2): ignore `session/cancel` (a wedged prompt).
 //! - `GOAT_ACP_FAIL_PROMPT=1`: answer `session/prompt` with an error.
-//! - `GOAT_ACP_CRASH_PROMPT=1`: exit during the prompt.
+//! - `GOAT_ACP_CRASH_PROMPT=1`: exit during the prompt. (GOAT 2) `GOAT_ACP_CRASH_STDERR=<text>` is printed on stderr
+//!   first.
+//! - `GOAT_ACP_FLOOD_STDERR=<bytes>` (GOAT 2): print this many `x` on stderr without a newline at start,
+//!   then work normally.
 //! - `GOAT_ACP_STOP_REASON=<reason>` (GOAT 2): stop reason of a finished prompt.
 //! - `GOAT_ACP_EMIT_LOAD_REPLAY=1`: `session/load` replays history before answering.
 //! - `GOAT_ACP_STEERS_WITH_PROMPT=1` (GOAT 2): a prompt sent while one runs ends the running one
@@ -368,6 +371,9 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
     let was_cancelled = |rx: &std::sync::mpsc::Receiver<()>| rx.try_recv().is_ok();
 
     if flag("GOAT_ACP_CRASH_PROMPT") {
+        if let Some(text) = env("GOAT_ACP_CRASH_STDERR") {
+            eprintln!("{text}");
+        }
         agent.update(&session, json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "about to crash"}}));
         std::thread::sleep(Duration::from_millis(50));
         std::process::exit(3);
@@ -624,6 +630,17 @@ fn main() {
     });
     if let Some(line) = env("GOAT_ACP_STDERR_LINE") {
         eprintln!("{line}");
+    }
+    if let Some(bytes) = env("GOAT_ACP_FLOOD_STDERR").and_then(|v| v.parse::<usize>().ok()) {
+        let mut err = std::io::stderr().lock();
+        let block = vec![b'x'; 64 * 1024];
+        let mut left = bytes;
+        while left > 0 {
+            let n = left.min(block.len());
+            let _ = err.write_all(&block[..n]);
+            left -= n;
+        }
+        let _ = err.flush();
     }
     if let Some(path) = env("GOAT_ACP_ARGV_LOG_PATH") {
         let argv: Vec<String> = std::env::args().skip(1).collect();

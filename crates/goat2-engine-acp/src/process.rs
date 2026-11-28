@@ -14,7 +14,6 @@ use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::io::AsyncBufReadExt;
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 /// Called with each stderr line, without its line ending.
@@ -121,6 +120,8 @@ pub struct ChildProcess {
     stdin: Option<ChildStdin>,
     stdout: Option<ChildStdout>,
     stderr_tail: Arc<Mutex<StderrTail>>,
+    /// Turns true when the agent's stderr reached end of file.
+    stderr_closed: tokio::sync::watch::Receiver<bool>,
     kill_grace: Duration,
     reaped: Option<ExitStatus>,
     group_gone: bool,
@@ -185,26 +186,23 @@ impl ChildProcess {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
+        let (closed_tx, stderr_closed) = tokio::sync::watch::channel(child.stderr.is_none());
         if let Some(stderr) = child.stderr.take() {
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
-                let mut lines = tokio::io::BufReader::new(stderr);
-                let mut line = Vec::new();
-                loop {
-                    line.clear();
-                    match lines.read_until(b'\n', &mut line).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {
-                            if let Ok(mut tail) = tail.lock() {
-                                tail.push(&line);
-                            }
-                            if let Some(hook) = &on_stderr_line {
-                                let text = String::from_utf8_lossy(&line);
-                                hook(text.trim_end_matches(['\r', '\n']));
-                            }
-                        }
+                // Bounded chunks: a newline-free stream cannot grow host memory (v1
+                // AcpJsonRpcConnection.test.ts:419-441).
+                crate::stderr::read_bounded_lines(stderr, |line| {
+                    if let Ok(mut tail) = tail.lock() {
+                        tail.push(line);
                     }
-                }
+                    if let Some(hook) = &on_stderr_line {
+                        let text = String::from_utf8_lossy(line);
+                        hook(text.trim_end_matches(['\r', '\n']));
+                    }
+                })
+                .await;
+                let _ = closed_tx.send(true);
             });
         }
         Ok(Self {
@@ -213,6 +211,7 @@ impl ChildProcess {
             stdin,
             stdout,
             stderr_tail,
+            stderr_closed,
             kill_grace: launch.kill_grace,
             reaped: None,
             group_gone: false,
@@ -233,11 +232,24 @@ impl ChildProcess {
         self.stdout.take()
     }
 
+    /// Wait, at most `limit`, until the agent's stderr is closed (it exited), so an error built
+    /// next includes its last words.
+    pub async fn wait_stderr_closed(&self, limit: Duration) {
+        let mut closed = self.stderr_closed.clone();
+        let _ = tokio::time::timeout(limit, closed.wait_for(|done| *done)).await;
+    }
+
+    /// The last stderr output, sanitized (v1 `sanitizeAcpStderrExcerpt`): it ends up in errors and
+    /// exit reasons the host stores, so credentials, sign-in links and home paths are removed.
     pub fn stderr_tail(&self) -> String {
-        self.stderr_tail
+        let raw = self
+            .stderr_tail
             .lock()
             .map(|tail| tail.text())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let mut tail = String::new();
+        crate::stderr::append_tail(&mut tail, &raw);
+        crate::stderr::sanitize_stderr_excerpt(&tail, &crate::stderr::home_directories())
     }
 
     /// Ordinary stop: close stdin, then always signal the group (the leader exiting does not

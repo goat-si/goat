@@ -14,6 +14,7 @@ pub mod policy;
 pub mod probe;
 pub mod process;
 pub mod registry;
+pub mod stderr;
 pub mod subagents;
 pub mod wire;
 
