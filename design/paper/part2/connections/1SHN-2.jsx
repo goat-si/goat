@@ -385,7 +385,7 @@
                       </div>
                       <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '6px' }}>
                         <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13px', lineHeight: '18px' }}>
-                          ubuntu@linux over Tailscale · 3 of 6 checks done
+                          ubuntu@linux over Tailscale · 2 of 6 checks done
                         </div>
                       </div>
                     </div>
@@ -547,7 +547,7 @@
                   </div>
                   <div style={{ borderRadius: '12px', boxShadow: '#ECECEC 0px 0px 0px 1px inset', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
                     <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '10px', paddingBlock: '12px', paddingInline: '14px' }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block' }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0', display: 'inline-block', rotate: '-90deg', transformOrigin: '50% 50%' }}>
                         <g>
                           <path d="m6 9 6 6 6-6" fill="none" stroke="#5D5D5D" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                         </g>
@@ -557,42 +557,6 @@
                       </div>
                       <div style={{ boxSizing: 'border-box', color: '#8F8F8F', flexBasis: '0%', flexGrow: '1', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
                         What each failed check means and how to fix it (shell, sshd, Tailscale SSH, Windows Git Bash, known_hosts)
-                      </div>
-                    </div>
-                    <div style={{ borderTopColor: '#F0F0F0', borderTopStyle: 'solid', borderTopWidth: '1px', boxSizing: 'border-box' }}>
-                      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', paddingBlock: '4px' }}>
-                        <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '14px' }}>
-                          <div style={{ boxSizing: 'border-box', color: '#0D0D0D', flexShrink: '0', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '17px', width: '120px' }}>
-                            Connection
-                          </div>
-                          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '17px' }}>
-                            Check the host name, network and SSH port, then check again. On Tailscale: both machines signed in.
-                          </div>
-                        </div>
-                        <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '14px' }}>
-                          <div style={{ boxSizing: 'border-box', color: '#0D0D0D', flexShrink: '0', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '17px', width: '120px' }}>
-                            Host key changed
-                          </div>
-                          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '17px' }}>
-                            Verify the new fingerprint with the host’s owner before replacing the saved key.
-                          </div>
-                        </div>
-                        <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '14px' }}>
-                          <div style={{ boxSizing: 'border-box', color: '#0D0D0D', flexShrink: '0', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '17px', width: '120px' }}>
-                            Sign in
-                          </div>
-                          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '17px' }}>
-                            Turn on PubkeyAuthentication in sshd_config and add your public key.
-                          </div>
-                        </div>
-                        <div style={{ boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '14px' }}>
-                          <div style={{ boxSizing: 'border-box', color: '#0D0D0D', flexShrink: '0', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', fontVariationSettings: '"wght" 500', fontWeight: 500, lineHeight: '17px', width: '120px' }}>
-                            Operating system
-                          </div>
-                          <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '17px' }}>
-                            SSH needs a POSIX shell. On Windows: install Git for Windows and set OpenSSH’s shell to its bash.
-                          </div>
-                        </div>
                       </div>
                     </div>
                   </div>
