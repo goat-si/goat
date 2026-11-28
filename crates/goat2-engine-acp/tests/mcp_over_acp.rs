@@ -202,7 +202,7 @@ async fn agent_reaches_goat_mcp_over_acp() {
             host_generation: 1,
             process_generation: 1,
             instructions: None,
-            launch: None,
+            instance: None,
         })
         .await
         .expect("start");
@@ -287,7 +287,7 @@ async fn interrupt_stops_mcp_calls_in_flight() {
             host_generation: 1,
             process_generation: 1,
             instructions: None,
-            launch: None,
+            instance: None,
         })
         .await
         .expect("start");
@@ -362,7 +362,7 @@ async fn run_turn(url: String, env: &[(&str, &str)]) -> (String, TurnOutcome) {
             host_generation: 1,
             process_generation: 1,
             instructions: None,
-            launch: None,
+            instance: None,
         })
         .await
         .expect("start");

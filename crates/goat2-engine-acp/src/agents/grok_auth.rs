@@ -63,8 +63,7 @@ pub fn resolve_for_spec(
     stored: Option<&StoredApiKey>,
 ) -> (bool, Option<String>) {
     let set = spec
-        .launch
-        .as_ref()
+        .launch()
         .and_then(|l| l.env.get(GROK_API_KEY_ENV))
         .map(String::as_str);
     resolve_key(set, inherited_key(), stored)

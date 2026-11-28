@@ -2437,7 +2437,7 @@ impl EngineSession for AcpSession {
 /// Merge the flavor's command with the host's `SessionSpec.launch` overrides.
 fn launch_for(flavor: &dyn AcpFlavor, spec: &SessionSpec) -> Result<Launch, EngineError> {
     let mut command = flavor.launch(spec)?;
-    if let Some(over) = &spec.launch {
+    if let Some(over) = spec.launch() {
         if let Some(binary) = &over.binary {
             command.program = binary.clone();
         }

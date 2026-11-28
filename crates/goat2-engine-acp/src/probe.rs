@@ -284,7 +284,12 @@ pub(crate) fn probe_spec(
         host_generation: 0,
         process_generation: 0,
         instructions: None,
-        launch,
+        instance: launch.map(|launch| goat2_engine_api::ProviderTarget {
+            instance_id: ProviderInstanceId::new("probe"),
+            launch: Some(launch),
+            home: None,
+            shared_home: None,
+        }),
     }
 }
 

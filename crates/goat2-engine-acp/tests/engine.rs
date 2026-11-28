@@ -119,7 +119,7 @@ fn spec(cwd: &std::path::Path, mode: RuntimeMode) -> SessionSpec {
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: None,
+        instance: None,
     }
 }
 
@@ -799,10 +799,15 @@ async fn launch_overrides_apply() {
         log.to_string_lossy().into_owned(),
     );
     env.insert("GOAT_ACP_AGENT_VERSION".to_string(), "9.9.9".to_string());
-    with_launch.launch = Some(goat2_engine_api::LaunchSpec {
-        binary: None,
-        args: vec![],
-        env,
+    with_launch.instance = Some(goat2_engine_api::ProviderTarget {
+        instance_id: goat2_contracts::ProviderInstanceId::new("test"),
+        launch: Some(goat2_engine_api::LaunchSpec {
+            binary: None,
+            args: vec![],
+            env,
+        }),
+        home: None,
+        shared_home: None,
     });
     let factory = factory(MockFlavor::new(&[]));
     let started = factory.start_acp(with_launch).await.unwrap();
@@ -1439,10 +1444,15 @@ async fn spawn_failure_shows_home_as_tilde() {
     let home = std::env::var("HOME").expect("HOME");
     let dir = tempfile::tempdir().unwrap();
     let mut spec = spec(dir.path(), RuntimeMode::FullAccess);
-    spec.launch = Some(goat2_engine_api::LaunchSpec {
-        binary: Some(std::path::Path::new(&home).join("goat2-missing-acp-agent-7-1")),
-        args: vec![],
-        env: BTreeMap::new(),
+    spec.instance = Some(goat2_engine_api::ProviderTarget {
+        instance_id: goat2_contracts::ProviderInstanceId::new("test"),
+        launch: Some(goat2_engine_api::LaunchSpec {
+            binary: Some(std::path::Path::new(&home).join("goat2-missing-acp-agent-7-1")),
+            args: vec![],
+            env: BTreeMap::new(),
+        }),
+        home: None,
+        shared_home: None,
     });
     let error = match factory(MockFlavor::new(&[])).start(spec).await {
         Ok(_) => panic!("started a missing program"),

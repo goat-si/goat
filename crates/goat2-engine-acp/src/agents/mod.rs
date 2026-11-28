@@ -151,7 +151,7 @@ mod tests {
             host_generation: 0,
             process_generation: 0,
             instructions: None,
-            launch: None,
+            instance: None,
         };
         let g = Grok::default();
         assert_eq!(

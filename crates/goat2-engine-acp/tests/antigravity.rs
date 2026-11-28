@@ -73,10 +73,15 @@ fn spec(
         host_generation: 1,
         process_generation: 1,
         instructions,
-        launch: Some(LaunchSpec {
-            binary: Some(env!("CARGO_BIN_EXE_goat2-acp-mock-agent").into()),
-            args: vec![],
-            env: vars,
+        instance: Some(goat2_engine_api::ProviderTarget {
+            instance_id: goat2_contracts::ProviderInstanceId::new("test"),
+            launch: Some(LaunchSpec {
+                binary: Some(env!("CARGO_BIN_EXE_goat2-acp-mock-agent").into()),
+                args: vec![],
+                env: vars,
+            }),
+            home: None,
+            shared_home: None,
         }),
     }
 }

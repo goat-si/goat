@@ -66,10 +66,15 @@ async fn start_with(
         host_generation: 1,
         process_generation: 1,
         instructions: None,
-        launch: Some(LaunchSpec {
-            binary: Some(env!("CARGO_BIN_EXE_goat2-acp-mock-agent").into()),
-            args: vec![],
-            env: launch_env,
+        instance: Some(goat2_engine_api::ProviderTarget {
+            instance_id: goat2_contracts::ProviderInstanceId::new("test"),
+            launch: Some(LaunchSpec {
+                binary: Some(env!("CARGO_BIN_EXE_goat2-acp-mock-agent").into()),
+                args: vec![],
+                env: launch_env,
+            }),
+            home: None,
+            shared_home: None,
         }),
     };
     let handle = AcpEngineFactory::new(Arc::new(Grok::default()))

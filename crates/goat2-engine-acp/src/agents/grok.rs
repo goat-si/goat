@@ -425,6 +425,15 @@ mod tests {
     use crate::flavor::BackgroundStatus;
     use goat2_contracts::TurnItemStatus;
 
+    fn launch_target(launch: goat2_engine_api::LaunchSpec) -> goat2_engine_api::ProviderTarget {
+        goat2_engine_api::ProviderTarget {
+            instance_id: goat2_contracts::ProviderInstanceId::new("grok"),
+            launch: Some(launch),
+            home: None,
+            shared_home: None,
+        }
+    }
+
     #[test]
     fn turn_completed_requires_root_identity() {
         let g = Grok::default();
@@ -530,7 +539,7 @@ mod tests {
             host_generation: 0,
             process_generation: 0,
             instructions: None,
-            launch: None,
+            instance: None,
         };
         let g = Grok {
             binary_path: Some("/opt/grok".into()),
@@ -539,11 +548,11 @@ mod tests {
         };
         // A blank launch override is empty whatever the host's own XAI_API_KEY holds (round 7
         // part 4.5: the test no longer depends on the host environment).
-        spec.launch = Some(LaunchSpec {
+        spec.instance = Some(launch_target(LaunchSpec {
             binary: None,
             args: vec![],
             env: [("XAI_API_KEY".to_string(), String::new())].into(),
-        });
+        }));
         let command = g.launch(&spec).unwrap();
         assert_eq!(command.program, PathBuf::from("/opt/grok"));
         assert_eq!(
@@ -567,11 +576,11 @@ mod tests {
                 method_id: Some("cached_token".into())
             }
         );
-        spec.launch = Some(LaunchSpec {
+        spec.instance = Some(launch_target(LaunchSpec {
             binary: None,
             args: vec![],
             env: [("XAI_API_KEY".to_string(), "instance".to_string())].into(),
-        });
+        }));
         let command = g.launch(&spec).unwrap();
         assert!(!command.env.iter().any(|(k, _)| k == "XAI_API_KEY"));
         assert_eq!(
