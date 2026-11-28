@@ -100,6 +100,8 @@ pub struct AcpEngineFactory {
     mcp_bridge: Option<McpBridgeCommand>,
     /// A provider probe: never sign in when the agent asks (v1 probe.ts `authenticateOnAuthRequired: false`).
     probe: bool,
+    /// Instance settings for [EngineFactory::probe] (see [crate::probe::ProbeConfig]).
+    pub(crate) probe_config: Arc<crate::probe::ProbeConfig>,
 }
 
 impl AcpEngineFactory {
@@ -111,6 +113,7 @@ impl AcpEngineFactory {
             client_version: env!("CARGO_PKG_VERSION").to_owned(),
             mcp_bridge: McpBridgeCommand::locate(),
             probe: false,
+            probe_config: Arc::default(),
         }
     }
 
@@ -211,6 +214,9 @@ struct State {
     available_commands: Option<Vec<Value>>,
     /// Agent-native subagents (see [crate::subagents]).
     subagents: SubagentTracker,
+    /// A `config_option_update` arrived; it replaces the setup response's options even when it
+    /// is handled first (v1 probe.ts:545-547 prefers the update).
+    config_options_from_update: bool,
 }
 
 struct Shared {
@@ -517,6 +523,7 @@ impl Shared {
                         if let Some(options) = update.get("configOptions").and_then(Value::as_array)
                         {
                             state.config_options = options.clone();
+                            state.config_options_from_update = true;
                         }
                         self.advertised.send_modify(|n| *n += 1);
                     }
@@ -1811,6 +1818,13 @@ impl EngineFactory for AcpEngineFactory {
     fn capabilities(&self) -> ProviderCapabilities {
         self.flavor.capabilities()
     }
+
+    /// v1's status check for the flavor's driver kind (see [crate::probe::probe_provider]): Grok
+    /// and fx read their CLIs, Antigravity resolves its runtime without starting it, registry
+    /// agents open a probe session. Failures are reported in the result, as v1 snapshots do.
+    async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        Ok(crate::probe::probe_provider(self).await)
+    }
 }
 
 impl AcpEngineFactory {
@@ -2305,7 +2319,9 @@ impl AcpEngineFactory {
             let mut state = shared.state.lock().expect("state");
             state.subagents.set_session(&session_id);
             state.modes = setup.modes.clone().or_else(|| parse_modes(&setup.raw));
-            state.config_options = setup.config_options.clone();
+            if !state.config_options_from_update {
+                state.config_options = setup.config_options.clone();
+            }
             state.setup = setup;
             // A resumed session already holds what its first prompt carried.
             state.preamble = (resume_id.is_none() && !preamble_parts.is_empty())
