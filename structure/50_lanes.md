@@ -33,3 +33,14 @@ Wave 2 (launched 2026-11-28 ~23:40 KST after host merge 635e915):
 | P2-M providers UI | `goat2_providers_ui` · `~/Developer/goat2_providers_ui` | `mcp:28f74b44-8da9-4850-904d-47f6dd9311e0` |
 | P2-F bot UI = lane F continues | `goat2_ui` | `mcp:8c388538-1483-4d66-bcc7-d1851d79fbb0` |
 | P2-D parity = lane D continues | `goat2_parity` | `mcp:6bee8c38-9aa4-4405-9f97-61e074c2998c` |
+
+## Machines (owner rule 2026-11-28 ~23:45 KST: this Mac was at load ~57 on 18 cores)
+
+| Machine | Lanes | Notes |
+|---|---|---|
+| this Mac (`juns-macbook-pro`, M5 Max) | A store, B codex, C contracts, D parity, G desktop | G installs GOAT 2 (Dev) here; builds may run on mac-studio and rsync back |
+| `mac-studio` (16 cores, 64 GB) | E host, F ui, P2-E bot runtime (`mcp:b9201259-20ae-419f-a056-b7d282998052` there), P2-M providers UI (`mcp:77dce1e5-4b6a-4b79-82fb-5f4ccbacd573` there) | E and F move at their next safe point |
+| `macbookpro2` (15 cores, 48 GB) | P2-A claude, P2-B acp, P2-S sdk | move at their next safe point |
+
+Remote thread ids replace the local ones after handoff (read with `goat_thread_read {host, threadId}`).
+Each machine merges in its own `~/Developer/goat2`; the non-force push of `goat2` is the cross-machine lock.
