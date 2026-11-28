@@ -618,10 +618,8 @@ impl ReadRepair {
         let index = self.open.iter().position(|r| r.tool_call_id == id);
         let served = index.is_some_and(|i| self.open[i].outcome == Some(ReadOutcome::Served));
         match str_at(&update, "status") {
-            Some("pending" | "in_progress") => {
-                if served {
-                    params["update"]["status"] = json!("completed");
-                }
+            Some("pending" | "in_progress") if served => {
+                params["update"]["status"] = json!("completed");
             }
             Some(status @ ("completed" | "failed")) => {
                 if let Some(i) = index {

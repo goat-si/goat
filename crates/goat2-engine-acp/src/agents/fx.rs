@@ -290,8 +290,9 @@ impl AcpFlavor for Fx {
         let mut writes = Vec::new();
         if let Some(target) = target
             && Some(target) != current
-            && !(is_default
-                && !option.is_some_and(|o| select_values(o).iter().any(|(v, _)| v == target)))
+            // The status default can belong to another fx backend; then the session's model stands.
+            && (!is_default
+                || option.is_some_and(|o| select_values(o).iter().any(|(v, _)| v == target)))
         {
             writes.push(ConfigWrite::new(FX_MODEL_CONFIG_ID, target).allow_unlisted());
         }

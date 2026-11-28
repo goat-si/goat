@@ -145,6 +145,10 @@ struct SessionRepairs {
     plans: antigravity_protocol::UpdateStepsPlans,
 }
 
+/// The read repair and `update_steps` plans of each open session.
+#[derive(Debug, Default)]
+pub struct AntigravitySessions(Mutex<HashMap<String, SessionRepairs>>);
+
 #[derive(Debug, Default)]
 pub struct Antigravity {
     pub auth: AntigravityAuthConfig,
@@ -154,7 +158,7 @@ pub struct Antigravity {
     pub default_model: Option<String>,
     /// GOAT's attachments folder, readable through `fs/read_text_file` with the thread's folder.
     pub attachments_dir: Option<PathBuf>,
-    sessions: Mutex<HashMap<String, SessionRepairs>>,
+    pub sessions: AntigravitySessions,
 }
 
 impl Antigravity {
@@ -171,7 +175,7 @@ impl Antigravity {
     }
 
     fn with_session<T>(&self, session_id: &str, f: impl FnOnce(&mut SessionRepairs) -> T) -> T {
-        let mut sessions = self.sessions.lock().expect("antigravity sessions");
+        let mut sessions = self.sessions.0.lock().expect("antigravity sessions");
         f(sessions.entry(session_id.to_owned()).or_default())
     }
 }

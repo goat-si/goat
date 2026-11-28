@@ -85,7 +85,7 @@ fn extension(name: &str) -> String {
 /// v1 TextDecoder with a BOM-chosen encoding (:574-587); None for other encodings or binary.
 fn decode_text(bytes: &[u8]) -> Option<String> {
     let utf16 = |rest: &[u8], little: bool| -> Option<String> {
-        if rest.len() % 2 != 0 {
+        if !rest.len().is_multiple_of(2) {
             return None;
         }
         let units = rest.chunks(2).map(|pair| {
