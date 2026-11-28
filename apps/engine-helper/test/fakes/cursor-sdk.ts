@@ -2,7 +2,7 @@
 let counter = 0;
 let checkpoint: unknown;
 export async function createAgentPlatform() {
-  return { store: {}, checkpointStore: { loadLatest: async () => { if (checkpoint === "throw") throw new Error("unavailable"); return checkpoint; } }, eventStore: undefined, eventNotifier: undefined,
+  return { store: {}, checkpointStore: { loadLatest: async () => { if (checkpoint === "throw") throw new Error("unavailable"); if (checkpoint === "hang") return new Promise(() => {}); return checkpoint; } }, eventStore: undefined, eventNotifier: undefined,
     prewarmLocalWorkspace: async () => async () => {} };
 }
 export class CursorAgentPlatform {
@@ -24,7 +24,7 @@ export class CursorAgentPlatform {
     return { agentId, close() {}, async send(input: string | { text: string; images?: unknown[] }, options: any) {
       if (process.env.GOAT_TEST_NO_MCP === "1" && JSON.stringify(options.mcpServers) !== "{}") throw new Error("MCP was not cleared");
       const message = typeof input === "string" ? input : input.text;
-      checkpoint = message === "usage" ? { tokenDetails: { usedTokens: 123, maxTokens: 1000 } } : message === "bad-usage" ? { tokenDetails: { usedTokens: -1, maxTokens: 1000 } } : message === "usage-error" ? "throw" : undefined;
+      checkpoint = message === "usage" ? { tokenDetails: { usedTokens: 123, maxTokens: 1000 } } : message === "bad-usage" ? { tokenDetails: { usedTokens: -1, maxTokens: 1000 } } : message === "usage-error" ? "throw" : message === "usage-stuck" ? "hang" : undefined;
       if (message === "switch-model" && options.model?.id !== "new-model") throw new Error("model was not switched");
       if (message === "crash") setImmediate(() => process.exit(42));
       if (message === "recover" && !platform.cancelled) throw new Error("already has active run");

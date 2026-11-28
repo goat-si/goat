@@ -74,7 +74,7 @@ test("Cursor ignores missing, malformed, or unavailable checkpoint usage", async
   const h = helper();
   try {
     await h.request("initialize", init);
-    for (const text of ["plain", "bad-usage", "usage-error"]) {
+    for (const text of ["plain", "bad-usage", "usage-error", "usage-stuck"]) {
       const turn = (await h.request("turn.start", { inputs: input(text), settings })).result;
       const done = await h.waitFor(l => l.event?.type === "turn_finished" && l.event.turnId === turn.turnId);
       assert.equal(done.event.outcome.type, "done");

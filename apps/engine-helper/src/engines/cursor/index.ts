@@ -57,6 +57,7 @@ function safeHost(host: EngineHost, secrets: ReadonlyArray<string>): EngineHost 
 }
 
 type Sdk = typeof import("@cursor/sdk");
+const CHECKPOINT_USAGE_TIMEOUT_MS = 2_000;
 let contained = false;
 let diagnosticsGuarded = false;
 let loadedBackend: string | undefined;
@@ -244,14 +245,19 @@ class CursorSession implements EngineSession {
     if (active.finalized) return;
     active.finalized = true;
     active.projection.finalize(outcome.type === "done" ? "completed" : outcome.type);
-    // v1 CursorAgentSdk.ts:822-839 and adapter.ts:993-1018: checkpoint context fill.
+    // v1 CursorAgentSdk.ts:822-839 and adapter.ts:993-1018: checkpoint context fill. Bounded so a
+    // stuck checkpoint read can never hold back turn_finished.
+    let timer: NodeJS.Timeout | undefined;
     try {
-      const checkpoint = await this.checkpointStore.loadLatest(this.engineRef);
+      const checkpoint = await Promise.race([
+        this.checkpointStore.loadLatest(this.engineRef),
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), CHECKPOINT_USAGE_TIMEOUT_MS); }),
+      ]);
       const details = (checkpoint as { tokenDetails?: { usedTokens?: unknown; maxTokens?: unknown } } | null)?.tokenDetails;
       if (details && Number.isSafeInteger(details.usedTokens) && (details.usedTokens as number) >= 0 && Number.isSafeInteger(details.maxTokens) && (details.maxTokens as number) > 0) {
         this.host.emit({ type: "token_usage", turnId: active.run.id, usage: { usedTokens: details.usedTokens as number, maxTokens: details.maxTokens as number } });
       }
-    } catch { this.host.log("debug", "Cursor context usage unavailable"); }
+    } catch { this.host.log("debug", "Cursor context usage unavailable"); } finally { if (timer) clearTimeout(timer); }
     if (this.active === active) this.active = undefined;
     this.host.emit({ type: "turn_finished", turnId: active.run.id, outcome });
   }
