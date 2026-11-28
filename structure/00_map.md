@@ -29,4 +29,6 @@ State: `real` = has working code, `stub` = placeholder, `legacy` = superseded, t
 | Path | Lang | Role | Lane | State |
 |---|---|---|---|---|
 | `crates/goat2-engine-sdk` | Rust | Driver for Cursor, OpenCode (1.x and 2 via v1's version selector), Muse over `apps/engine-helper`; Pi/OmO RPC driven directly | P2-S | on `goat2_engine_sdk` |
+| `crates/goat2-engine-acp` | Rust | ACP driver on Zed `agent-client-protocol` + registry (Grok, fx, Antigravity, registry agents) | P2-B | on `goat2_engine_acp` |
+| `crates/goat2-acp-mcp-bridge` | Rust (lib + bin) | v1 `goat acp-mcp-bridge`: stdio MCP <-> GOAT HTTP MCP for agents without HTTP MCP; deps tokio/reqwest/serde_json only, no goat2-* deps; credential via env `GOAT_ACP_MCP_AUTHORIZATION`, never argv | P2-B | on `goat2_engine_acp`; lane G bundles it beside goat2-host |
 | `apps/engine-helper` | Node/TS | One helper process per thread wrapping the Node-only SDKs; protocol `apps/engine-helper/PROTOCOL.md` | P2-S | on `goat2_engine_sdk` |

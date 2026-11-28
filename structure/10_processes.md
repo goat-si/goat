@@ -50,3 +50,4 @@ GOAT v1 Nightly is a separate app with its own data (`~/.goat/desktop-nightly`);
 - A host that exits 0 before its ready line / `/health` is not restarted ("host not running"); ready-then-exit or non-zero exit restarts with v1 backoff.
 
 - Part 2 (planned, P2-S): Cursor, OpenCode, Muse threads run one `apps/engine-helper` Node process per thread (own process group, nice +10), so a helper/SDK crash ends only that thread. Pi/OmO run one `--mode rpc` process per thread driven from Rust. Same shape as one Codex app-server per thread.
+- Part 2 (planned, P2-B): an ACP agent gets GOAT tools over HTTP MCP only if it advertises http AND its flavor prefers HTTP (v1 AcpSessionRuntime.ts:1475-1494); otherwise the driver spawns `goat2-acp-mcp-bridge` as the agent's stdio MCP server. No bridge available = session start fails (never toolless).
