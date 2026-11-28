@@ -22,6 +22,14 @@ export function permissionRules(mode: RuntimeMode): PermissionRuleset {
   ];
 }
 
+// permissionRules.ts:175-189: preserve child-specific rules after restoring the parent policy.
+export function childPermissionRules(mode: RuntimeMode, native: PermissionRuleset): PermissionRuleset {
+  const parent = permissionRules(mode);
+  const inherited = parent.filter((rule) => rule.permission === "external_directory" || rule.action === "deny");
+  const child = native.filter((rule) => !inherited.some((base) => base.permission === rule.permission && base.pattern === rule.pattern && base.action === rule.action));
+  return [...parent, ...child];
+}
+
 // openCodePermissions.ts:7-16
 export function questionId(index: number, question: QuestionRequest["questions"][number]): string {
   const header = question.header.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-");

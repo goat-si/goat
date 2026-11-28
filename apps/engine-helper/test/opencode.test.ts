@@ -69,9 +69,8 @@ test("OpenCode steering, interrupt, permission reply and submission failure", as
   await session.answerRequest("request-1", { outcome: "accept" });
   await until(() => h.events.filter((e) => e.type === "turn_finished").length === 2);
   assert.ok(fake.calls.some((c) => c.method === "permission.reply"));
-  await session.startTurn(input("fail-prompt"), settings);
-  await until(() => h.events.filter((e) => e.type === "turn_finished").length === 3);
-  assert.ok(h.events.some((e) => e.type === "turn_finished" && e.outcome.type === "failed"));
+  assert.equal((await session.startTurn(input("fail-prompt"), settings)).status, "unknown");
+  assert.equal(h.events.filter((e) => e.type === "turn_finished").length, 2);
   await session.shutdown();
 });
 
@@ -105,16 +104,23 @@ test("OpenCode structured question round trip", async () => {
   await session.shutdown();
 });
 
-test("interrupt before prompt submission never sends the prompt", async () => {
-  fake.reset(); const h = harness(); const session = await opencodeEngine.start(params, h.host);
-  const turn = await session.startTurn(input("hold"), settings); assert.equal(turn.status, "accepted");
-  if (turn.status !== "accepted") throw new Error("not accepted");
-  await session.interrupt(turn.turnId);
-  await until(() => h.events.some((event) => event.type === "turn_finished"));
-  await new Promise((resolve) => setImmediate(resolve));
+test("shutdown during admission never reports a late accepted turn", async () => {
+  fake.reset(); const before = harness(); const first = await opencodeEngine.start(params, before.host);
+  const status = fake.holdStatus();
+  const beforeStart = first.startTurn(input("hold"), settings);
+  await status.reached;
+  await first.shutdown(); status.release();
+  assert.equal((await beforeStart).status, "declined");
   assert.ok(!fake.calls.some((call) => call.method === "prompt"));
-  assert.equal(h.events.filter((event) => event.type === "turn_finished").length, 1);
-  await session.shutdown();
+  assert.equal(before.events.filter((event) => event.type === "turn_finished").length, 0);
+
+  fake.reset(); const during = harness(); const second = await opencodeEngine.start(params, during.host);
+  const prompt = fake.holdPrompt();
+  const duringStart = second.startTurn(input("hold"), settings);
+  await prompt.reached;
+  await second.shutdown(); prompt.release();
+  assert.equal((await duringStart).status, "unknown");
+  assert.equal(during.events.filter((event) => event.type === "turn_finished").length, 0);
 });
 
 test("known credentials are redacted before engine events reach the host", async () => {

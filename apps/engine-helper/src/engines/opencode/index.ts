@@ -5,23 +5,32 @@ import { fakeSdkPath } from "../../sdkLoader.ts";
 import { OpenCodeSession } from "./session.ts";
 import { client, sdk, startServer } from "./runtime.ts";
 import { variantCapabilities } from "./variant.ts";
+import { HelperError } from "../../protocol.ts";
 
 const exec = promisify(execFile);
 export const opencodeEngine: EngineModule = {
   async start(params, host) {
     try { return await OpenCodeSession.create(await sdk(), params, host); }
-    catch { throw new Error("OpenCode engine initialization failed"); }
+    catch (error) { if (error instanceof HelperError) throw error; throw new Error("OpenCode engine initialization failed"); }
   },
   // status.ts:945-978 at 916b5ccc1b2: connected providers with models mean ready;
   // no catalog means warning and unknown auth, not necessarily signed out.
   async probe(params, host) {
     let version: string | null = null;
+    let installed = false;
     try {
       const module = await sdk();
-      if (fakeSdkPath("opencode") && module.startFakeServer) version = "1.15.13";
+      if (fakeSdkPath("opencode") && module.startFakeServer) { installed = true; version = "1.15.13"; }
       else {
-        const result = await exec(params.launch?.binary || "opencode", [...(params.launch?.args ?? []), "--version"], { cwd: params.cwd ?? undefined, env: { ...process.env, ...params.launch?.env }, timeout: 10_000, maxBuffer: 64 * 1024 });
-        const match = /\b(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/.exec(result.stdout);
+        let result: Awaited<ReturnType<typeof exec>>;
+        try {
+          result = await exec(params.launch?.binary || "opencode", [...(params.launch?.args ?? []), "--version"], { cwd: params.cwd ?? undefined, env: { ...process.env, ...params.launch?.env }, timeout: 10_000, maxBuffer: 64 * 1024 });
+          installed = true;
+        } catch (error) {
+          installed = (error as NodeJS.ErrnoException).code !== "ENOENT";
+          throw error;
+        }
+        const match = /\b(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/.exec(result.stdout.toString());
         if (!match?.[1]) throw new Error("version");
         version = match[1];
       }
@@ -37,7 +46,7 @@ export const opencodeEngine: EngineModule = {
         return { installed: true, version, status: ready ? "ready" : "warning", auth: { status: ready ? "authenticated" : "unknown", type: "opencode" }, models, checkedAt: host.now() };
       } finally { await server.close(); }
     } catch {
-      return { installed: version !== null, version, status: "error", auth: { status: "unknown" }, models: [], checkedAt: host.now(), message: "OpenCode could not be probed" };
+      return { installed, version, status: "error", auth: { status: "unknown" }, models: [], checkedAt: host.now(), message: "OpenCode could not be probed" };
     }
   },
 };

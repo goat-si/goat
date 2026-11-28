@@ -1,48 +1,77 @@
 // Offline SDK double. Scripts use the prompt text; no credentials or network.
 export const calls: Array<{ method: string; args: unknown }> = [];
+export let sendEvent: (type: string, properties: unknown) => Promise<void> = async () => { throw new Error("no fake session"); };
 let sequence = 0;
-export function reset() { calls.length = 0; }
-export async function startFakeServer() { return { url: "http://127.0.0.1:1", close() {} }; }
+let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let promptReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let history: Array<{ info: { id: string; role: "user" | "assistant" } }> = [];
+let health = { healthy: true, version: "1.15.13" };
+const servers: Array<{ exit?: () => void }> = [];
+export function reset() { calls.length = 0; servers.length = 0; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+export function setHistory(value: typeof history) { history = value; }
+export function setHealth(value: typeof health) { health = value; }
+export function holdStatus() {
+  statusGate = Promise.withResolvers<void>(); statusReached = Promise.withResolvers<void>();
+  return { reached: statusReached.promise, release: () => statusGate?.resolve() };
+}
+export function holdPrompt() {
+  promptGate = Promise.withResolvers<void>(); promptReached = Promise.withResolvers<void>();
+  return { reached: promptReached.promise, release: () => promptGate?.resolve() };
+}
+export function crashServer(index: number) { servers[index]?.exit?.(); }
+export async function startFakeServer() {
+  const state: { exit?: () => void } = {}; servers.push(state);
+  return { url: "http://127.0.0.1:1", close() {}, onExit(callback: () => void) { state.exit = callback; } };
+}
 export function createOpencodeClient() {
-  const queue: unknown[] = [];
+  const queue: Array<{ event: unknown; acknowledged?: () => void }> = [];
   let wake: (() => void) | undefined;
   let stopped = false;
   let active = false;
-  const push = (type: string, properties: unknown) => { queue.push({ type, properties, id: `event-${++sequence}` }); wake?.(); };
+  const push = (type: string, properties: unknown, acknowledged?: () => void) => { queue.push({ event: { type, properties, id: `event-${++sequence}` }, ...(acknowledged ? { acknowledged } : {}) }); wake?.(); };
+  sendEvent = (type, properties) => new Promise<void>((resolve) => push(type, properties, resolve));
   async function* stream() {
     while (!stopped) {
       if (!queue.length) await new Promise<void>((resolve) => { wake = resolve; });
       wake = undefined;
-      while (queue.length) yield queue.shift();
+      while (queue.length) { const entry = queue.shift()!; yield entry.event; entry.acknowledged?.(); }
     }
   }
   const data = <T>(value: T) => ({ data: value });
-  const emitFinish = (sessionID: string, messageID: string) => {
+  const emitFinish = (sessionID: string, messageID: string, customText?: string) => {
     const assistant = `assistant-${messageID}`; const partID = `part-${messageID}`;
     push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: {} } });
-    push("message.part.updated", { sessionID, part: { id: partID, sessionID, messageID: assistant, type: "text", text: "Hello" } });
-    push("message.part.delta", { sessionID, messageID: assistant, partID, field: "text", delta: " world" });
+    push("message.part.updated", { sessionID, part: { id: partID, sessionID, messageID: assistant, type: "text", text: customText ?? "Hello" } });
+    if (customText === undefined) push("message.part.delta", { sessionID, messageID: assistant, partID, field: "text", delta: " world" });
     push("message.part.updated", { sessionID, part: { id: `tool-${messageID}`, sessionID, messageID: assistant, type: "tool", callID: `call-${messageID}`, tool: "bash", state: { status: "completed", input: { command: "pwd" }, output: "", title: "Working directory", time: { start: 1, end: 2 } } } });
     push("message.updated", { sessionID, info: { id: assistant, sessionID, role: "assistant", parentID: messageID, time: { completed: 2 } } });
     active = false; push("session.idle", { sessionID });
   };
   return {
+    global: { async health() { calls.push({ method: "global.health", args: {} }); return data(health); } },
     event: { async subscribe(_p: unknown, options: { signal?: AbortSignal }) { options.signal?.addEventListener("abort", () => { stopped = true; wake?.(); }); return { stream: stream() }; } },
     session: {
       async create(args: unknown) { calls.push({ method: "create", args }); return data({ id: "session-fake" }); },
       async get(args: { sessionID: string }) { calls.push({ method: "get", args }); return data({ id: args.sessionID }); },
+      async messages() { calls.push({ method: "messages", args: {} }); return data(history); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
-      async status() { return data({ "session-fake": { type: active ? "busy" : "idle" } }); },
-      async promptAsync(args: { sessionID: string; messageID: string; parts: Array<{ text: string }> }) {
-        calls.push({ method: "prompt", args }); const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
+      async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" } }); },
+      async promptAsync(args: { sessionID: string; messageID: string; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal }) {
+        calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
+        if (options?.signal?.aborted) throw new Error("fake prompt aborted");
+        const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
+        if (text.includes("reject-prompt")) throw new Error("fake rejection", { cause: { status: 400 } });
         if (text.includes("fail-prompt")) throw new Error("fake error");
         active = true;
+        if (text.includes("inline-events")) { emitFinish(sessionID, messageID); return data(undefined); }
         setImmediate(() => {
           push("message.updated", { sessionID, info: { id: messageID, sessionID, role: "user", time: {} } });
           push("session.status", { sessionID, status: { type: "busy" } });
           if (text.includes("approve")) push("permission.asked", { id: "request-1", sessionID, permission: "bash", patterns: ["*"], metadata: {}, always: [] });
           else if (text.includes("question")) push("question.asked", { id: "question-1", sessionID, questions: [{ header: "Color", question: "Choose", options: [{ label: "Blue", description: "Color" }] }] });
-          else if (!text.includes("hold")) emitFinish(sessionID, messageID);
+          else if (!text.includes("hold")) emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}` : undefined);
         });
         return data(undefined);
       },

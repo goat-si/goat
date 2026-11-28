@@ -1,12 +1,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { createServer } from "node:net";
 import { fakeSdkPath, loadSdk } from "../../sdkLoader.ts";
 import { HelperError, type LaunchSpec } from "../../protocol.ts";
 import { resolveOpenCodeConfigContent } from "./openCodeConfigContent.ts";
 
 export type Sdk = typeof import("@opencode-ai/sdk/v2") & {
   // Only the injected test SDK implements this process substitute.
-  startFakeServer?: () => Promise<{ url: string; close(): void }>;
+  startFakeServer?: () => Promise<{ url: string; close(): void; onExit?(callback: () => void): void }>;
 };
 export async function sdk(): Promise<Sdk> {
   return loadSdk<Sdk>("opencode", "@opencode-ai/sdk/v2");
@@ -19,17 +20,31 @@ export interface Server {
   onExit(callback: () => void): void;
 }
 
+// OpenCodeRuntime.ts:565-575: choose a free loopback port before starting the CLI.
+async function freePort(): Promise<number> {
+  const listener = createServer();
+  return new Promise((resolve, reject) => {
+    listener.once("error", reject);
+    listener.listen(0, "127.0.0.1", () => {
+      const address = listener.address();
+      if (!address || typeof address === "string") { listener.close(); reject(new Error("no port")); return; }
+      listener.close((error) => error ? reject(error) : resolve(address.port));
+    });
+  });
+}
+
 // Adapted from OpenCodeRuntime.ts:559-680 at 916b5ccc1b2. The child inherits the
 // helper process group so the Rust driver's group cleanup also covers it.
 export async function startServer(module: Sdk, cwd: string, launch: LaunchSpec | null): Promise<Server> {
   if (fakeSdkPath("opencode") && module.startFakeServer) {
     const server = await module.startFakeServer();
-    return { url: server.url, password: "", close: async () => server.close(), onExit: () => {} };
+    return { url: server.url, password: "", close: async () => server.close(), onExit: (callback) => server.onExit?.(callback) };
   }
-  const password = randomBytes(32).toString("base64url");
   const environment = { ...process.env, ...launch?.env };
+  const password = environment.OPENCODE_SERVER_PASSWORD || randomBytes(32).toString("base64url");
+  const port = await freePort().catch(() => { throw new HelperError("start_failed", "OpenCode could not select a loopback port"); });
   const child: ChildProcess = spawn(launch?.binary || "opencode", [
-    ...(launch?.args ?? []), "serve", "--hostname=127.0.0.1", "--port=0",
+    ...(launch?.args ?? []), "serve", "--hostname=127.0.0.1", `--port=${port}`,
   ], {
     cwd, env: { ...environment, OPENCODE_SERVER_PASSWORD: password, OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(launch?.env, process.env) },
     stdio: ["ignore", "pipe", "pipe"],
