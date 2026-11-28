@@ -1412,3 +1412,66 @@ async fn recovery_cut_short_by_a_crash_is_finished_by_the_next_start() {
     .await;
     drop(keep);
 }
+
+#[tokio::test]
+async fn keyed_send_is_found_past_the_recent_lines() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "far-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    let child = child_id(
+        &t.host
+            .thread_start(
+                &me,
+                ThreadStartArgs {
+                    task: "c".into(),
+                    ..Default::default()
+                },
+            )
+            .await,
+    );
+    let first = t
+        .host
+        .thread_send(
+            &me,
+            goat2_host::api::ThreadSendArgs {
+                thread_id: child.clone(),
+                text: "x".into(),
+                mode: Some(InputMode::Followup),
+                client_request_id: Some("far-key".into()),
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value: first } = first else {
+        panic!("{first:?}")
+    };
+    for _ in 0..600 {
+        t.host
+            .store()
+            .append(
+                &child,
+                vec![LogEvent::ThreadChanged(
+                    goat2_contracts::ThreadChanged::default(),
+                )],
+            )
+            .unwrap();
+    }
+    let again = t
+        .host
+        .thread_send(
+            &me,
+            goat2_host::api::ThreadSendArgs {
+                thread_id: child.clone(),
+                text: "x".into(),
+                mode: Some(InputMode::Followup),
+                client_request_id: Some("far-key".into()),
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value } = again else {
+        panic!("{again:?}")
+    };
+    assert_eq!(value["inputId"], first["inputId"]);
+    assert_eq!(value["deduplicated"], true);
+}
