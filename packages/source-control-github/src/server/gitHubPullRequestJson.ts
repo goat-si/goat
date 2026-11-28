@@ -1627,10 +1627,10 @@ function toFilesPatch(entries: ReadonlyArray<unknown>): GitHubPullRequestFilesPa
     const hunks = value.patch ?? "";
     const status = value.status?.trim().toLowerCase();
     if (hunks.length === 0) {
-      // Hunkless renames are complete; omitted binary changes leave a patch gap.
+      // GitHub can omit a modified file's patch even when both counts are zero.
       const additions = value.additions ?? 0;
       const deletions = value.deletions ?? 0;
-      if (additions + deletions > 0) {
+      if (additions + deletions > 0 || status === "modified") {
         truncated = true;
         omittedFileStats.push({ path: value.filename, additions, deletions });
       }
