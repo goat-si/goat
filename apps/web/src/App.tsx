@@ -10,7 +10,8 @@ import { Planned, plannedProps } from "./planned/Planned.tsx";
 import { useUi, type UiStore } from "./ui-state/uiState.ts";
 import { clock, duration, shortTime } from "./lib/format.ts";
 import { Face } from "./bot-home/Face.tsx";
-import { BotFace, faceFromId } from "@goat2/bot-face";
+import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
+import { NewBotDialog } from "./bot-home/NewBot.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -22,6 +23,11 @@ function sortBots(rows: BotRowData[]) {
 }
 
 export function App({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
+  if (scene === "2D0-1") return <div style={{ height: "100%", overflow: "auto" }}><FaceGallery /></div>;
+  return <Workspace ui={store} scene={scene} />;
+}
+
+function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) {
   const [ui, setUi] = useUi(store);
   const snap = useHost();
   const { desktop, build } = useHostContext();
@@ -30,6 +36,7 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
   const bot = rows.find((r) => r.botId === ui.botId) ?? main;
   const needsCount = rows.filter((r) => r.state === "needs-you").length;
   const [railSearch, setRailSearch] = useState(false);
+  const [newBot, setNewBot] = useState(scene === "2PU-1");
 
   const toggleSidebar = () => setUi((s) => ({ sidebarOpen: !s.sidebarOpen }));
   useEffect(() => {
@@ -89,13 +96,15 @@ export function App({ ui: store, scene }: { ui: UiStore; scene: string | null })
     />
   );
 
-  const sidebar = ui.sidebarOpen ? <BotSidebar rows={rows} ui={ui} setUi={setUi} /> : null;
+  const sidebar = ui.sidebarOpen ? <BotSidebar rows={rows} ui={ui} setUi={setUi} onNewBot={() => setNewBot(true)} /> : null;
   const mainArea = bot
     ? <P.Main chat={<BotChat bot={bot} />} panel={ui.panelOpen ? <Overview bot={bot} scene={scene} /> : null} />
     : <P.Main chat={<Disconnected />} panel={null} />;
   return (
     <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
       <P.Frame top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail} sidebar={sidebar} main={mainArea} />
+      {newBot && <NewBotDialog onClose={() => setNewBot(false)} onCreated={(botId) => { setNewBot(false); setUi({ mode: "bots", botId, panelThreadId: null }); }}
+        initial={scene === "2PU-1" ? { name: "Reviewer", purpose: "Reviews every PR before merge and asks me when unsure.", face: { shape: "squircle", color: "goat", goat: true } } : undefined} />}
     </div>
   );
 }
@@ -111,7 +120,7 @@ function Disconnected() {
 
 // ---------------------------------------------------------------- sidebar
 
-function BotSidebar({ rows, ui, setUi }: { rows: BotRowData[]; ui: ReturnType<typeof useUi>[0]; setUi: ReturnType<typeof useUi>[1] }) {
+function BotSidebar({ rows, ui, setUi, onNewBot }: { rows: BotRowData[]; ui: ReturnType<typeof useUi>[0]; setUi: ReturnType<typeof useUi>[1]; onNewBot: () => void }) {
   const pinned = ui.pinned.map((id) => rows.find((r) => r.botId === id)).filter((r): r is BotRowData => !!r);
   const rest = sortBots(rows.filter((r) => !ui.pinned.includes(r.botId)));
   const needs = rest.filter((r) => r.state === "needs-you");
@@ -153,7 +162,7 @@ function BotSidebar({ rows, ui, setUi }: { rows: BotRowData[]; ui: ReturnType<ty
   const showTiles = pinned.length > 0 || dragging !== null;
   return (
     <P.Sidebar>
-      <P.SidebarSearch search={plannedProps("search")} compose={plannedProps("new-bot")} />
+      <P.SidebarSearch search={plannedProps("search")} compose={btn("New bot", onNewBot, { title: "New bot" })} />
       {showTiles && (pinned.length > 0 ? (
         <P.PinnedGrid root={{ ...dropOnTiles(), "data-pinned-grid": "" }}>
           {pinned.map((r, i) => (

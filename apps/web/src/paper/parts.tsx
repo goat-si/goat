@@ -889,3 +889,234 @@ export function AsleepCard({ wake, other }: { wake: El; other: El }) {
   );
 }
 
+/** 2PU-1 0.0 */
+export function NewBotBackdrop({ children, root }: { children: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', backgroundColor: '#F2F2F3', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '900px', justifyContent: 'center', width: '1440px' }}>
+      {children}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0 */
+export function NewBotDialog({ preview, shuffle, upload, close, nameInput, purposeInput, toggleFace, toggle, shapes, colors, cancel, create, error }: { preview: ReactNode; shuffle: El; upload: El; close: El; nameInput: ReactNode; purposeInput: ReactNode; toggleFace: ReactNode; toggle: ReactNode; shapes: ReactNode; colors: ReactNode; cancel: El; create: El; error: ReactNode }) {
+  return (
+    <div role="dialog" aria-modal="true" aria-label="New bot" style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000029 0px 24px 64px, #0000000A 0px 0px 0px 1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, width: '640px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBottom: '4px', paddingInline: '24px', paddingTop: '20px' }}>
+        <div style={{ boxSizing: 'border-box', color: '#0B0B0C', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '16px', fontWeight: 600, lineHeight: '20px' }}>
+          New bot
+        </div>
+        <div {...close} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '28px', justifyContent: 'center', width: '28px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '18px', lineHeight: '22px' }}>
+            ×
+          </div>
+        </div>
+      </div>
+      <div style={{ boxSizing: 'border-box', display: 'flex', gap: '28px', paddingBlock: '20px', paddingInline: '24px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: 0, gap: '12px', width: '168px' }}>
+          <div style={{ alignItems: 'center', backgroundColor: '#F7F7F8', borderRadius: '16px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '168px', justifyContent: 'center', width: '168px' }}>
+            {preview}
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
+            <div {...shuffle} style={{ alignItems: 'center', borderColor: '#ECECEE', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', height: '30px', paddingInline: '12px' }}>
+              <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+                Shuffle
+              </div>
+            </div>
+            <div {...upload} style={{ alignItems: 'center', borderColor: '#ECECEE', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', height: '30px', paddingInline: '12px' }}>
+              <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '16px' }}>
+                Upload
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '16px' }}>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '16px' }}>
+              Name
+            </div>
+            <div style={{ borderColor: '#ECECEE', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', flexShrink: 0, height: '40px', paddingBlock: '10px', paddingInline: '12px' }}>
+              {nameInput}
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#5E5E64', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '16px' }}>
+              What it does
+            </div>
+            <div style={{ borderColor: '#ECECEE', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', flexShrink: 0, height: '60px', paddingBlock: '10px', paddingInline: '12px' }}>
+              {purposeInput}
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ alignItems: 'center', borderColor: '#ECECEE', borderRadius: '10px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', marginBottom: '8px', marginLeft: '24px', marginRight: '24px', paddingBlock: '12px', paddingInline: '14px' }}>
+        <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '12px' }}>
+          {toggleFace}
+          <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '1px' }}>
+            <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 500, lineHeight: '18px' }}>
+              GOAT horns and snout
+            </div>
+            <div style={{ boxSizing: 'border-box', color: '#8A8A90', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+              Turn off for a plain face
+            </div>
+          </div>
+        </div>
+        {toggle}
+      </div>
+      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '16px', paddingInline: '24px', paddingTop: '4px' }}>
+        <div style={{ boxSizing: 'border-box', color: '#5E5E64', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '16px' }}>
+          Shape
+        </div>
+        {shapes}
+      </div>
+      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '24px', paddingInline: '24px', paddingTop: '4px' }}>
+        <div style={{ boxSizing: 'border-box', color: '#5E5E64', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '16px' }}>
+          Color
+        </div>
+        {colors}
+      </div>
+      <div style={{ borderTopColor: '#ECECEE', borderTopStyle: 'solid', borderTopWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '8px', justifyContent: 'end', paddingBlock: '16px', paddingInline: '24px' }}>
+        {error}
+        <div {...cancel} style={{ alignItems: 'center', borderColor: '#ECECEE', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', height: '36px', paddingInline: '14px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#111113', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', lineHeight: '18px' }}>
+            Cancel
+          </div>
+        </div>
+        <div {...create} style={{ alignItems: 'center', backgroundColor: '#111113', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', height: '36px', paddingInline: '14px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 500, lineHeight: '18px' }}>
+            Create bot
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.2.1 */
+export function NewBotToggleOn({ root }: { root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', backgroundColor: '#111113', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '20px', justifyContent: 'end', padding: '2px', width: '36px' }}>
+      <div style={{ backgroundColor: '#FFFFFF', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', flexShrink: 0, height: '16px', width: '16px' }} />
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.3.1 */
+export function ShapeGrid({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'flex', flexWrap: 'wrap', gap: '4px', width: '592px' }}>
+      {children}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.3.1.0 */
+export function ShapeOption({ face, root }: { face: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', backgroundColor: '#F7F7F8', borderRadius: '10px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '45px', justifyContent: 'center', width: '45px' }}>
+      {face}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.3.1.1 */
+export function ShapeOptionSelected({ face, root }: { face: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', backgroundColor: '#E9E9EC', borderRadius: '10px', boxShadow: '#111113 0px 0px 0px 1.5px inset', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '45px', justifyContent: 'center', width: '45px' }}>
+      {face}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.4.1 */
+export function ColorRow({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', display: 'flex', gap: '14px', paddingLeft: '2px' }}>
+      {children}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.4.1.0 */
+export function ColorOption({ swatch, root }: { swatch: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', borderRadius: 'calc(infinity * 1px)', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '30px', justifyContent: 'center', width: '30px' }}>
+      {swatch}
+    </div>
+  );
+}
+
+/** 2PU-1 0.0.0.4.1.8 */
+export function ColorOptionSelected({ swatch, root }: { swatch: ReactNode; root: El }) {
+  return (
+    <div {...root} style={{ alignItems: 'center', borderRadius: 'calc(infinity * 1px)', boxShadow: '#FFFFFF 0px 0px 0px 2px, #111113 0px 0px 0px 3.5px', boxSizing: 'border-box', display: 'flex', flexShrink: 0, height: '30px', justifyContent: 'center', width: '30px' }}>
+      {swatch}
+    </div>
+  );
+}
+
+/** 25D-0 0.0.1.1.1.0.1 */
+export function ThreadPanel({ back, open, close, title, meta, body, openTag }: { back: El; open: El; close: El; title: ReactNode; meta: ReactNode; body: ReactNode; openTag: ReactNode }) {
+  return (
+    <div style={{ borderLeftColor: '#ECECEC', borderLeftStyle: 'solid', borderLeftWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '16px', minWidth: '0px', overflow: 'clip', paddingBlock: '18px', paddingInline: '16px', width: '320px' }}>
+      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between' }}>
+        <svg {...back} width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+          <path d="m12 19-7-7 7-7" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M19 12H5" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <div style={{ boxSizing: 'border-box', display: 'flex', gap: '2px' }}>
+          {openTag}
+          <div {...open} style={{ alignItems: 'center', backgroundColor: '#F3F3F3', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '32px', justifyContent: 'center', position: 'relative', width: '32px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+              <path d="M15 3h6v6" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="m21 3-7 7" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="m3 21 7-7" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M9 21H3v-6" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <div {...close} style={{ alignItems: 'center', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '32px', justifyContent: 'center', width: '32px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+              <path d="M18 6 6 18" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="m6 6 12 12" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        </div>
+      </div>
+      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div data-panel-title="" style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', fontVariationSettings: '"wght" 600', fontWeight: 600, lineHeight: '20px' }}>
+          {title}
+        </div>
+        <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px' }}>
+          {meta}
+        </div>
+      </div>
+      <div style={{ backgroundColor: '#ECECEC', boxSizing: 'border-box', flexShrink: 0, height: '1px' }} />
+      {body}
+    </div>
+  );
+}
+
+/** 25D-0 0.0.1.1.1.0.1.3 */
+export function PanelUserBubble({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ alignItems: 'end', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+      <div style={{ backgroundColor: '#0D0D0D', borderRadius: '20px', boxSizing: 'border-box', maxWidth: '80%', paddingBlock: '7px', paddingInline: '13px' }}>
+        <div style={{ boxSizing: 'border-box', color: '#FFFFFF', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13.5px', lineHeight: '19px' }}>
+          {text}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 25D-0 0.0.1.1.1.0.1.5 */
+export function PanelAnswer({ text }: { text: ReactNode }) {
+  return (
+    <div style={{ boxSizing: 'border-box', maxWidth: '680px', paddingBlock: '2px', paddingInline: '4px' }}>
+      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '13.5px', lineHeight: '21px' }}>
+        {text}
+      </div>
+    </div>
+  );
+}
+

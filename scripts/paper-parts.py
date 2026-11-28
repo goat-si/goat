@@ -251,6 +251,31 @@ P("SentMessage", "12P-1", CHAT + ".0.4", "Sent · GOAT starts when", "text: Reac
 # U8-1: machine asleep (machines are Planned; the card renders only in the U8-1 verification scene).
 P("AsleepCard", "U8-1", PANEL + ".2", "asleep", "wake: object; other: object", attrs={"1.0": "{...wake}", "1.1": "{...other}"})
 
+
+# 2PU-1: new bot dialog (live: create_bot).
+NB = "0.0.0"
+P("NewBotBackdrop", "2PU-1", "0.0", "#F2F2F3", "children: ReactNode; root: object", slots={"0": "{children}"}, attrs={"": "{...root}"})
+P("NewBotDialog", "2PU-1", NB, "New bot", "preview: ReactNode; shuffle: object; upload: object; close: object; nameInput: ReactNode; purposeInput: ReactNode; toggleFace: ReactNode; toggle: ReactNode; shapes: ReactNode; colors: ReactNode; cancel: object; create: object; error: ReactNode",
+  slots={"1.0.0.0": "{preview}", "1.1.0.1.0": "{nameInput}", "1.1.1.1.0": "{purposeInput}", "2.0.0": "{toggleFace}", "2.1": "{toggle}", "3.1": "{shapes}", "4.1": "{colors}"},
+  attrs={"0.1": "{...close}", "1.0.1.0": "{...shuffle}", "1.0.1.1": "{...upload}", "5.0": "{...cancel}", "5.1": "{...create}", "": 'role="dialog" aria-modal="true" aria-label="New bot"'},
+  before={"5.0": "{error}"})
+P("NewBotToggleOn", "2PU-1", NB + ".2.1", "justifyContent: 'end'", "root: object", attrs={"": "{...root}"})
+P("ShapeGrid", "2PU-1", NB + ".3.1", "flexWrap", "children: ReactNode", slots={"0": "{children}"}, drop=[str(i) for i in range(1, 12)])
+P("ShapeOption", "2PU-1", NB + ".3.1.0", "#F7F7F8", "face: ReactNode; root: object", slots={"0": "{face}"}, attrs={"": "{...root}"})
+P("ShapeOptionSelected", "2PU-1", NB + ".3.1.1", "1.5px inset", "face: ReactNode; root: object", slots={"0": "{face}"}, attrs={"": "{...root}"})
+P("ColorRow", "2PU-1", NB + ".4.1", "gap: '14px'", "children: ReactNode", slots={"0": "{children}"}, drop=[str(i) for i in range(1, 11)])
+P("ColorOption", "2PU-1", NB + ".4.1.0", "30px", "swatch: ReactNode; root: object", slots={"0": "{swatch}"}, attrs={"": "{...root}"})
+P("ColorOptionSelected", "2PU-1", NB + ".4.1.8", "3.5px", "swatch: ReactNode; root: object", slots={"0": "{swatch}"}, attrs={"": "{...root}"})
+
+# 25D-0: worker thread opened in the right panel (replaces the Overview).
+TP = "0.0.1.1.1.0.1"
+P("ThreadPanel", "25D-0", TP, "Go to thread", "back: object; open: object; close: object; title: ReactNode; meta: ReactNode; body: ReactNode; openTag: ReactNode",
+  attrs={"0.0": "{...back}", "1.0": 'data-panel-title=""', "0.1.0": "{...open}", "0.1.1": "{...close}"}, drop=["0.1.0.1", "4", "5"],
+  slots={"3": "{body}"}, before={"0.1.0": "{openTag}"},
+  texts={"Review #7712": "{title}", "Done · 4m 12s · gpt-6.1-sol · Wicked": "{meta}"})
+P("PanelUserBubble", "25D-0", TP + ".3", "Review opencodex", "text: ReactNode", texts={"Review opencodex #7712 when it opens. Run the tests.": "{text}"})
+P("PanelAnswer", "25D-0", TP + ".5", "81", "text: ReactNode", slots={"0.0": "{text}"})
+
 if __name__ == "__main__":
     if sys.argv[1] == "--tree":
         outline(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 6)

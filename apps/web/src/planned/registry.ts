@@ -2,7 +2,6 @@
 // when the owner flips a row to live, delete its entry here and the shell that uses it.
 export type PlannedState = "planned" | "undecided";
 export const PLANNED = {
-  "new-bot": { state: "planned", what: "Create a bot with its own face and job" },
   "runtime-picker-other": { state: "planned", what: "Run a bot on Claude, Antigravity, OpenCode or Pi" },
   "runtime-picker-change": { state: "planned", what: "Switch an existing thread's model (change_thread)" },
   "thread-list-slice": { state: "planned", what: "Thread mode: every thread, newest first (next slice)" },
