@@ -186,6 +186,7 @@ export const AuthStandardClientScopes = [
   AuthOrchestrationOperateScope,
   AuthSettingsWriteScope,
   AuthProvidersManageScope,
+  AuthVoiceManageScope,
   AuthEnvironmentMaintainScope,
   AuthPreviewOperateScope,
   AuthDiagnosticsReadScope,

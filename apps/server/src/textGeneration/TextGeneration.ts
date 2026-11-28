@@ -28,6 +28,8 @@ export type {
   PrContentGenerationResult,
   ReviewGuideGenerationInput,
   ReviewGuideGenerationResult,
+  SpeechPostProcessingInput,
+  SpeechPostProcessingResult,
   ThreadTitleGenerationInput,
   ThreadTitleGenerationResult,
   ResolveMemoryConflictInput,
@@ -56,6 +58,7 @@ type TextGenerationOp =
   | "generateThreadTitle"
   | "generateChannelReception"
   | "generateReviewGuide"
+  | "generateSpeechPostProcessing"
   | "resolveMemoryConflict"
   | "generateMemorySummary";
 
@@ -198,6 +201,20 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((textGeneration) => textGeneration.generateReviewGuide(input)),
       );
     }),
+    generateSpeechPostProcessing: Effect.fn("TextGeneration.generateSpeechPostProcessing")(
+      function* (input) {
+        const textGeneration = yield* resolveText(
+          "generateSpeechPostProcessing",
+          input.modelSelection.instanceId,
+        );
+        if (!textGeneration.generateSpeechPostProcessing)
+          return yield* new TextGenerationError({
+            operation: "generateSpeechPostProcessing",
+            detail: "This provider does not support voice cleanup.",
+          });
+        return yield* textGeneration.generateSpeechPostProcessing(input);
+      },
+    ),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {
       return resolveText("generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) =>
@@ -250,6 +267,10 @@ export const make = Effect.gen(function* () {
       capable("generateBranchName", input).pipe(Effect.flatMap(gated(ungated.generateBranchName))),
     generateChannelReception: gated(ungated.generateChannelReception),
     generateReviewGuide: gated(ungated.generateReviewGuide),
+    generateSpeechPostProcessing: (input) =>
+      capable("generateSpeechPostProcessing", input).pipe(
+        Effect.flatMap(gated(ungated.generateSpeechPostProcessing)),
+      ),
     generateThreadTitle: (input) =>
       capable("generateThreadTitle", input).pipe(
         Effect.flatMap(gated(ungated.generateThreadTitle)),

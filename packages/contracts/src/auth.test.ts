@@ -23,10 +23,10 @@ const decodeEnvironmentScopes = Schema.decodeSync(AuthEnvironmentScopes);
 const decodeGrantScopes = Schema.decodeSync(AuthGrantScopes);
 
 describe("authorization grants", () => {
-  it("requires an explicit voice management grant", () => {
+  it("grants voice management to ordinary paired clients", () => {
     expect(decodeEnvironmentScopes(["voice:manage"])).toEqual(["voice:manage"]);
     expect(decodeGrantScopes(["voice:manage"])).toEqual(["voice:manage"]);
-    expect(AuthStandardClientScopes).not.toContain("voice:manage");
+    expect(AuthStandardClientScopes).toContain("voice:manage");
     expect(
       sessionGrantsScope(
         { authenticated: true, scopes: ["orchestration:operate"] },

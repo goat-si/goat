@@ -157,6 +157,25 @@ export interface TextGenerationOperations {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  /** Clean a dictated transcript. Uses any text-capable provider, including a local OpenAI-compatible endpoint. */
+  readonly generateSpeechPostProcessing?: (
+    input: SpeechPostProcessingInput,
+  ) => Effect.Effect<SpeechPostProcessingResult, TextGenerationError>;
+}
+
+export interface SpeechPostProcessingInput {
+  /** An empty scratch directory; cleanup must not read a checkout. */
+  cwd: string;
+  transcript: string;
+  draftText: string;
+  instructions: string;
+  language?: string | undefined;
+  modelSelection: ModelSelection;
+}
+
+export interface SpeechPostProcessingResult {
+  text: string;
 }
 
 export interface ProviderTextGeneration extends TextGenerationOperations {

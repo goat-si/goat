@@ -1,4 +1,3 @@
-import { GlobalVoiceRecording } from "../speech/GlobalVoiceRecording";
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
 import { GoatBotRouteDrafts } from "../components/goatBot/GoatBotRouteDrafts";
@@ -21,7 +20,6 @@ function ChatRouteLayout() {
     shownTarget?.kind === "server" ? shownTarget.threadRef.environmentId : primaryEnvironmentId;
   return (
     <GoatBotRouteDrafts>
-      <GlobalVoiceRecording />
       <PreviewSessionStack
         environmentId={sessionsEnvironmentId}
         threadRef={shownTarget?.kind === "server" ? shownTarget.threadRef : null}

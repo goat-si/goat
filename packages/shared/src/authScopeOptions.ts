@@ -17,6 +17,7 @@ import {
   AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
+  AuthVoiceManageScope,
 } from "@goat/contracts";
 
 export const AUTH_SCOPE_OPTIONS: ReadonlyArray<{
@@ -43,6 +44,11 @@ export const AUTH_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthProvidersManageScope,
     title: "Manage providers",
     description: "Configure, install, sign in to, and update providers and usage sources.",
+  },
+  {
+    scope: AuthVoiceManageScope,
+    title: "Manage voice models",
+    description: "Download, select, link, and remove local speech models.",
   },
   {
     scope: AuthEnvironmentMaintainScope,

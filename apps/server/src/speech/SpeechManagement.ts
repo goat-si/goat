@@ -1,15 +1,18 @@
 import type { SpeechConfiguration, ValidatedVoiceWav } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import { ServerSettingsService } from "../serverSettings.ts";
+import { TextGeneration } from "../textGeneration/TextGeneration.ts";
 import { getSpeechModel, SPEECH_MODELS } from "./model.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
 import * as SpeechInference from "./SpeechInference.ts";
+import { postProcessTranscript } from "./postProcessing.ts";
 
 export class SpeechManagementError extends Schema.TaggedError<SpeechManagementError>()(
   "SpeechManagementError",
@@ -72,9 +75,19 @@ const make = Effect.gen(function* () {
   const store = yield* SpeechModelStore.SpeechModelStore;
   const settings = yield* ServerSettingsService;
   const inference = yield* SpeechInference.SpeechInference;
+  const textGeneration = yield* Effect.serviceOption(TextGeneration);
   const gate = yield* Semaphore.make(1);
   const failure = (operation: string, cause: unknown) =>
     new SpeechManagementError({ operation, cause });
+  const finalize = (
+    text: string,
+    config: import("@goat/contracts").SpeechConfiguration,
+    language?: string,
+  ) =>
+    postProcessTranscript(text, config, language, "", {
+      settings,
+      textGeneration: Option.getOrNull(textGeneration),
+    });
   const definition = (id: string) => {
     const model = getSpeechModel(id);
     return model ? Effect.succeed(model) : Effect.fail(failure("model", "Unknown model."));
@@ -190,11 +203,14 @@ const make = Effect.gen(function* () {
           const path = yield* store.installedPath(model);
           if (path === undefined)
             return yield* failure("transcribe", "The selected speech model is not installed.");
-          return yield* inference.transcribe(
+          const transcript = yield* inference.transcribe(
             path,
             audio.bytes.subarray(audio.dataOffset, audio.dataOffset + audio.dataBytes),
             config,
             language,
+          );
+          return yield* finalize(transcript, config, language).pipe(
+            Effect.mapError((error) => failure("post-processing", error)),
           );
         }),
       ),
@@ -224,7 +240,20 @@ const make = Effect.gen(function* () {
             const worker = yield* inference
               .openStream(path, config, language)
               .pipe(Effect.mapError((error) => failure("stream", error)));
-            return { ...worker, configuration: config };
+            return {
+              ...worker,
+              configuration: config,
+              finish: worker.finish.pipe(
+                Effect.flatMap((text) =>
+                  finalize(text, config, language).pipe(
+                    Effect.mapError(
+                      (error) => new SpeechInference.SpeechInferenceError({ cause: error }),
+                    ),
+                  ),
+                ),
+                Effect.scoped,
+              ),
+            };
           }).pipe(
             Scope.provide(scope),
             Effect.onError(() => Scope.close(scope, Exit.void)),

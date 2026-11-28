@@ -112,7 +112,13 @@ it.effect("lists, downloads, configures and removes catalog models", () =>
     expect(recommended?.recommended).toBe(true);
     expect(recommended).toMatchObject({ benchmark: { cpu: 2.15, accelerated: 1.19 } });
     yield* service.download(modelId);
-    yield* service.configure({ modelId, acceleration: "cpu" });
+    yield* service.configure({
+      modelId,
+      acceleration: "cpu",
+      postProcessingMode: "local",
+      postProcessingInstructions: "",
+      customWords: [],
+    });
     expect((yield* service.list).find((entry) => entry.id === modelId)).toMatchObject({
       installed: true,
       selected: true,

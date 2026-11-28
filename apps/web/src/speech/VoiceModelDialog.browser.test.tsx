@@ -44,6 +44,9 @@ vi.mock("@goat/client-runtime/voice-input", async (original) => ({
   getEnvironmentSpeechConfiguration: async () => ({
     modelId: "a",
     acceleration: fixture.acceleration,
+    postProcessingMode: "local",
+    postProcessingInstructions: "",
+    customWords: [],
   }),
 }));
 

@@ -15,6 +15,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
+  buildSpeechPostProcessingPrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import { toJsonSchemaObject, toStrictJsonSchemaObject } from "./textGenerationUtils.ts";
@@ -106,6 +107,13 @@ const operationSchemas = Effect.gen(function* () {
       }).outputSchema,
     ],
     generateChannelReception: [ChannelReceptionModelOutput],
+    generateSpeechPostProcessing: [
+      buildSpeechPostProcessingPrompt({
+        transcript: "um, hello",
+        draftText: "",
+        instructions: "Clean the transcript.",
+      }).outputSchema,
+    ],
     generateMemorySummary: [(yield* buildMemorySummaryPrompt(summaryInput)).outputSchema],
     resolveMemoryConflict: [(yield* buildMemoryConflictPrompt(conflictInput)).outputSchema],
   };
