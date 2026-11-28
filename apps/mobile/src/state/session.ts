@@ -81,6 +81,16 @@ export function readEnvironmentScope(
   return sessionHasScope(result, scope);
 }
 
+export function readEnvironmentScopeDenied(
+  environmentId: EnvironmentId,
+  scope: AuthEnvironmentScope,
+): boolean {
+  return sessionDeniesScope(
+    appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId)),
+    scope,
+  );
+}
+
 /**
  * A node reached through a hub, which registers only folders that already exist there. The active
  * route decides: cached session state can still describe the route used before.

@@ -38,7 +38,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("react", () => ({
   useCallback: (callback: unknown) => callback,
+  useInsertionEffect: (effect: () => void) => {
+    effect();
+  },
   useRef: (current: unknown) => ({ current }),
+  useState: (initial: unknown) => [
+    typeof initial === "function" ? (initial as () => unknown)() : initial,
+    () => {},
+  ],
 }));
 vi.mock("react-native", () => ({
   Alert: {

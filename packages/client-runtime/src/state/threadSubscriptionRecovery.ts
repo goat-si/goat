@@ -18,6 +18,7 @@ const SYNC_ERROR = "Could not synchronize the thread.";
  */
 export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input: {
   readonly isCold: () => boolean;
+  readonly initialNeedsFreshSnapshot?: boolean;
   readonly setStreamError: (message: string | null) => Effect.Effect<void>;
   readonly logAttributes: Record<string, unknown>;
 }) {
@@ -28,7 +29,8 @@ export const makeThreadSubscriptionRecovery = Effect.fnUntraced(function* (input
   let openingOverSocket = false;
   const failedColdOpen = () => openingOverSocket && input.isCold();
   // The cursor moved before the batch that failed to apply, so resuming from it would skip it.
-  let needsFreshSnapshot = false;
+  // Also seeded when opening a cached projection that still has active subagents.
+  let needsFreshSnapshot = input.initialNeedsFreshSnapshot === true;
   const resubscribe = Queue.offer(resubscribes, undefined);
   const backOffAfterDefect = Effect.suspend(() =>
     input

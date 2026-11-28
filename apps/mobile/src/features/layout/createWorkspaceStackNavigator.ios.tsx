@@ -19,16 +19,7 @@ import {
   type NativeStackNavigatorProps,
   type NativeStackTypeBag,
 } from "@react-navigation/native-stack";
-import {
-  Fragment,
-  use,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentProps,
-} from "react";
+import { Fragment, use, useCallback, useMemo, useRef, useState, type ComponentProps } from "react";
 import { StyleSheet, useWindowDimensions, View } from "react-native";
 import { Split, type SplitHostCommands } from "react-native-screens";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -47,8 +38,9 @@ import { workspaceUsesColumns } from "../workspace/workspace-tabs-state";
 import { isSettingsRoute, settingsOpenIn } from "../settings/settings-navigation";
 import { isNewTaskRoute, workspaceRoutesOf } from "./workspace-overlay-routes";
 import { setNativelyPoppingWorkspaceRoute } from "../workspace/workspace-detail-selection";
+import { useCollapsedSplitColumn } from "./useCollapsedSplitColumn";
 import { useDeviceType, useNativeLayoutMetrics } from "../../native/native-layout-metrics";
-import { nativeInspectorColumnWidth } from "../../lib/layout";
+import { INSPECTOR_MIN_MAIN_WIDTH, nativeInspectorColumnWidth } from "../../lib/layout";
 
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";
 import { WorkspacePaneDivider } from "./workspace-pane-divider";
@@ -67,12 +59,10 @@ import {
 import { V5StackHeader } from "../../native/V5StackHeader.ios";
 import type { AppNativeStackNavigationOptions } from "../../native/StackHeader";
 import {
-  collapsedSplitTransition,
   nativeWorkspacePopAction,
   projectWorkspaceStack,
   partitionStackPresentations,
   reconcileStackScreens,
-  type CollapsedSplitColumn,
 } from "../../native/workspace-stack-projection";
 import {
   NativePrimaryColumnContext,
@@ -259,11 +249,17 @@ function WorkspaceColumns(
     deviceType === "duo-unfolded" && selectedTab !== "pullRequests" && !settingsOpen
       ? openNewTask
       : undefined;
-  const hostRef = useRef<SplitHostCommands>(null);
   const activeDetailKey = props.detail.at(-1)?.key;
   const compactColumn = activeDetailKey ? "secondary" : "primary";
-  const collapsed = useRef(!layout.usesSplitView);
-  const collapsedColumn = useRef<CollapsedSplitColumn>({ visible: compactColumn, leaving: null });
+  const hostRef = useRef<SplitHostCommands>(null);
+  const { followAppearance, onCollapse, onExpand } = useCollapsedSplitColumn({
+    hostRef,
+    usesSplitView: layout.usesSplitView,
+    compactColumn,
+    primaryKey: props.primary.key,
+    isActive: isTabActive,
+    navigation: props.navigation,
+  });
   const threadParams = props.detail.findLast((route) => route.name === "Thread")?.params;
   const pullRequestParams = props.detail.findLast(isPullRequestRoute)?.params;
   const selectedPullRequestKey =
@@ -304,27 +300,6 @@ function WorkspaceColumns(
     },
     [isTabActive, props.navigation],
   );
-  const followCollapsedSplit = (
-    type: "willAppear" | "didAppear" | "willDisappear" | "didDisappear",
-    key: string,
-  ) => {
-    if (!collapsed.current || layout.usesSplitView || isTabActive?.() === false) return;
-    const transition = collapsedSplitTransition(
-      collapsedColumn.current,
-      { type, key },
-      props.navigation.getState(),
-      props.primary.key,
-    );
-    collapsedColumn.current = transition.column;
-    setNativelyPoppingWorkspaceRoute(transition.column.leaving);
-    if (transition.pop) props.navigation.dispatch(transition.pop);
-  };
-
-  useEffect(() => {
-    if (layout.usesSplitView || collapsedColumn.current.visible === compactColumn) return;
-    collapsedColumn.current = { ...collapsedColumn.current, visible: compactColumn };
-    hostRef.current?.show(compactColumn);
-  }, [compactColumn, layout.usesSplitView]);
 
   const primary = props.descriptors[props.primary.key];
   if (!primary) return null;
@@ -342,15 +317,10 @@ function WorkspaceColumns(
       }
       primaryBackgroundStyle={deviceType === "pad" ? "none" : "default"}
       topColumnForCollapsing={compactColumn}
-      onCollapse={() => {
-        collapsed.current = true;
-        collapsedColumn.current = { visible: compactColumn, leaving: null };
-        if (isTabActive?.() !== false) setNativelyPoppingWorkspaceRoute(null);
-      }}
+      onCollapse={onCollapse}
       onExpand={() => {
-        collapsed.current = false;
+        onExpand();
         if (isTabActive?.() === false) return;
-        setNativelyPoppingWorkspaceRoute(null);
         // Native callbacks can outlive the render that created them, so decide from the live
         // router state. An expanded split has columns, so its tab gets a page beside the list.
         const live = props.navigation.getState();
@@ -397,7 +367,7 @@ function WorkspaceColumns(
           ? primaryColumnWidth
           : Math.max(380, primaryColumnWidth),
         preferredPrimaryColumnWidthOrFraction: primaryColumnWidth,
-        minimumSecondaryColumnWidth: 320,
+        minimumSecondaryColumnWidth: INSPECTOR_MIN_MAIN_WIDTH,
         // UIKit can retain its automatic width despite a new preference; constrain both edges.
         minimumInspectorColumnWidth: inspectorWidth,
         maximumInspectorColumnWidth: inspectorWidth,
@@ -412,7 +382,7 @@ function WorkspaceColumns(
             selectedThreadKey={selectedThreadKey}
             selectedPullRequestKey={selectedPullRequestKey}
             onDismiss={handleNativeDismiss}
-            onAppearance={followCollapsedSplit}
+            onAppearance={followAppearance}
             navigation={props.navigation}
           />
         </Split.Stack>
@@ -458,7 +428,7 @@ function WorkspaceColumns(
                 descriptor={descriptor}
                 attached={props.detail.some((current) => current.key === route.key)}
                 onDismiss={handleNativeDismiss}
-                onAppearance={followCollapsedSplit}
+                onAppearance={followAppearance}
                 onCompose={isPullRequestRoute(route) ? undefined : detailCompose}
                 navigation={props.navigation}
               />

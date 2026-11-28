@@ -70,7 +70,7 @@ import {
   useThreadSearch,
 } from "../../state/queries";
 import type { ComposerCommandItem } from "./ComposerCommandPopover";
-import { matchesSlashSkillQuery } from "./composerSlashSkillSearch";
+import { scoreSlashSkillQuery } from "./composerSlashSkillSearch";
 import { useComposerCapabilityContext } from "./useComposerCapabilityContext";
 import { buildComposerModelItems } from "./composerModelMentions";
 import { formatComposerModelMention } from "@goat/client-runtime/composer-model-mentions";
@@ -470,8 +470,12 @@ export function useComposerCommandMenu({
       });
 
       const skillItems = visibleSkills
-        .filter((skill) => matchesSlashSkillQuery(skill, q))
-        .map((skill) => ({
+        .flatMap((skill) => {
+          const score = scoreSlashSkillQuery(skill, q);
+          return score === null ? [] : [{ skill, score }];
+        })
+        .sort((left, right) => left.score - right.score)
+        .map(({ skill }) => ({
           id: `skill:${skill.name}`,
           type: "skill" as const,
           skill,

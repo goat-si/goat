@@ -2,7 +2,6 @@ import { ThreadId, type EnvironmentId } from "@goat/contracts";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { createContext, use } from "react";
-import { Platform } from "react-native";
 
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
@@ -25,7 +24,7 @@ export function useOpenThreadInspector() {
     source: { readonly environmentId: string; readonly threadId: string },
     target: ThreadInspectorTarget,
   ) => {
-    if (Platform.OS !== "ios" || !fileInspector.supported) return false;
+    if (!fileInspector.supported) return false;
     if (openInInspector) openInInspector(target);
     else {
       const parent = navigation.getState()?.routes.findLast((route) => route.name === "Thread");

@@ -20,16 +20,21 @@ import { AsyncResult } from "effect/reactivity";
 
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { useProjects, waitForProject } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { readEnvironmentProxiedByHub, readEnvironmentScope } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
+  composerDraftsAtom,
   createNewTaskDraft,
+  retargetNewTaskDraft,
   setComposerDraftText,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
+import { readNewTaskFlowState } from "../threads/new-task-flow-state";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { chooserDraftKey } from "./AddProjectScreen.logic";
 
 export interface EnvironmentOption {
   readonly environmentId: EnvironmentId;
@@ -53,10 +58,34 @@ export function getActiveRoute(navigation: {
   return state?.routes[state.index];
 }
 
+export function isActiveRoute(
+  navigation: Parameters<typeof getActiveRoute>[0],
+  originRoute: ReturnType<typeof getActiveRoute>,
+): boolean {
+  const activeRoute = getActiveRoute(navigation);
+  // A warm link can change the task without replacing its native route key.
+  return (
+    originRoute !== undefined &&
+    activeRoute?.key === originRoute.key &&
+    activeRoute.name === originRoute.name &&
+    activeRoute.params === originRoute.params
+  );
+}
+
+async function retargetSavedNewTaskDraft(
+  draftKey: string,
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+): Promise<boolean> {
+  await waitForComposerDraftsLoaded();
+  if (appAtomRegistry.get(composerDraftsAtom)[draftKey] === undefined) return false;
+  retargetNewTaskDraft(draftKey, project);
+  return true;
+}
+
 export function useOpenNewTaskDraft() {
   const navigation = useNavigation<NativeStackNavigationProp<ReactNavigation.RootParamList>>();
   const selectDetail = useSelectWorkspaceDetail();
-  return (
+  return async (
     params: {
       environmentId: EnvironmentId;
       projectId: ProjectId;
@@ -66,16 +95,25 @@ export function useOpenNewTaskDraft() {
     },
     originRoute: NavigationState<ParamListBase>["routes"][number] | undefined,
   ) => {
-    const activeRoute = getActiveRoute(navigation);
-    // A warm link can change the task without replacing its native route key.
-    if (
-      !originRoute ||
-      activeRoute?.key !== originRoute.key ||
-      activeRoute.name !== originRoute.name ||
-      activeRoute.params !== originRoute.params
-    )
-      return;
-    selectDetail({ name: "Thread", params: { draft: params } });
+    if (!isActiveRoute(navigation, originRoute)) return;
+    const chooserDraft =
+      params.draftId === undefined
+        ? chooserDraftKey(
+            navigation.getState()?.routes ?? [],
+            (flowKey) => readNewTaskFlowState(flowKey).draftKey,
+          )
+        : null;
+    const carried =
+      chooserDraft !== null &&
+      (await retargetSavedNewTaskDraft(chooserDraft, {
+        environmentId: params.environmentId,
+        projectId: params.projectId,
+      }).catch(() => false));
+    if (!isActiveRoute(navigation, originRoute)) return;
+    selectDetail({
+      name: "Thread",
+      params: { draft: carried ? { ...params, draftId: chooserDraft } : params },
+    });
   };
 }
 
@@ -131,7 +169,7 @@ export function useOpenExistingProject(environment: EnvironmentOption | null) {
       "Project already exists",
       unarchived ? existing.title : `${existing.title} is still archived. Try again later.`,
     );
-    openNewTaskDraft(
+    void openNewTaskDraft(
       {
         environmentId: existing.environmentId,
         projectId: existing.id,
@@ -201,7 +239,7 @@ export function useCreateProject(environment: EnvironmentOption | null) {
       );
       return result;
     }
-    openNewTaskDraft(
+    void openNewTaskDraft(
       {
         environmentId: environment.environmentId,
         projectId,

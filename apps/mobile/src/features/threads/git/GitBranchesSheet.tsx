@@ -11,6 +11,7 @@ import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/ui/AppText";
 import { cn } from "../../../lib/cn";
 import { useEnvironmentQuery } from "../../../state/query";
+import { usePaginatedBranches } from "../../../state/queries";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
@@ -44,8 +45,21 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
 
   const currentBranchLabel = gitStatus.data?.refName ?? selectedThread?.branch ?? "Detached HEAD";
   const currentWorktreePath = selectedThreadCwd;
-  const availableBranches = gitState.selectedThreadBranches;
-  const branchesLoading = gitState.selectedThreadBranchesLoading;
+  const branchPages = usePaginatedBranches({
+    environmentId: selectedThread?.environmentId ?? null,
+    cwd: selectedThreadCwd,
+    query: null,
+    refKind: "local",
+  });
+  // The saved first page shows until the live pages answer, including offline.
+  // Servers older than refKind return remote refs too.
+  const availableBranches =
+    branchPages.data === null
+      ? gitState.selectedThreadBranches
+      : branchPages.refs.filter((branch) => !branch.isRemote);
+  // Live ref pages stay waiting for changes, so only an unanswered first page is loading.
+  const branchesLoading =
+    branchPages.data === null && branchPages.isPending && availableBranches.length === 0;
   const busy = gitState.gitOperationLabel !== null;
 
   const [newBranchName, setNewBranchName] = useState("");
@@ -236,6 +250,14 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
                 </Pressable>
               );
             })}
+            {branchPages.data?.nextCursor != null ? (
+              <SheetActionButton
+                icon="arrow.down.circle"
+                label="Load more"
+                disabled={branchPages.isFetchingNextPage}
+                onPress={branchPages.loadNext}
+              />
+            ) : null}
           </View>
         </ScrollView>
       </ScreenContent>

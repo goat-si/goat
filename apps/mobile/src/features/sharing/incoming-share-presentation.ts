@@ -64,3 +64,34 @@ export function transitionIncomingSharePresentation(
     shareIdToPresent: input.pendingShareId,
   };
 }
+
+/**
+ * Hands the oldest pending share to an open, focused draft once the draft's own route share has
+ * finished. Skips while submitting so the post-submit clear cannot drop unqueued content.
+ */
+export function resolveHandedIncomingShare<T extends { readonly id: string }>(input: {
+  readonly isFocused: boolean;
+  readonly servesRoute: boolean;
+  readonly submitting: boolean;
+  readonly routeShareId: string | undefined;
+  readonly hasRouteSharePending: boolean;
+  readonly cancelledShareId: string | null;
+  readonly pendingShare: T | null;
+}): T | null {
+  if (
+    !input.isFocused ||
+    !input.servesRoute ||
+    input.submitting ||
+    input.hasRouteSharePending ||
+    input.pendingShare === null
+  ) {
+    return null;
+  }
+  if (
+    input.pendingShare.id === input.routeShareId ||
+    input.pendingShare.id === input.cancelledShareId
+  ) {
+    return null;
+  }
+  return input.pendingShare;
+}

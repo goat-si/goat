@@ -13,7 +13,10 @@ import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 import { buildHomeProjectScopes, sortHomeProjectScopes } from "../home/homeThreadList";
 import {
   DEFAULT_PR_LIST_CONTROLS,
+  distinctIgnoringCase,
+  includesIgnoringCase,
   pullRequestProjectOrderIsEqual,
+  toggledPullRequestLabels,
   type PullRequestListControls,
 } from "./pullRequestList";
 
@@ -94,8 +97,7 @@ export function PullRequestListFilters(props: {
 }) {
   const { value } = props;
   const projects = useProjectsInSidebarOrder(props.projects);
-  const selectedLabels = value.filters.labels?.flat() ?? [];
-  const selectedLabelSet = new Set(selectedLabels);
+  const selectedLabels = distinctIgnoringCase(value.filters.labels?.flat() ?? []);
   const author = value.filters.author;
   const select = (event: string) => {
     let selection: unknown;
@@ -147,9 +149,7 @@ export function PullRequestListFilters(props: {
         break;
       }
       case "label": {
-        const labels = selectedLabels.includes(next)
-          ? selectedLabels.filter((label) => label !== next)
-          : [...selectedLabels, next].slice(0, 10);
+        const labels = toggledPullRequestLabels(selectedLabels, next);
         props.onChange({
           ...value,
           filters: {
@@ -262,10 +262,11 @@ export function PullRequestListFilters(props: {
         (!withEnvironment || props.environmentId === null),
     },
   });
-  const labels = [...new Set([...selectedLabels, ...props.labels])].slice(0, 60);
-  const authors = [
-    ...new Set([...(author && author !== "me" ? [author] : []), ...props.authors]),
-  ].slice(0, 60);
+  const labels = distinctIgnoringCase([...selectedLabels, ...props.labels]).slice(0, 60);
+  const authors = distinctIgnoringCase([
+    ...(author && author !== "me" ? [author] : []),
+    ...props.authors,
+  ]).slice(0, 60);
   const environmentActions = choices(
     "environment",
     Object.fromEntries([
@@ -284,7 +285,7 @@ export function PullRequestListFilters(props: {
       return {
         id: id("label", label),
         title: label,
-        state: selectedLabelSet.has(label) ? ("on" as const) : ("off" as const),
+        state: includesIgnoringCase(selectedLabels, label) ? ("on" as const) : ("off" as const),
         ...(color ? { image: "circle.fill", imageColor: color } : {}),
       };
     }),

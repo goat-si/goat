@@ -3,7 +3,7 @@ import { nativePullRequestDestination } from "../lib/pullRequestNavigation";
 import { useCallback } from "react";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useProjects, useThreadShell } from "../state/entities";
-import { tryOpenExternalUrl } from "../lib/openExternalUrl";
+import { tryOpenWebLink } from "../lib/openExternalUrl";
 import { tryOpenEnvironmentUrl } from "../lib/openEnvironmentUrl";
 import { appAtomRegistry } from "../state/atom-registry";
 import { environmentServerConfigsAtom } from "../state/server";
@@ -33,7 +33,7 @@ export function useNavigateToPullRequest(options?: { readonly replace?: boolean 
         const environmentId = sourceEnvironmentId ?? context?.environmentId;
         return environmentId
           ? tryOpenEnvironmentUrl(EnvironmentId.make(environmentId), url, "pull-request")
-          : tryOpenExternalUrl(url, "pull-request");
+          : tryOpenWebLink(url, "pull-request");
       }
       const params = withKnownPullRequestSummary({
         ...destination,

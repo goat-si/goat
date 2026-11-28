@@ -24,6 +24,7 @@ import { isWorkspaceImagePreviewPath } from "@goat/shared/mediaPreview";
 import { formatTokens } from "@goat/shared/usageFormat";
 import {
   classifyToolActivity,
+  collectToolFilePaths,
   formatReadToolLabel,
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
@@ -551,6 +552,13 @@ function toolGroupActions(entry: WorkLogPresentationEntry): ReadonlyArray<ToolGr
 }
 
 export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): string | null {
+  // The file may not exist until the call runs, and an open row never retries a failed asset URL.
+  return entry.toolLifecycleStatus === "failed" || entry.toolLifecycleStatus === "inProgress"
+    ? null
+    : viewedImagePathOf(entry);
+}
+
+function viewedImagePathOf(entry: WorkLogPresentationEntry): string | null {
   const viewedImagePath = entry.viewedImagePath?.trim();
   if (
     viewedImagePath !== undefined &&
@@ -572,7 +580,28 @@ export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): strin
 export function workEntriesViewedImagePaths(
   entries: ReadonlyArray<WorkLogPresentationEntry>,
 ): string[] {
-  return [...new Set(entries.flatMap((entry) => workEntryViewedImagePath(entry) ?? []))];
+  return workEntriesViewedImages(entries).flatMap(({ path, pending }) => (pending ? [] : path));
+}
+
+export interface ViewedImage {
+  readonly path: string;
+  /** Only running Reads opened it, so its file may not exist yet; show a placeholder, not a request. */
+  readonly pending: boolean;
+}
+
+/** {@link workEntriesViewedImagePaths}, plus the images a running Read is opening. */
+export function workEntriesViewedImages(
+  entries: ReadonlyArray<WorkLogPresentationEntry>,
+): ViewedImage[] {
+  const pendingByPath = new Map<string, boolean>();
+  for (const entry of entries) {
+    if (entry.toolLifecycleStatus === "failed") continue;
+    const path = viewedImagePathOf(entry);
+    if (path === null) continue;
+    const pending = entry.toolLifecycleStatus === "inProgress";
+    pendingByPath.set(path, (pendingByPath.get(path) ?? true) && pending);
+  }
+  return [...pendingByPath].map(([path, pending]) => ({ path, pending }));
 }
 
 export interface ViewedImageAsset {
@@ -581,13 +610,22 @@ export interface ViewedImageAsset {
   readonly srcFragment: string;
 }
 
+/**
+ * A tool reports the literal path it read, not a markdown destination. Escape what markdown
+ * resolution would decode or split off, so a name like Grok's `sessions/%2FUsers...` survives.
+ */
+export function viewedImageMarkdownSource(path: string): string {
+  return /^file:/i.test(path) ? path : path.replace(/[%#?]/g, encodeURIComponent);
+}
+
 export function resolveViewedImageAsset(
-  source: string,
+  path: string,
   input: {
     readonly threadId: ThreadId;
     readonly workspaceRoot?: string | null | undefined;
   },
 ): ViewedImageAsset | null {
+  const source = viewedImageMarkdownSource(path);
   const imageSource = classifyMarkdownImageSource(source, input.workspaceRoot ?? ".");
   if (imageSource._tag !== "WorkspaceFile") return null;
   const resolvedFilePath =
@@ -604,24 +642,21 @@ export function resolveViewedImageAsset(
   return { resource: media.resource, alt: media.name, srcFragment: media.srcFragment };
 }
 
+function toolGroupEntryFiles(
+  action: "edit" | "read",
+  entry: WorkLogPresentationEntry,
+): ReadonlyArray<string> {
+  if (action === "edit") return entry.changedFiles ?? [];
+  const item = entry.structuredPayload;
+  return collectToolFilePaths(
+    item?.type === "dynamic_tool" ? { input: item.input } : entry.toolData,
+  );
+}
+
 function toolGroupActionCount(
   action: ToolGroupAction,
   entries: ReadonlyArray<WorkLogPresentationEntry>,
 ): number {
-  if (action === "read") {
-    // One command can read several files, and agents often reread a file.
-    const commandReadPaths = new Set<string>();
-    let otherReads = 0;
-    for (const entry of entries) {
-      const actions = workEntryCommandActions(entry);
-      if (actions === null) otherReads += 1;
-      else
-        for (const commandAction of actions) {
-          if (commandAction.type === "read") commandReadPaths.add(commandAction.path ?? "");
-        }
-    }
-    return otherReads + commandReadPaths.size;
-  }
   if (action === "list" || action === "code-search") {
     // A command counts each listing or search it ran.
     const type = action === "list" ? "list" : "search";
@@ -631,17 +666,28 @@ function toolGroupActionCount(
       return count + actions.filter((commandAction) => commandAction.type === type).length;
     }, 0);
   }
-  if (action !== "edit") return entries.length;
-  const changedFiles = new Set<string>();
-  let editsWithoutFileDetails = 0;
+  if (action !== "edit" && action !== "read") return entries.length;
+  const files = new Set<string>();
+  let entriesWithoutFiles = 0;
   for (const entry of entries) {
-    if (!entry.changedFiles || entry.changedFiles.length === 0) {
-      editsWithoutFileDetails += 1;
+    if (action === "read") {
+      // One command can read several files, and agents often reread a file.
+      const actions = workEntryCommandActions(entry);
+      if (actions !== null) {
+        for (const commandAction of actions) {
+          if (commandAction.type === "read") files.add(commandAction.path ?? "");
+        }
+        continue;
+      }
+    }
+    const entryFiles = toolGroupEntryFiles(action, entry);
+    if (entryFiles.length === 0) {
+      entriesWithoutFiles += 1;
     } else {
-      for (const file of entry.changedFiles) changedFiles.add(file);
+      for (const file of entryFiles) files.add(file);
     }
   }
-  return changedFiles.size + editsWithoutFileDetails;
+  return files.size + entriesWithoutFiles;
 }
 
 function toolGroupActionLabel(action: ToolGroupAction, count: number): string {

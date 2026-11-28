@@ -13,6 +13,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.view.KeyEvent
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -47,6 +48,46 @@ class ComposerPasteTest {
       KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
     )
   )
+
+  @Test
+  @Config(sdk = [33, 36])
+  fun sentImageCopySurvivesAClipboardBridgeDroppingHtml() {
+    val id = "file_sent-image"
+    val copiedText = "Review this image\n ![android-smoke.png](goat-context://v1/image/$id)"
+    val fragment = """
+      {
+        "version": 1,
+        "source": {"environmentId": "source", "messageId": "sent-message"},
+        "records": [{
+          "version": 1, "contextId": "$id", "label": "android-smoke.png", "kind": "image",
+          "attachmentId": "stored-image", "name": "android-smoke.png",
+          "mimeType": "image/png", "sizeBytes": 53249
+        }]
+      }
+    """.trimIndent()
+    GoatComposerClipboard.write(context, copiedText, fragment)
+    clipboard.setPrimaryClip(ClipData.newPlainText("clipboard bridge", copiedText))
+    editor.setText("")
+    editor.setSelection(0)
+    var pasted: Map<String, String>? = null
+    editor.pasteContextListener = { pasted = it }
+
+    assertTrue(editor.onTextContextMenuItem(android.R.id.paste))
+    assertEquals(copiedText, pasted?.get("text"))
+    val recovered = JSONObject(requireNotNull(pasted?.get("fragment")))
+    assertEquals("source", recovered.getJSONObject("source").getString("environmentId"))
+    assertEquals(id, recovered.getJSONArray("records").getJSONObject(0).getString("contextId"))
+    assertEquals("", editor.text.toString())
+
+    editor.pasteContextListener = { error("Paste as Text must stay plain") }
+    assertTrue(pasteAsText())
+    assertEquals(copiedText, editor.text.toString())
+
+    clipboard.setPrimaryClip(ClipData.newPlainText("other app", "Different text"))
+    assertEquals("", GoatComposerClipboard.read(context)["fragment"])
+    clipboard.setPrimaryClip(ClipData.newPlainText("other app", copiedText))
+    assertEquals("", GoatComposerClipboard.read(context)["fragment"])
+  }
 
   @Test
   fun shortcutKeepsLargeTextInlineAndUndoable() {

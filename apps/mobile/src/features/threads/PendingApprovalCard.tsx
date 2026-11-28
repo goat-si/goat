@@ -6,10 +6,12 @@ import type {
   RuntimeRequestId,
 } from "@goat/contracts";
 import {
+  type ApprovalTextPart,
+  approvalTextParts,
   FULL_ACCESS_OVERRIDE_QUESTION,
   fullAccessOverrideExplanation,
 } from "@goat/client-runtime/state/thread-requests";
-import { useState } from "react";
+import { type ComponentRef, useRef, useState } from "react";
 import {
   type LayoutChangeEvent,
   Pressable,
@@ -92,12 +94,23 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
       </Text>
     </View>
   );
+  const detail = props.approval.detail ? approvalTextParts(props.approval.detail) : null;
   const request = (
     <>
-      {props.approval.detail ? (
-        <Text selectable className="font-sans text-sm leading-normal text-foreground-secondary">
-          {props.approval.detail}
-        </Text>
+      {detail ? (
+        detail.hiddenLength > 0 ? (
+          <>
+            <ApprovalTextScroll parts={detail.parts} />
+            <Text className="font-sans text-xs leading-normal text-warning-foreground">
+              {detail.hiddenLength === 1
+                ? `… ${detail.hiddenLength.toLocaleString()} character in the middle is not shown. The text ends with:`
+                : `… ${detail.hiddenLength.toLocaleString()} characters in the middle are not shown. The text ends with:`}
+            </Text>
+            <ApprovalTextScroll parts={detail.tail} fromEnd />
+          </>
+        ) : (
+          <ApprovalTextParts parts={detail.parts} />
+        )
       ) : null}
       {props.approval.reason ? (
         <Text className="font-sans text-xs leading-normal text-warning-foreground">
@@ -187,5 +200,47 @@ export function PendingApprovalCard(props: PendingApprovalCardProps) {
         </ScrollView>
       )}
     </Animated.View>
+  );
+}
+
+/**
+ * One end of text too long to show in full, in a box that scrolls on its own, so the note, the
+ * other end and the buttons stay within reach. The end opens on its last line.
+ */
+function ApprovalTextScroll(props: {
+  readonly parts: ReadonlyArray<ApprovalTextPart>;
+  readonly fromEnd?: boolean;
+}) {
+  const box = useRef<ComponentRef<typeof ScrollView>>(null);
+  return (
+    <ScrollView
+      ref={box}
+      className="max-h-40"
+      nestedScrollEnabled
+      onContentSizeChange={
+        props.fromEnd ? () => box.current?.scrollToEnd({ animated: false }) : undefined
+      }
+    >
+      <ApprovalTextParts parts={props.parts} />
+    </ScrollView>
+  );
+}
+
+function ApprovalTextParts(props: { readonly parts: ReadonlyArray<ApprovalTextPart> }) {
+  return (
+    <Text selectable className="font-sans text-sm leading-normal text-foreground-secondary">
+      {props.parts.map((part, index) =>
+        part.named ? (
+          // Tinted only: a second font inside wrapped lines makes Android lay the text out shorter
+          // than it draws, which cuts off its last lines.
+          // oxlint-disable-next-line react/no-array-index-key -- parts never reorder and two may read alike
+          <Text key={index} className="text-warning-foreground">
+            {part.text}
+          </Text>
+        ) : (
+          part.text
+        ),
+      )}
+    </Text>
   );
 }

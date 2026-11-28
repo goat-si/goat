@@ -100,7 +100,10 @@ import {
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
 import { classifyMarkdownImageSource } from "@goat/client-runtime/markdown-images";
-import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
+import {
+  resolveViewedImageAsset,
+  viewedImageMarkdownSource,
+} from "@goat/client-runtime/work-log/presentation";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { videoMimeType } from "@goat/shared/video";
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -278,6 +281,7 @@ import {
   MarkdownImageAvailableWidthContext,
   ThreadMarkdownImage,
   ThreadMarkdownImageUnavailable,
+  ThreadMarkdownImageView,
   ThreadMarkdownDirectImage,
 } from "./ThreadMarkdownImage";
 import { openSettings } from "../settings/settings-navigation";
@@ -965,9 +969,20 @@ function renderFeedEntry(
     const thumbnailWidth = Math.floor((props.contentWidth - VIEWED_IMAGE_GAP) / 2);
     return (
       <View className="flex-row flex-wrap pb-2" style={{ gap: VIEWED_IMAGE_GAP }}>
-        {entry.paths.map((path) => (
+        {entry.images.map(({ path, pending }) => (
           <View key={path} style={{ width: thumbnailWidth }}>
-            {props.renderViewedImage({ href: path, alt: null, title: null })}
+            {pending ? (
+              // The running Read may not have written the file yet, so hold its frame unrequested.
+              <ThreadMarkdownImageView
+                uri={null}
+                sourceKey={path}
+                unavailable={false}
+                alt={null}
+                onPressPreview={props.onPressPreview}
+              />
+            ) : (
+              props.renderViewedImage({ href: path, alt: null, title: null })
+            )}
           </View>
         ))}
       </View>
@@ -2326,7 +2341,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       workspaceRoot: props.workspaceRoot,
     });
     const media = viewedImage
-      ? resolveMarkdownMediaPreview(image.href, {
+      ? resolveMarkdownMediaPreview(viewedImageMarkdownSource(image.href), {
           environmentId: props.environmentId,
           threadId: props.threadId,
           workspaceRoot: props.workspaceRoot,
@@ -2362,10 +2377,7 @@ export const ThreadFeed = memo(function ThreadFeed({
   );
   const reviewCommentColors = useReviewCommentColors();
   const unsettledTurnId = threadFeedRunIsUnsettled(props.latestRun) ? props.latestRun.runId : null;
-  const compactionLabelsByEntryId = useMemo(
-    () => threadFeedCompactionLabels(props.feed),
-    [props.feed],
-  );
+  const compactionLabelsByEntryId = threadFeedCompactionLabels(props.feed);
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
   // Include turn completion so unchanged message rows reveal their footer and spacing
   // even when the final message update arrives before the turn settles.
@@ -2712,7 +2724,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         cancelAnimationFrame(disclosureSettleSecondFrameRef.current);
       }
     },
-    [],
+    [userScrollSettleTimerRef],
   );
 
   const settleDisclosureAfterLayout = () => {

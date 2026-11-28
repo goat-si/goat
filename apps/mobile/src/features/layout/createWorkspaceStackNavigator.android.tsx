@@ -25,6 +25,7 @@ import { projectStackPresentation } from "../../native/workspace-stack-projectio
 import {
   WorkspaceColumnsRendererContext,
   WorkspacePresentationHostContext,
+  WorkspaceVisibleRouteContext,
 } from "./workspace-presentation-context";
 
 type ViewProps = ComponentProps<typeof NativeStackView>;
@@ -51,18 +52,21 @@ function WorkspaceStackView(props: ViewProps) {
   const baseDescriptor: Descriptor = {
     ...visibleDescriptor,
     options: { headerShown: false, freezeOnBlur: false },
-    render: () =>
-      renderColumns(
-        <NativeStackView
-          {...props}
-          state={{
-            ...props.state,
-            routes: workspaceRoutes,
-            index: workspaceRoutes.length - 1,
-            preloadedRoutes: props.state.preloadedRoutes.filter((route) => !isOverlay(route)),
-          }}
-        />,
-      ),
+    render: () => (
+      <WorkspaceVisibleRouteContext value={visibleRoute.key}>
+        {renderColumns(
+          <NativeStackView
+            {...props}
+            state={{
+              ...props.state,
+              routes: workspaceRoutes,
+              index: workspaceRoutes.length - 1,
+              preloadedRoutes: props.state.preloadedRoutes.filter((route) => !isOverlay(route)),
+            }}
+          />,
+        )}
+      </WorkspaceVisibleRouteContext>
+    ),
   };
   const routes = [baseRoute, ...projection.overlays];
   return (

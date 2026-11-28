@@ -5,12 +5,16 @@ import * as DateTime from "effect/DateTime";
 
 import {
   formatCommandActionsLabel,
+  resolveViewedImageAsset,
   resolveWorkEntryToolPresentation,
   toolItemForDisplay,
   type WorkLogPresentationEntry,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
   workEntryIndicatesToolSuccess,
+  workEntriesViewedImagePaths,
+  workEntriesViewedImages,
+  workEntryViewedImagePath,
   toolGroupAction,
   summarizeToolGroup,
   toolGroupSummaryKind,
@@ -382,5 +386,146 @@ describe("commands that only inspect files", () => {
         },
       ]).summary,
     ).toBe("Explored 1 file, 2 searches, 1 list, ran 2 commands, and searched the web 1 time");
+  });
+});
+
+describe("workEntryViewedImagePath", () => {
+  it("omits failed image reads from viewed-image previews", () => {
+    const base: WorkLogPresentationEntry = {
+      id: "read-image",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      tone: "tool",
+      label: "Read",
+      detail: "screenshots/missing.png",
+      viewedImagePath: "screenshots/missing.png",
+      itemType: "dynamic_tool",
+    };
+    expect(workEntryViewedImagePath({ ...base, toolLifecycleStatus: "failed" })).toBeNull();
+    expect(workEntryViewedImagePath({ ...base, toolLifecycleStatus: "completed" })).toBe(
+      "screenshots/missing.png",
+    );
+  });
+
+  it("withholds a Read's image preview until the Read has finished", () => {
+    const read: WorkLogPresentationEntry = {
+      id: "read",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Read",
+      tone: "tool",
+      itemType: "dynamic_tool",
+      viewedImagePath: "/repo/out/later3.png",
+    };
+
+    expect(workEntryViewedImagePath({ ...read, toolLifecycleStatus: "inProgress" })).toBeNull();
+    expect(workEntryViewedImagePath({ ...read, toolLifecycleStatus: "completed" })).toBe(
+      "/repo/out/later3.png",
+    );
+  });
+});
+
+describe("workEntriesViewedImages", () => {
+  const read = (
+    id: string,
+    path: string,
+    toolLifecycleStatus: NonNullable<WorkLogPresentationEntry["toolLifecycleStatus"]>,
+  ): WorkLogPresentationEntry => ({
+    id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    label: "Read",
+    tone: "tool",
+    itemType: "dynamic_tool",
+    viewedImagePath: path,
+    toolLifecycleStatus,
+  });
+
+  it("marks an image pending until a Read of it finishes", () => {
+    expect(
+      workEntriesViewedImages([
+        read("done", "/repo/a.png", "completed"),
+        read("running", "/repo/b.png", "inProgress"),
+        read("missing", "/repo/c.png", "failed"),
+        read("again", "/repo/a.png", "inProgress"),
+      ]),
+    ).toEqual([
+      { path: "/repo/a.png", pending: false },
+      { path: "/repo/b.png", pending: true },
+    ]);
+    expect(
+      workEntriesViewedImages([
+        read("running", "/repo/b.png", "inProgress"),
+        read("done", "/repo/b.png", "completed"),
+      ]),
+    ).toEqual([{ path: "/repo/b.png", pending: false }]);
+  });
+
+  it("orders the finished images like the strip shows them", () => {
+    expect(
+      workEntriesViewedImagePaths([
+        read("first", "/repo/a.png", "inProgress"),
+        read("other", "/repo/b.png", "completed"),
+        read("again", "/repo/a.png", "completed"),
+      ]),
+    ).toEqual(["/repo/a.png", "/repo/b.png"]);
+  });
+});
+
+describe("resolveViewedImageAsset", () => {
+  it("requests the file the agent read when its name holds %, # or ?", () => {
+    const path = "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fproject/shot #1?/1.jpg";
+    expect(
+      resolveViewedImageAsset(path, { threadId: ThreadId.make("thread"), workspaceRoot: "/repo" }),
+    ).toEqual({
+      resource: { _tag: "media-file", threadId: ThreadId.make("thread"), path },
+      alt: "1.jpg",
+      srcFragment: "",
+    });
+  });
+
+  it("still decodes a file URL", () => {
+    expect(
+      resolveViewedImageAsset("file:///repo/my%20shot.png", { threadId: ThreadId.make("thread") })
+        ?.resource.path,
+    ).toBe("/repo/my shot.png");
+  });
+});
+
+describe("summarizeToolGroup read counts", () => {
+  const read = (id: string, filePath: string, offset?: number): WorkLogPresentationEntry => ({
+    id,
+    createdAt: "2026-11-27T00:00:00.000Z",
+    label: "Read",
+    tone: "tool",
+    itemType: "dynamic_tool",
+    toolTitle: "Read",
+    toolLifecycleStatus: "completed",
+    structuredPayload: {
+      id: TurnItemId.make(id),
+      threadId: ThreadId.make("thread"),
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 0,
+      status: "completed",
+      title: null,
+      startedAt: null,
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-11-27T00:00:00.000Z"),
+      type: "dynamic_tool",
+      toolName: "Read",
+      input: offset === undefined ? { file_path: filePath } : { file_path: filePath, offset },
+    },
+  });
+
+  it("counts a file read in several chunks once, as edits do", () => {
+    expect(
+      summarizeToolGroup([
+        read("a1", "/repo/src/a.ts"),
+        read("a2", "/repo/src/a.ts", 200),
+        read("b", "/repo/src/b.ts"),
+      ]).summary,
+    ).toBe("Read 2 files");
   });
 });

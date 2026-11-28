@@ -79,6 +79,7 @@ export interface RpcSessionOptions {
   readonly usageLimitsCommand?: boolean;
   readonly providerCatalogsOnDemand?: boolean;
   readonly providerCatalogDigests?: boolean;
+  readonly pingInterval?: Duration.Input;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -277,7 +278,12 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo).pipe(
+      makeWsRpcSocketProtocol(
+        Ref.set(pingTimedOut, true),
+        silenceTimeout,
+        options.drainIo,
+        options.pingInterval,
+      ).pipe(
         Effect.map((protocol) => ({
           ...protocol,
           send: (clientId, request, transferables) =>

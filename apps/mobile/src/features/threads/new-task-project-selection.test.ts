@@ -13,6 +13,7 @@ import {
   resolveDraftProjectSelection,
   resolveDraftShareTransfer,
   resolveEnvironmentProjectMatch,
+  workspaceFolderName,
 } from "./new-task-project-selection";
 
 function makeProject(
@@ -164,6 +165,23 @@ describe("resolveEnvironmentProjectMatch", () => {
     expect(resolveEnvironmentProjectMatch(byTitle, selected)).toBe(byTitle[1]);
   });
 
+  it("matches workspace folder names across Windows and POSIX hosts", () => {
+    const windows = makeProject("win", "windows", {
+      title: "GOAT",
+      workspaceRoot: "C:\\Users\\me\\goat",
+    });
+    const mac = makeProject("mac", "mac", {
+      title: "goat (mac)",
+      workspaceRoot: "/Users/me/goat/",
+    });
+    const other = makeProject("other", "server");
+
+    expect(resolveEnvironmentProjectMatch([other, mac], windows)).toBe(mac);
+    expect(resolveEnvironmentProjectMatch([other, windows], mac)).toBe(windows);
+    const otherDrive = makeProject("d", "windows-2", { workspaceRoot: "D:/src/goat" });
+    expect(resolveEnvironmentProjectMatch([other, otherDrive], windows)).toBe(otherDrive);
+  });
+
   it("does not treat a known different repository as a basename or title match", () => {
     const selected = makeProject("t3code", "mac", {
       repositoryKey: "github.com/sample-tools/goat",
@@ -178,6 +196,17 @@ describe("resolveEnvironmentProjectMatch", () => {
     expect(resolveEnvironmentProjectMatch([fork, unindexed], selected)).toBe(unindexed);
     expect(resolveEnvironmentProjectMatch([fork], selected)).toBe(fork);
     expect(isSameRepository(fork, selected)).toBe(false);
+  });
+});
+
+describe("workspaceFolderName", () => {
+  it("gives volume roots and empty placeholders no folder name", () => {
+    for (const root of ["", "/", "\\", "C:", "C:\\", "c:/"]) {
+      expect(workspaceFolderName(root)).toBeNull();
+    }
+    expect(workspaceFolderName("C:\\Users\\me\\goat\\")).toBe("goat");
+    expect(workspaceFolderName("\\\\server\\share")).toBe("share");
+    expect(workspaceFolderName("/home/me/goat//")).toBe("goat");
   });
 });
 

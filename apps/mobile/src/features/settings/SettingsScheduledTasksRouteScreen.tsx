@@ -94,6 +94,7 @@ import {
   describeSchedule,
   formatTime,
   repeatLabel,
+  timePickerValue,
 } from "./scheduledTaskPresentation";
 
 const isNotificationPolicy = Schema.is(ScheduledTaskNotificationPolicy);
@@ -104,17 +105,6 @@ type ScheduledTaskRoutes = {
   SettingsScheduledTaskModel: undefined;
   SettingsScheduledTaskBranch: undefined;
 };
-function timePickerValue(value: string): Date {
-  const [hours, minutes] = value.split(":").map(Number);
-  const time = new Date();
-  time.setHours(
-    Number.isInteger(hours) ? (hours ?? 9) : 9,
-    Number.isInteger(minutes) ? (minutes ?? 0) : 0,
-    0,
-    0,
-  );
-  return time;
-}
 
 function WebhookFilterRows(props: {
   readonly filters: ReadonlyArray<WebhookFilterDraft>;

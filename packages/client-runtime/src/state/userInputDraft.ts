@@ -181,7 +181,10 @@ export function togglePendingUserInputOptionSelection(
   };
 }
 
-/** Every answered question keyed by id, or null while a required question is unanswered. */
+/**
+ * The answers to submit keyed by question id, or null while a question still needs one.
+ * An optional single choice left unselected is skipped: it gets no entry.
+ */
 export function buildPendingUserInputAnswers<Question extends PendingUserInputQuestion>(
   questions: ReadonlyArray<Question>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
@@ -189,10 +192,11 @@ export function buildPendingUserInputAnswers<Question extends PendingUserInputQu
   const entries: Array<[string, PendingUserInputAnswer]> = [];
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
+    const draft = draftAnswers[question.id];
+    const answer = resolvePendingUserInputAnswer(question, draft);
     if (answer === null) {
       // An optional question left blank is omitted; it must not hold back the required ones.
-      if (question.required === false) continue;
+      if (question.required === false && !draft?.attachmentsBlocked) continue;
       return null;
     }
     entries.push([question.id, answer]);

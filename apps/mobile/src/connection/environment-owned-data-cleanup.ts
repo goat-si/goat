@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import { clearThreadOutboxEnvironment } from "../state/thread-outbox-removal";
 import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { clearThreadComposerErrorsForEnvironment } from "../state/thread-composer-error";
+import { mobileThreadTriageOutboxStore } from "../state/thread-triage-outbox-storage";
 
 const CLEAR_TIMEOUT_MS = 5_000;
 
@@ -39,6 +40,7 @@ export const layerEnvironmentOwnedDataCleanup = Layer.succeed(
             forgetNewBotEnvironment(environmentId);
           }),
           settle("composer-errors", () => clearThreadComposerErrorsForEnvironment(environmentId)),
+          Effect.ignore(mobileThreadTriageOutboxStore.clearEnvironment(environmentId)),
         ],
         { concurrency: "unbounded", discard: true },
       );

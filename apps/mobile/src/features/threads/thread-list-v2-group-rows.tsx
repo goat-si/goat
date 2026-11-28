@@ -5,7 +5,7 @@ import { Pressable, View } from "react-native";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
-import { THREAD_LIST_V2_SETTLED_PAGE_COUNT } from "./threadListV2";
+import { threadListV2ShowMoreAccessibilityLabel } from "./threadListV2";
 
 /** How far each launch level indents its rows. */
 export const LAUNCH_GROUP_INDENT = 16;
@@ -123,7 +123,7 @@ export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(pro
       accessibilityRole="button"
       accessibilityLabel={
         props.state === undefined
-          ? `Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`
+          ? threadListV2ShowMoreAccessibilityLabel(props.hiddenCount)
           : label
       }
       disabled={props.state === "loading"}
