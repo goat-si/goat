@@ -2712,6 +2712,16 @@ impl EngineSession for ClaudeSession {
                 "changing effort, thinking or fast mode needs a new Claude process".into(),
             ));
         }
+        let mode = pinned.unwrap_or(PermissionMode::for_runtime_mode(settings.runtime_mode));
+        // Every refusal comes before any change, so a refused request leaves the session as it was.
+        if mode != current_mode
+            && (mode == PermissionMode::BypassPermissions
+                || current_mode == PermissionMode::BypassPermissions)
+        {
+            return Err(EngineError::Unsupported(
+                "switching to or from full access needs a new Claude process".into(),
+            ));
+        }
         if model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty() {
             inner
                 .control(
@@ -2724,15 +2734,7 @@ impl EngineSession for ClaudeSession {
                 state.model.api_model_id = model.api_model_id.clone();
             }
         }
-        let mode = pinned.unwrap_or(PermissionMode::for_runtime_mode(settings.runtime_mode));
         if mode != current_mode {
-            if mode == PermissionMode::BypassPermissions
-                || current_mode == PermissionMode::BypassPermissions
-            {
-                return Err(EngineError::Unsupported(
-                    "switching to or from full access needs a new Claude process".into(),
-                ));
-            }
             inner
                 .control(
                     json!({"subtype": "set_permission_mode", "mode": mode.as_str()}),
