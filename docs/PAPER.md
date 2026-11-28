@@ -41,14 +41,11 @@ One artboard is the SSOT. No v1/v2 artboards side by side: change the one board.
 
 ## 4. Editing Paper from an agent
 
-- The Paper MCP works but is slow (seconds per call through Paper's server). Read
-  `get_guide("paper-mcp-instructions")` once per session.
-- Faster path used on 2026-11-28: in the open Paper tab, the app's own `MCPHandlers` class runs the
-  same tools on the editor directly (`dispatchToolCall(agent, tool, args)`, about 1 ms per call).
-  It is not a public API: the chunk name changes per Paper deploy and a reload drops it, so
-  re-attach after a reload and fall back to the MCP when it breaks. Edits still sync normally.
-- When searching for MCP tools, raise the result limit. A default search returns 8 tools and
-  hides the rest.
+- **Never use the Paper MCP.** Edit through the in-page API in the open Paper tab: the app's own
+  `MCPHandlers` class run against the editor (`dispatchToolCall(agent, tool, args)`, ~1 ms per call,
+  same tool names). Recipe: Aside skill `paper-design` → `references/in-page-api.md`.
+- It is not a public API: the chunk name changes per Paper deploy and a reload drops it. Re-attach;
+  if it still fails, report it instead of switching to the MCP. Edits sync normally.
 
 ## 5. Publishing
 
