@@ -173,14 +173,64 @@ test("configured bearer is redacted even across streaming chunks", async () => {
   await session.shutdown();
 });
 
-test("runless child approvals fail visibly instead of being dropped", async () => {
-  fixture.reset(); process.env.GOAT2_ENGINE_HELPER_SDK_MUSE = fixturePath;
-  const failures: string[] = [];
-  const host = { emit: (_event: EngineEvent) => {}, fail: (reason: string) => failures.push(reason), log: () => {}, now: () => "2026-01-01T00:00:00Z" };
-  const session = await museEngine.start(init, host);
-  fixture.sendNotification("approval/requested", { sessionId: session.engineRef, subagentOrigin: { subagentId: "child" }, approvalId: "a" });
-  assert.deepEqual(failures, ["Muse background work requires unsupported host coordination"]);
+test("child approval after turn is runless and answer closes it", async () => {
+  const h = setup(); const session = await museEngine.start(init, h.host);
+  await session.startTurn(input("hello"), settings);
+  await new Promise(resolve => setImmediate(resolve));
+  fixture.sendNotification("approval/requested", { sessionId: session.engineRef, turnId: "old-child", subagentOrigin: { subagentId: "child" }, approvalId: "a", currentRequirementId: { approvalId: "a", sourceIndex: 0 }, availableChoices: [{ choiceId: "yes", decision: "approved", scope: "once" }] });
+  const opened = h.events.find(e => e.type === "session_request_opened");
+  assert.ok(opened && opened.type === "session_request_opened");
+  await session.answerRequest(opened.key, { outcome: "accept" });
+  assert.equal(fixture.calls.findLast(c => c.method === "approval/decide")?.params.choiceId, "yes");
+  assert.ok(h.events.some(e => e.type === "request_closed" && e.key === opened.key));
   await session.shutdown();
+});
+
+test("held wake is offered and continued once", async () => {
+  const h = setup(); const session = await museEngine.start(init, h.host);
+  fixture.sendNotification("turn/started", { sessionId: session.engineRef, turnId: "wake" });
+  fixture.sendNotification("turn/completed", { sessionId: session.engineRef, turnId: "wake", terminal: "completed" });
+  const offer = h.events.find(e => e.type === "continuation_requested");
+  assert.ok(offer && offer.type === "continuation_requested");
+  const started = await session.startContinuation!(offer.key, input("wake"), settings);
+  assert.equal(started.status, "accepted");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(h.events.some(e => e.type === "turn_finished" && started.status === "accepted" && e.turnId === started.turnId));
+  assert.equal((await session.startContinuation!(offer.key, input("wake"), settings)).status, "declined");
+  await session.shutdown();
+});
+
+test("wake consumed by another turn is withdrawn", async () => {
+  const h = setup(); const session = await museEngine.start(init, h.host);
+  fixture.sendNotification("turn/started", { sessionId: session.engineRef, turnId: "wake" });
+  const offer = h.events.find(e => e.type === "continuation_requested");
+  assert.ok(offer && offer.type === "continuation_requested");
+  await session.startTurn(input("hello"), settings);
+  assert.ok(h.events.some(e => e.type === "continuation_withdrawn" && e.key === offer.key));
+  await session.shutdown();
+});
+
+test("background question survives another turn and settles without its native turn id", async () => {
+  const h = setup(); const session = await museEngine.start(init, h.host);
+  await session.startTurn(input("hold"), settings);
+  await new Promise(resolve => setImmediate(resolve));
+  fixture.sendNotification("userInput/requested", { sessionId: session.engineRef, turnId: "old-child", userInputId: "q", questions: [{ id: "q", question: "Choose", options: [{ label: "blue" }], selection: { mode: "single" } }] });
+  const opened = h.events.find(e => e.type === "session_request_opened");
+  assert.ok(opened && opened.type === "session_request_opened");
+  await session.answerRequest(opened.key, { outcome: "answered", answers: { q: "blue" } });
+  assert.ok(h.events.some(e => e.type === "request_closed" && e.key === opened.key));
+  await session.shutdown();
+});
+
+test("session failure withdraws a held wake", async () => {
+  fixture.reset(); process.env.GOAT2_ENGINE_HELPER_SDK_MUSE = fixturePath;
+  const events: EngineEvent[] = []; const failures: string[] = [];
+  const session = await museEngine.start(init, { emit: e => events.push(e), fail: reason => failures.push(reason), log: () => {}, now: () => "2026-01-01T00:00:00Z" });
+  fixture.sendNotification("turn/started", { sessionId: session.engineRef, turnId: "wake" });
+  fixture.sendNotification("view/gap", { sessionId: session.engineRef });
+  assert.ok(events.some(e => e.type === "continuation_withdrawn" && e.key === "wake"));
+  assert.equal(failures.length, 1);
+  assert.equal((await session.startContinuation!("wake", input("wake"), settings)).status, "declined");
 });
 
 test("Muse streams reasoning and command output on completed item ids", async () => {

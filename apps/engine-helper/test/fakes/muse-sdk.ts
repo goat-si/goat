@@ -55,7 +55,13 @@ export function spawnMspConnection(options: any) {
         if (params.displayText === "approval") setImmediate(() => emit("approval/requested", { sessionId: params.sessionId, turnId, approvalId: "a1", currentRequirementId: { approvalId: "a1", sourceIndex: 0 }, subject: { kind: "shell", command: "list files" }, availableChoices: [{ choiceId: "yes", label: "Allow", decision: "approved", scope: "once" }, { choiceId: "no", label: "Deny", decision: "denied", scope: "once" }] }));
         else if (params.displayText === "question") setImmediate(() => emit("userInput/requested", { sessionId: params.sessionId, turnId, userInputId: "q1", questions: [{ id: "q", header: "Choice", question: "Choose", options: [{ label: "blue" }], selection: { mode: "single" } }] }));
         else if (params.displayText === "turn-fail") setImmediate(() => emit("turn/completed", { sessionId: params.sessionId, turnId, terminal: "failed", error: { message: "auth required" } }));
-        else complete(); // deliberately before the command response
+        else {
+          complete(); // deliberately before the command response
+          if (params.displayText === "background") setImmediate(() => setImmediate(() => {
+            emit("approval/requested", { sessionId: params.sessionId, turnId: "child", subagentOrigin: { subagentId: "child" }, approvalId: "background-approval", subject: { kind: "shell", command: "ls" }, availableChoices: [{ choiceId: "yes", decision: "approved", scope: "once" }] });
+            emit("turn/started", { sessionId: params.sessionId, turnId: "background-wake" });
+          }));
+        }
         return { turnId };
       }
       if (method === "turn/steer") return { turnId: params.expectedTurnId };

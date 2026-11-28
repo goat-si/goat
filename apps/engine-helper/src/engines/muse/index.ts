@@ -32,6 +32,7 @@ class MuseSession implements EngineSession {
   private starting = false;
   private uncertain = false;
   private pending = new Map<string, Native>();
+  private wake: { id: string; events: Array<[string, Native]> } | undefined;
   private first: boolean;
   private model: string;
   private readonly secrets: string[];
@@ -92,6 +93,7 @@ class MuseSession implements EngineSession {
   private fail(reason: string) {
     if (this.closed) return;
     this.closed = true;
+    this.withdrawWake();
     const turn = this.active;
     this.active = undefined;
     turn?.finish();
@@ -99,6 +101,12 @@ class MuseSession implements EngineSession {
     if (turn?.admitted) this.host.emit({ type: "turn_finished", turnId: turn.id, outcome: { type: "failed", reason } });
     this.host.fail(reason);
     void this.native.close().catch(() => {});
+  }
+  private withdrawWake() {
+    if (!this.wake) return;
+    const key = this.wake.id;
+    this.wake = undefined;
+    this.host.emit({ type: "continuation_withdrawn", key });
   }
   private async command(method: string, params: Native, commandId?: string) {
     try {
@@ -117,16 +125,33 @@ class MuseSession implements EngineSession {
     if (value) this.host.emit({ type: "item_completed", turnId: turn.id, item: value, locator: { turnId: turn.id, itemId: native.itemId } });
   }
   private notify(method: string, p: Native) {
-    if (p.sessionId !== this.engineRef) return;
+    if (this.closed || p.sessionId !== this.engineRef) return;
     if (method === "view/gap") return this.fail("Muse delivery gap requires session recovery");
     if (method === "session/closed") return this.fail("Muse session closed");
     const turn = this.active;
-    if (!turn) {
-      // The helper protocol cannot represent v1 runless approvals or wake offers.
-      if ((method === "approval/requested" && p.subagentOrigin !== undefined) || method === "turn/started") this.fail("Muse background work requires unsupported host coordination");
+    if (turn && (!turn.admitted || turn.draining)) { if (turn.queue.length >= 2048) return this.fail("Muse event inbox exceeded capacity"); turn.queue.push([method, p]); return; }
+    // Workflow child approvals have their own native run and outlive GOAT turns.
+    const requestKey = `${method.startsWith("approval") ? "approval" : "question"}:${method.startsWith("approval") ? p.approvalId : p.userInputId}`;
+    const foreignQuestion = method.startsWith("userInput/") && (!turn || (typeof p.turnId === "string" && p.turnId !== turn.id && !turn.joined.has(p.turnId)));
+    if ((p.subagentOrigin !== undefined && method.startsWith("approval/")) || foreignQuestion || (this.pending.get(requestKey)?.runless && (method === "approval/resolved" || method === "userInput/settled"))) {
+      if (method === "approval/requested" || method === "approval/updated" || method === "userInput/requested") this.openRequest(undefined, method, p);
+      else if (method === "approval/resolved" || method === "userInput/settled") this.closeRequest(method, p);
       return;
     }
-    if (!turn.admitted || turn.draining) { if (turn.queue.length >= 2048) return this.fail("Muse event inbox exceeded capacity"); turn.queue.push([method, p]); return; }
+    const nativeId = p.turnId ?? p.item?.turnId;
+    if (this.wake && nativeId === this.wake.id) {
+      if (this.wake.events.length >= 2048) return this.fail("Muse wake event buffer exceeded capacity");
+      this.wake.events.push([method, p]);
+      return;
+    }
+    if (!turn) {
+      if (method === "approval/resolved" || method === "userInput/settled") this.closeRequest(method, p);
+      if (method === "turn/started" && typeof p.turnId === "string" && !this.wake) {
+        this.wake = { id: p.turnId, events: [] };
+        this.host.emit({ type: "continuation_requested", key: p.turnId, text: "Background work completed" });
+      }
+      return;
+    }
     const id = p.turnId ?? p.item?.turnId;
     if (method === "turn/started" && typeof id === "string" && id !== turn.id) turn.joined.add(id);
     if (typeof id === "string" && id !== turn.id && !turn.joined.has(id) && !(method.startsWith("approval/") && p.subagentOrigin !== undefined)) return;
@@ -173,7 +198,7 @@ class MuseSession implements EngineSession {
         const failure = errorItem({ id: `${turn.id}:failure`, turnId: turn.id, driver: "muse", now: this.host.now(), status: "failed" }, "Muse turn failed", limited ? "usage_limit" : "provider_error");
         this.host.emit({ type: "item_completed", turnId: turn.id, item: failure, locator: null });
       }
-      for (const key of this.pending.keys()) { this.pending.delete(key); this.host.emit({ type: "request_closed", key }); }
+      for (const [key, request] of this.pending) if (!request.runless) { this.pending.delete(key); this.host.emit({ type: "request_closed", key }); }
       this.host.emit({ type: "turn_finished", turnId: turn.id, outcome });
     } else if ((method === "turn/retryScheduled" || method === "turn/modelRetryScheduled") && typeof p.attempt === "number") {
       // retryRows.ts: Muse counts the first request as attempt one.
@@ -183,8 +208,7 @@ class MuseSession implements EngineSession {
     } else if (method === "approval/requested" || method === "approval/updated" || method === "userInput/requested") {
       this.openRequest(turn, method, p);
     } else if (method === "approval/resolved" || method === "userInput/settled") {
-      const key = `${method.startsWith("approval") ? "approval" : "question"}:${method.startsWith("approval") ? p.approvalId : p.userInputId}`;
-      if (this.pending.delete(key)) this.host.emit({ type: "request_closed", key });
+      this.closeRequest(method, p);
     } else if (method === "session/todoListChanged" && Array.isArray(p.items)) {
       const key = `${turn.id}:todo`;
       const steps = p.items.filter((v: Native) => typeof v.text === "string" && v.text.trim() && v.status !== "cancelled").map((v: Native, i: number) => ({ id: `${key}:${i}`, text: v.text.trim(), status: v.status === "completed" ? "completed" as const : v.status === "inProgress" ? "running" as const : "pending" as const }));
@@ -193,19 +217,37 @@ class MuseSession implements EngineSession {
     }
   }
   // Approval choices and question conversion follow adapter.ts:1026-1247, 2226-2290.
-  private openRequest(turn: Active, method: string, p: Native) {
+  private closeRequest(method: string, p: Native) {
+    const key = `${method.startsWith("approval") ? "approval" : "question"}:${method.startsWith("approval") ? p.approvalId : p.userInputId}`;
+    if (this.pending.delete(key)) this.host.emit({ type: "request_closed", key });
+  }
+  private openRequest(turn: Active | undefined, method: string, p: Native) {
     const approval = method.startsWith("approval");
     const id = approval ? p.approvalId : p.userInputId;
     if (typeof id !== "string") return;
     const key = `${approval ? "approval" : "question"}:${id}`;
     if (method === "approval/updated" && !this.pending.has(key)) return;
-    this.pending.set(key, p);
-    const base = { id: `${turn.id}:request:${key}`, turnId: turn.id, driver: "muse", nativeId: id, status: "waiting" as const, completedAt: null, now: this.host.now() };
+    this.pending.set(key, { ...p, runless: !turn });
+    const base = { id: `${turn?.id ?? "session"}:request:${key}`, turnId: turn?.id ?? "session", driver: "muse", nativeId: id, status: "waiting" as const, completedAt: null, now: this.host.now() };
     const subject = p.subject ?? {};
     const prompt = subject.command ?? subject.path ?? subject.host ?? subject.target ?? p.toolName ?? "Muse requests permission";
     const kind = subject.kind === "shell" ? "command" : subject.kind === "fileAccess" ? subject.access === "read" ? "file-read" : "file-change" : "permission";
     const value = approval ? item(base, "approval_request", { requestId: key, requestKind: kind, prompt }) : item(base, "user_input_request", { requestId: key, questions: (p.questions ?? []).map((q: Native) => ({ id: q.id, header: q.header || "Question", question: q.question, options: (q.options ?? []).map((o: Native) => ({ label: o.label, description: o.description || o.label })), multiSelect: q.selection?.mode === "multiple", allowCustomAnswer: true, required: true })) });
-    this.host.emit({ type: "request_opened", turnId: turn.id, key, itemId: base.id, kind: approval ? "approval" : "question", summary: approval ? prompt : "Muse asks a question", item: value });
+    const request = { key, itemId: base.id, kind: approval ? "approval" as const : "question" as const, summary: approval ? prompt : "Muse asks a question", item: turn ? value : { ...value, providerTurnId: null } };
+    if (turn) this.host.emit({ type: "request_opened", turnId: turn.id, ...request });
+    else this.host.emit({ type: "session_request_opened", ...request });
+  }
+  async startContinuation(key: string, _inputs: readonly EngineInput[], settings: TurnSettings): Promise<TurnStartResult> {
+    const wake = this.wake;
+    if (!wake || wake.id !== key || this.closed || this.active || this.starting || this.uncertain) return { status: "declined", reason: "Muse continuation is no longer available" };
+    if (settings.modelSelection.instanceId !== this.params.modelSelection.instanceId || settings.runtimeMode !== this.params.runtimeMode) return { status: "declined", reason: "Muse continuation settings do not match" };
+    this.wake = undefined;
+    let finish: () => void = () => {};
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    const turn: Active = { id: wake.id, interrupted: false, admitted: true, draining: true, queue: wake.events, items: new Map(), completed: new Set(), joined: new Set(), done, finish, retries: new Map() };
+    this.active = turn;
+    setImmediate(() => { if (this.active !== turn) return; turn.draining = false; for (const [method, params] of turn.queue.splice(0)) this.notify(method, params); });
+    return { status: "accepted", turnId: turn.id };
   }
   async startTurn(inputs: readonly EngineInput[], settings: TurnSettings): Promise<TurnStartResult> {
     if (this.closed) return { status: "declined", reason: "Muse host is closed" };
@@ -223,6 +265,8 @@ class MuseSession implements EngineSession {
       const done = new Promise<void>((resolve) => { finish = resolve; });
       const turn: Active = { id, interrupted: false, admitted: false, draining: true, queue: [], items: new Map(), completed: new Set(), joined: new Set(), done, finish, retries: new Map() };
       this.active = turn;
+      const wake = this.wake;
+      if (wake) { this.withdrawWake(); turn.joined.add(wake.id); turn.queue.push(...wake.events); }
       const preamble = this.first ? [this.params.instructions?.appendSystemPrompt, this.params.instructions?.firstMessagePreamble].filter(Boolean).join("\n\n") : "";
       const content = parts(inputs);
       if (preamble) content.unshift({ type: "text", text: preamble });
@@ -299,6 +343,7 @@ class MuseSession implements EngineSession {
   async shutdown() {
     if (this.closed) return;
     this.closed = true;
+    this.withdrawWake();
     const turn = this.active;
     this.active = undefined;
     turn?.finish();

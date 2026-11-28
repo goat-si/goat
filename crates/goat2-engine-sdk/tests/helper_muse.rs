@@ -49,7 +49,7 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
         .start_turn(
             vec![EngineInput {
                 input_id: InputId::from("input"),
-                text: "hello".into(),
+                text: "background".into(),
                 attachments: Vec::new(),
             }],
             &TurnSettings {
@@ -63,6 +63,9 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
     let mut delta = String::new();
     let mut message = false;
     let mut tool = false;
+    let mut finished = false;
+    let mut request = false;
+    let mut continuation = false;
     loop {
         let event = tokio::time::timeout(Duration::from_secs(10), handle.events.recv())
             .await
@@ -86,14 +89,24 @@ async fn muse_fake_turn_crosses_helper_and_validates_items() {
             },
             EngineEvent::TurnFinished { outcome, .. } => {
                 assert!(matches!(outcome, TurnOutcome::Done));
-                break;
+                finished = true;
+            }
+            EngineEvent::SessionRequestOpened { key, .. } => {
+                request = key == "approval:background-approval"
+            }
+            EngineEvent::ContinuationRequested { key, .. } => {
+                continuation = key == "background-wake"
             }
             EngineEvent::Exited { reason } => panic!("unexpected exit: {reason}"),
             _ => {}
+        }
+        if finished && request && continuation {
+            break;
         }
     }
     assert!(reasoning_delta, "reasoning must stream to Rust");
     assert_eq!(delta, "hello");
     assert!(message && tool, "both items must deserialize through Rust");
+    assert!(request && continuation, "background events reach Rust");
     handle.session.shutdown().await;
 }
