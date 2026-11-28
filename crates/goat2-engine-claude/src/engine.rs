@@ -490,7 +490,7 @@ impl Inner {
         })?;
         let stdin = child.take_stdin().ok_or("claude stdin unavailable")?;
         let stdout = child.take_stdout().ok_or("claude stdout unavailable")?;
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = self.bump_generation();
         self.pgid.store(child.pid(), Ordering::SeqCst);
         if let Ok(mut stderr) = self.stderr.lock() {
             *stderr = Some((generation, child.stderr_handle(), child.stderr_closed()));
@@ -703,7 +703,7 @@ impl Inner {
         } else {
             format!("Claude exited: {}", items::truncate(&last, 500))
         };
-        let exited = self.settle_exit(&reason);
+        let exited = self.settle_exit(Some(generation), &reason);
         // Reap the leader and end its group before saying nothing more follows. A shutdown or
         // close holding the process finishes its own stop first.
         self.reap(generation).await;
@@ -715,14 +715,20 @@ impl Inner {
     /// The one exit settlement (idempotent): stop writing, fail waiting controls and steers,
     /// close open requests, settle the active turn and end retained background subagents.
     /// Returns the `Exited` reason when this call settled, None when the session had already.
-    fn settle_exit(&self, observed: &str) -> Option<String> {
+    /// `generation` names the process whose exit this is; an older one never touches the
+    /// session that replaced it. The check and every change happen under the state lock, which
+    /// also guards each generation bump.
+    fn settle_exit(&self, generation: Option<u64>, observed: &str) -> Option<String> {
+        let mut state = self.state.lock().ok()?;
+        if generation.is_some_and(|g| g != self.generation.load(Ordering::SeqCst)) {
+            return None;
+        }
         if let Ok(mut writer) = self.writer.lock() {
             writer.take();
         }
         if let Ok(mut controls) = self.controls.lock() {
             controls.clear();
         }
-        let mut state = self.state.lock().ok()?;
         if state.exited {
             return None;
         }
@@ -792,6 +798,13 @@ impl Inner {
         Some(reason)
     }
 
+    /// The next process generation, taken under the state lock so an exit settlement sees either
+    /// the old generation with the old session or the new one.
+    fn bump_generation(&self) -> u64 {
+        let _state = self.state.lock();
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
     /// Wait for and end the process of `generation` (leader and group), if it is still held.
     async fn reap(&self, generation: u64) {
         let mut process = self.process.lock().await;
@@ -806,16 +819,19 @@ impl Inner {
     /// the close after an interrupt (v1 `interruptUnlessClosed` closes the query). The reader's
     /// EOF then settles the session.
     async fn close_process(&self, generation: u64, reason: String) {
-        if generation != self.generation.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Ok(mut state) = self.state.lock()
-            && state.exit_hint.is_none()
         {
-            state.exit_hint = Some(reason);
-        }
-        if let Ok(mut writer) = self.writer.lock() {
-            writer.take();
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            if generation != self.generation.load(Ordering::SeqCst) {
+                return;
+            }
+            if state.exit_hint.is_none() {
+                state.exit_hint = Some(reason);
+            }
+            if let Ok(mut writer) = self.writer.lock() {
+                writer.take();
+            }
         }
         let mut process = self.process.lock().await;
         if process.as_ref().is_some_and(|p| p.generation == generation)
@@ -1049,8 +1065,9 @@ impl Inner {
     }
 
     /// The turn ended (v1 finalizeActiveTurn, ClaudeAdapterV2.ts:5296-5305): a still pending
-    /// accepted steer reports `Completed` when the turn completed, `Cancelled` otherwise; a steer
-    /// whose `steer` call still waits is declined through it.
+    /// accepted steer reports `Completed` when `done` (a completed turn on a CLI without
+    /// `command_lifecycle`), `Cancelled` otherwise; a steer whose `steer` call still waits is
+    /// declined through it.
     fn end_steers(
         &self,
         turn_id: &str,
@@ -1644,7 +1661,10 @@ impl Inner {
             TurnOutcome::Interrupted => "the turn was interrupted".to_string(),
             TurnOutcome::Failed { reason } => reason.clone(),
         };
-        let done = matches!(outcome, TurnOutcome::Done);
+        // v1 finalize reports a pending steer completed with a completed turn; that only stands
+        // for a CLI that cannot say otherwise (no command_lifecycle). One that queued the steer
+        // and never started or echoed it did not read it.
+        let done = matches!(outcome, TurnOutcome::Done) && state.lifecycle == Lifecycle::Absent;
         self.end_steers(&turn_id, steers, &mut state.steer_waiters, done, &ended);
         state.turn = None;
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
@@ -1959,7 +1979,7 @@ impl Inner {
             || model.settings != current_model.settings;
         if relaunch {
             // v1 reopens the query when its policy or model identity changes.
-            self.generation.fetch_add(1, Ordering::SeqCst);
+            self.bump_generation();
             self.kill_process().await;
             let identity = SessionIdentity::Resume(session_id);
             if let Err(error) = self.spawn(&identity, &model, mode).await {
@@ -1984,7 +2004,7 @@ impl Inner {
 
     /// Settle the session after its process is gone for a reason Claude did not report.
     fn mark_exited(&self, reason: &str) {
-        if let Some(reason) = self.settle_exit(reason) {
+        if let Some(reason) = self.settle_exit(None, reason) {
             self.emit(EngineEvent::Exited { reason });
         }
     }
@@ -2320,12 +2340,13 @@ impl EngineSession for ClaudeSession {
             // without it the steer is accepted on write.
             let wait = lifecycle != Lifecycle::Absent;
             turn.steered = true;
+            // Provisional until written (no lifecycle) or until Claude's verdict (lifecycle).
             turn.steers.insert(
                 uuid.clone(),
                 Steer {
                     phase: SteerPhase::Sent,
                     input_ids,
-                    accepted: !wait,
+                    accepted: false,
                     completed_sent: false,
                 },
             );
@@ -2347,21 +2368,34 @@ impl EngineSession for ClaudeSession {
         if let Some(result) = undelivered {
             if let Ok(mut state) = inner.state.lock() {
                 state.steer_waiters.remove(&uuid);
-                let known = state
-                    .turn
-                    .as_mut()
-                    .and_then(|turn| turn.steers.remove(&uuid))
-                    .is_some();
-                // Accepted on write and already settled by the turn's end: its outcome went out
-                // as SteerUpdated.
-                if !known && !wait {
-                    return SteerResult::Accepted;
+                if let Some(turn) = state.turn.as_mut() {
+                    turn.steers.remove(&uuid);
                 }
             }
             return result;
         }
         if !wait {
-            return SteerResult::Accepted;
+            // Written to a CLI without command_lifecycle: accepted now, if its turn still runs.
+            let Ok(mut state) = inner.state.lock() else {
+                return SteerResult::Unknown {
+                    reason: "Claude session state is unavailable".into(),
+                };
+            };
+            if let Some(turn) = state.turn.as_mut()
+                && turn.id == turn_id
+                && let Some(steer) = turn.steers.get_mut(&uuid)
+            {
+                steer.accepted = true;
+                if steer.phase == SteerPhase::Consumed {
+                    inner.consume_steer(turn_id, steer);
+                }
+                return SteerResult::Accepted;
+            }
+            // The turn ended while the message was being written: Claude may run it as its own
+            // next prompt, outside any GOAT turn.
+            return SteerResult::Unknown {
+                reason: "The Claude turn ended while the message was being written".into(),
+            };
         }
         match tokio::time::timeout(inner.options.steer_ack_timeout, &mut rx).await {
             Ok(Ok(Ok(()))) => SteerResult::Accepted,
