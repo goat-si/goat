@@ -64,7 +64,7 @@ export class OpenCode2Session implements EngineSession {
   private readonly shutdownSignal = new AbortController();
   private readonly requests = new Map<string, Pending>();
   private readonly children = new Set<string>();
-  private readonly stoppedChildren = new Set<string>();
+  private readonly childEpoch = new Map<string, number>();
   private readonly stranded = new Set<string>();
   private readonly catalog = new Map<string, ModelInfo>();
   private active: Turn | undefined;
@@ -271,6 +271,7 @@ export class OpenCode2Session implements EngineSession {
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
     if (!turn.admitted) { turn.held = outcome; return; }
+    if (this.recovering && !this.closed) { if (turn.held?.type !== "failed" || outcome.type === "failed") turn.held = outcome; return; }
     if (turn.stopping) { if (turn.held?.type !== "failed" || outcome.type === "failed") turn.held = outcome; return; }
     if (outcome.type !== "done") {
       for (const [id, steer] of turn.steers) if (!steer.accepted) { turn.steers.delete(id); if (steer.sent && !steer.outcome) this.stranded.add(id); steer.invalidated.resolve(); }
@@ -285,11 +286,11 @@ export class OpenCode2Session implements EngineSession {
     if (this.fatalReason) { const reason = this.fatalReason; this.fatalReason = undefined; this.host.fail(reason); }
   }
   private settleIfReady(turn: Turn) {
-    if (this.active !== turn || !turn.held || turn.awaitingStart || turn.steers.size > 0) return;
+    if (this.active !== turn || this.recovering || !turn.held || turn.awaitingStart || turn.steers.size > 0) return;
     const outcome = turn.held; delete turn.held; turn.settlement?.abort(); delete turn.settlement; this.finish(turn, outcome);
   }
   private scheduleSettlement(turn: Turn) {
-    if (turn.settlement || this.closed) return;
+    if (turn.settlement || this.closed || this.recovering) return;
     const controller = new AbortController(); turn.settlement = controller;
     const abort = () => controller.abort(); this.shutdownSignal.signal.addEventListener("abort", abort, { once: true });
     void this.timer(5_000, controller.signal).then(async () => {
@@ -305,8 +306,7 @@ export class OpenCode2Session implements EngineSession {
     const owned = sessionID === this.engineRef || (sessionID !== undefined && this.children.has(sessionID));
     if (!owned) return;
     if (sessionID !== this.engineRef && sessionID) {
-      if (event.type === "session.execution.started") this.stoppedChildren.delete(sessionID);
-      else if (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") this.stoppedChildren.add(sessionID);
+      if (event.type === "session.execution.started") this.childEpoch.set(sessionID, (this.childEpoch.get(sessionID) ?? 0) + 1);
     }
     if (sessionID === this.engineRef && this.awaitingCancelledForm && (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed")) { this.awaitingCancelledForm = false; return; }
     const turn = this.active;
@@ -348,7 +348,10 @@ export class OpenCode2Session implements EngineSession {
       if (event.type === "session.inbox.cancelled") this.settleIfReady(turn);
       return;
     }
-    if (event.type === "session.execution.started") { turn.running = true; turn.awaitingStart = false; delete turn.held; turn.settlement?.abort(); delete turn.settlement; return; }
+    if (event.type === "session.execution.started") {
+      if (this.recovering && turn.held?.type === "failed") { this.broken("OpenCode 2 execution failed during stream recovery"); return; }
+      turn.running = true; turn.awaitingStart = false; delete turn.held; turn.settlement?.abort(); delete turn.settlement; return;
+    }
     if (event.type === "session.execution.succeeded" || event.type === "session.execution.interrupted" || event.type === "session.execution.failed") {
       turn.running = false;
       const outcome: TurnOutcome = event.type === "session.execution.failed" ? { type: "failed", reason: "OpenCode 2 turn failed" } : event.type === "session.execution.interrupted" || turn.interrupted ? { type: "interrupted" } : { type: "done" };
@@ -358,14 +361,15 @@ export class OpenCode2Session implements EngineSession {
       this.finish(turn, outcome); return;
     }
     if (event.type === "session.tool.input.started") {
+      if (turn.completedTools.has(event.data.id)) return;
       if (event.data.name !== "question") {
         turn.tools.set(event.data.id, { name: event.data.name, messageId: event.data.assistantMessageID, input: {}, startedAt: this.host.now() });
         if (event.data.name === "subagent") this.host.emit({ type: "subagent_update", turnId: turn.id, subagentId: event.data.id, status: "running", title: null, progress: null });
       }
       return;
     }
-    if (event.type === "session.tool.called") { const tool = turn.tools.get(event.data.id); if (tool) tool.input = event.data.input; return; }
-    if (event.type === "session.tool.progress") { const tool = turn.tools.get(event.data.id); if (tool && typeof event.data.metadata.sessionID === "string") { tool.childId = event.data.metadata.sessionID; this.children.add(tool.childId); } return; }
+    if (event.type === "session.tool.called") { if (turn.completedTools.has(event.data.id)) return; const tool = turn.tools.get(event.data.id); if (tool) tool.input = event.data.input; return; }
+    if (event.type === "session.tool.progress") { if (turn.completedTools.has(event.data.id)) return; const tool = turn.tools.get(event.data.id); if (tool && typeof event.data.metadata.sessionID === "string") { tool.childId = event.data.metadata.sessionID; this.children.add(tool.childId); } return; }
     if (event.type === "session.tool.success" || event.type === "session.tool.failed") {
       if (turn.completedTools.has(event.data.id)) return;
       const tool = turn.tools.get(event.data.id); if (!tool) { this.broken("OpenCode 2 tool event has no matching start"); return; }
@@ -379,7 +383,8 @@ export class OpenCode2Session implements EngineSession {
       if (tool.name === "subagent") this.host.emit({ type: "subagent_update", turnId: turn.id, subagentId: event.data.id, status: event.type === "session.tool.success" ? "completed" : event.data.error.type === "aborted" ? "interrupted" : "failed", title: typeof tool.input.description === "string" ? tool.input.description : null, progress: null });
       turn.completedTools.add(event.data.id); turn.tools.delete(event.data.id); return;
     }
-    turn.projection.handle(event);
+    try { turn.projection.handle(event); }
+    catch { this.broken("OpenCode 2 event content conflicted with recovered history"); }
   }
   private async openPermission(turn: Turn, request: PermissionRequest) {
     if (this.requests.has(request.id)) return;
@@ -488,31 +493,30 @@ export class OpenCode2Session implements EngineSession {
     turn.stopping = true;
     let stoppingChild = false;
     try {
-      const checked = new Set<string>();
+      const checked = new Map<string, number>();
       const stopChildren = async () => {
         if (!this.children.size) return;
         stoppingChild = true;
         for (let pass = 0; pass < 3; pass++) {
           const active = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
-          const children = [...this.children].filter((id) => id in active && !checked.has(id));
+          const children = [...this.children].filter((id) => id in active && checked.get(id) !== (this.childEpoch.get(id) ?? 0));
           if (!children.length) { stoppingChild = false; return; }
           for (const sessionID of children) {
-            this.stoppedChildren.delete(sessionID);
+            const epoch = this.childEpoch.get(sessionID) ?? 0;
             const result = await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.interrupt({ sessionID }, { signal }));
             await bounded(10_000, this.shutdownSignal.signal, async (signal) => {
               for (;;) {
-                if (this.stoppedChildren.has(sessionID)) return;
                 const current = await this.runtime.client.session.active({ signal });
                 if (!(sessionID in current)) return;
                 if (!result.interrupted) throw new Error("child still running");
                 await this.timer(250, signal);
               }
             });
-            checked.add(sessionID);
+            checked.set(sessionID, epoch);
           }
         }
         const remaining = await bounded(5_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.active({ signal }));
-        if ([...this.children].some((id) => id in remaining && !checked.has(id))) throw new Error("new child work could not be stopped");
+        if ([...this.children].some((id) => id in remaining && checked.get(id) !== (this.childEpoch.get(id) ?? 0))) throw new Error("new child work could not be stopped");
         stoppingChild = false;
       };
       await stopChildren();

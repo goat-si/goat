@@ -91,6 +91,14 @@ test("a replayed manual compaction uses its native input ID for history matching
   assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
 });
 
+test("an end after a pre-gap compaction start cannot contradict recovered history", () => {
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const projection = new OpenCode2Projection(host, "turn");
+  projection.handle({ id: "evt_123", type: "session.compaction.started", data: { sessionID: "session", reason: "auto", recent: "" } } as unknown as V2Event);
+  projection.recoverCompaction("msg_123", 0, "completed", "snapshot");
+  assert.throws(() => projection.handle({ id: "evt_124", type: "session.compaction.ended", data: { sessionID: "session", reason: "auto", text: "different", recent: "" } } as unknown as V2Event), /conflicts/);
+});
+
 test("reasoning content redacts a token split across native deltas", () => {
   const events: EngineEvent[] = [];
   const raw = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

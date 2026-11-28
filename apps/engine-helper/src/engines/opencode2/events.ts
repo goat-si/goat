@@ -21,6 +21,7 @@ export class OpenCode2Projection {
   private readonly seen = new Set<string>();
   private lastUsage: ContextUsage | undefined;
   private compactionId: string | undefined;
+  private compactionNativeId: string | undefined;
   private compactionCount = 0;
   private finalizedCompactions = 0;
   private readonly recoveredCompactions = new Map<string, { status: "running" | "completed" | "failed"; summary?: string }>();
@@ -63,8 +64,9 @@ export class OpenCode2Projection {
   recoverCompaction(id: string, ordinal: number, status: "running" | "completed" | "failed", summary?: string) {
     this.recoveredCompactions.set(id, { status, ...(summary === undefined ? {} : { summary }) });
     if (ordinal < this.finalizedCompactions) return;
+    const startedBeforeGap = this.compactionNativeId === id && this.compactionId !== undefined;
     this.compactionId ??= `${this.turnId}:compaction:${this.compactionCount++}`;
-    if (status !== "running") this.finishCompaction(status, summary);
+    if (status !== "running") { this.finishCompaction(status, summary); if (startedBeforeGap) this.replayingCompaction = id; }
   }
   handle(event: V2Event): boolean {
     if (!["session.text.started", "session.text.delta", "session.text.ended", "session.reasoning.started", "session.reasoning.delta", "session.reasoning.ended", "session.step.ended", "session.step.failed", "session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(event.type)) return false;
@@ -72,6 +74,7 @@ export class OpenCode2Projection {
       // OpenCode 2.0.28 stores inputID, or its event ID with evt_ replaced by msg_.
       const id = event.data.inputID ?? event.id.replace(/^evt_/, "msg_");
       if (this.recoveredCompactions.has(id)) { this.replayingCompaction = id; return true; }
+      this.replayingCompaction = undefined; this.compactionNativeId = id;
     }
     if (this.seen.has(event.id)) return true;
     if (this.seen.size >= 16384) throw new Error("OpenCode event limit exceeded");

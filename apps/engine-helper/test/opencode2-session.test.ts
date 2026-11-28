@@ -730,3 +730,76 @@ test("reconnect backfill and buffered compaction events yield one completed item
     } finally { history.release(); }
   } finally { await session.shutdown(); }
 });
+
+test("a child restarted during root interruption is stopped again", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); fake.setActive({ child: { type: "running" } }); await tick();
+    const gate = fake.holdInterrupt(session.engineRef);
+    try {
+      const stopping = session.interrupt(turn.turnId); await gate.reached;
+      fake.setActive({ child: { type: "running" } }); fake.emit("session.execution.started", { sessionID: "child" });
+      fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick(); gate.release(); await stopping; await tick();
+      const childStops = fake.calls.filter((call) => call.method === "session.interrupt" && (call.input as { sessionID: string }).sessionID === "child");
+      assert.equal(childStops.length, 2);
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "interrupted").length, 1);
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});
+
+test("a replayed terminal waits for a later buffered execution start", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setHistory([{ id: "idle", type: "idle", outcome: "succeeded", time: { created: 2 } }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    const history = fake.holdHistory();
+    try {
+      fake.breakStream(); await history.reached;
+      fake.emit("session.execution.succeeded", { sessionID: session.engineRef });
+      fake.emit("session.execution.started", { sessionID: session.engineRef }); await tick(); history.release(); await tick(); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0); assert.deepEqual(failures, []);
+      fake.emit("session.execution.succeeded", { sessionID: session.engineRef }); await tick();
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "done").length, 1);
+    } finally { history.release(); }
+  } finally { await session.shutdown(); }
+});
+
+test("a completed subagent recovered from history is not reopened by replayed tool events", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setActive({ [session.engineRef]: { type: "running" } });
+    fake.setHistory([{ id: "m", type: "assistant", time: { created: 2, streamed: 3 }, content: [{ type: "tool", id: "task", name: "subagent", executed: true, state: { status: "completed", input: { prompt: "inspect" }, content: [{ type: "text", text: "result" }], metadata: { sessionID: "child" } }, time: { created: 2 } }] }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    const history = fake.holdHistory();
+    try {
+      fake.breakStream(); await history.reached;
+      fake.emit("session.tool.input.started", { sessionID: session.engineRef, assistantMessageID: "m", id: "task", name: "subagent" });
+      fake.emit("session.tool.called", { sessionID: session.engineRef, assistantMessageID: "m", id: "task", input: { prompt: "inspect" }, executed: true });
+      fake.emit("session.tool.success", { sessionID: session.engineRef, assistantMessageID: "m", id: "task", executed: true, content: [{ type: "text", text: "result" }], metadata: { sessionID: "child" } });
+      await tick(); history.release(); await tick(); await tick();
+      const states = events.flatMap((event) => event.type === "subagent_update" && event.subagentId === "task" ? [event.status] : []);
+      assert.deepEqual(states, ["completed"]);
+      assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "subagent").length, 1);
+    } finally { history.release(); }
+  } finally { await session.shutdown(); }
+});
+
+test("conflicting terminal text during replay fails the owning session visibly", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = [], failures: string[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events, failures), async () => {});
+  try {
+    assert.equal((await session.startTurn(input("i", "hold"), settings)).status, "accepted"); await tick();
+    const prompt = fake.calls.find((call) => call.method === "session.prompt")?.input as { id: string };
+    fake.setActive({ [session.engineRef]: { type: "running" } });
+    fake.setHistory([{ id: "m", type: "assistant", time: { created: 2, streamed: 3 }, content: [{ type: "text", text: "snapshot" }] }, { id: prompt.id, type: "user", text: "hold", time: { created: 1 } }]);
+    const history = fake.holdHistory();
+    try {
+      fake.breakStream(); await history.reached;
+      fake.emit("session.text.ended", { sessionID: session.engineRef, assistantMessageID: "m", ordinal: 0, text: "different" }); await tick(); history.release(); await tick(); await tick();
+      assert.deepEqual(failures, ["OpenCode 2 event content conflicted with recovered history"]);
+      assert.equal(events.filter((event) => event.type === "turn_finished" && event.outcome.type === "failed").length, 1);
+    } finally { history.release(); }
+  } finally { await session.shutdown(); }
+});
