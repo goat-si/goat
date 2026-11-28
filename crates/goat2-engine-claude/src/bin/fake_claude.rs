@@ -447,7 +447,14 @@ impl Fake {
                     let Some(frame) = self.deferred.take() else {
                         self.fail(format!("{label}: nothing deferred"));
                     };
-                    self.reply_success(&frame, json!({}));
+                    match entry.get("error").and_then(Value::as_str) {
+                        Some(error) => {
+                            let id = frame["request_id"].clone();
+                            self.write(&json!({"type": "control_response", "response": {
+                                "subtype": "error", "request_id": id, "error": error}}));
+                        }
+                        None => self.reply_success(&frame, json!({})),
+                    }
                 }
                 "expect_argv" => {
                     for word in entry["contains"].as_array().cloned().unwrap_or_default() {

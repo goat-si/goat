@@ -579,7 +579,15 @@ async fn an_unexpected_exit_is_reaped_before_exited() {
 #[tokio::test]
 async fn no_turn_starts_while_an_interrupt_is_still_closing_claude() {
     let run = Run::new("wire/interrupt_reply_after_result.ndjson");
-    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let mut factory = run.factory();
+    // The interrupt answer comes 800 ms after the result; the stop deadline must outlast it.
+    factory.options.interrupt_settle_timeout = std::time::Duration::from_secs(5);
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::FullAccess, None),
+    )
+    .await
+    .unwrap();
     let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
     let EngineHandle {
         session, events, ..
@@ -622,6 +630,86 @@ async fn a_refused_interrupt_leaves_the_turn_running() {
     assert_eq!(
         answers(&events, AssistantMessagePhase::FinalAnswer),
         vec!["All done."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review round 3 finding 1: Claude's result arrives first and its refusal of the interrupt after
+/// it; the refused interrupt does not turn the finished work into an interrupted turn.
+#[tokio::test]
+async fn a_result_before_a_refused_interrupt_still_completes_the_turn() {
+    let run = Run::new("wire/interrupt_result_then_refused.ndjson");
+    let mut factory = run.factory();
+    factory.options.interrupt_settle_timeout = std::time::Duration::from_secs(5);
+    let mut handle = goat2_engine_api::EngineFactory::start(
+        &factory,
+        run.spec(MODEL, RuntimeMode::FullAccess, None),
+    )
+    .await
+    .unwrap();
+    let turn_id = turn(&handle, "Work.", MODEL, RuntimeMode::FullAccess).await;
+    let refused = handle.session.interrupt(&turn_id).await;
+    assert!(refused.is_err(), "{refused:?}");
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["All done."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review round 3 finding 2: a shutdown that lands while a runtime-mode change is reopening
+/// Claude ends the session for good; the reopen does not start a new process.
+#[tokio::test]
+async fn shutdown_during_a_reopen_starts_no_new_process() {
+    let run = Run::new("wire/shutdown_during_reopen.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    turn(&handle, "one", MODEL, RuntimeMode::ApprovalRequired).await;
+    assert_eq!(
+        finished(&until_finished(&mut handle).await),
+        TurnOutcome::Done
+    );
+    let session = &handle.session;
+    let full_access = settings(MODEL, RuntimeMode::FullAccess);
+    let reopen = session.start_turn(input("two"), &full_access);
+    let stop = async {
+        // The old process takes 1.5 s to exit, so this lands while the reopen tears it down.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        session.shutdown().await;
+    };
+    let (started, ()) = tokio::join!(reopen, stop);
+    assert!(
+        !matches!(started, TurnStartResult::Accepted { .. }),
+        "a turn started after shutdown: {started:?}"
+    );
+    assert_eq!(
+        run.starts().len(),
+        1,
+        "a new Claude process started after shutdown"
+    );
+}
+
+/// Review round 3 finding 3 (v1 `ClaudeAdapterV2.ts:5241-5249`: completed alone is not proof of
+/// acceptance): a steer Claude reports completed without starting stays pending, so the turn goes
+/// on to the steer's own result.
+#[tokio::test]
+async fn a_steer_completed_without_starting_is_not_consumed() {
+    let run = Run::new("wire/lifecycle_steer_completed_unstarted.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input("Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["1, 2, 3. done"]
     );
     handle.session.shutdown().await;
     run.assert_replayed(1);
