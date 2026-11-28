@@ -1,6 +1,6 @@
-// Seam (lane F): replaces v1 packages/client-runtime/src/environment/index.ts @916b5cc. v1 also re-exports descriptor.ts, which reads environment descriptors over the v1 rpc/http server; GOAT 2 has no v1
-// environment server, so only the pure modules (lifted byte-identical) are re-exported.
-// Listed in docs/PROVENANCE.md (v1 bridge table).
+// Bridge for v1 @goat/client-runtime/environment (packages/client-runtime/src/environment/index.ts, docs/PROVENANCE.md).
+// Re-exports the three pure, byte-identical lifted modules. v1's descriptor.ts (environment descriptor fetch over the
+// v1 HTTP RPC client) is left out: GOAT 2 has one local host and no v1 environment HTTP API.
 export * from "../../../../../packages/client-runtime/src/environment/endpoint.ts";
 export * from "../../../../../packages/client-runtime/src/environment/knownEnvironment.ts";
 export * from "../../../../../packages/client-runtime/src/environment/scoped.ts";

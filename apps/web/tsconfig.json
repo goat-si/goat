@@ -1,7 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "jsx": "react-jsx", "lib": ["ESNext", "DOM", "DOM.Iterable"], "module": "ESNext", "moduleResolution": "Bundler", "types": ["vite/client"] },
+  "compilerOptions": {
+    "jsx": "react-jsx", "lib": ["ESNext", "DOM", "DOM.Iterable"], "module": "ESNext", "moduleResolution": "Bundler", "types": ["vite/client"],
+    "paths": { "@v1/surfaces": ["./src/v1/seam/goat2/surfaces.types.ts"] }
+  },
   "include": ["src", "vite.config.ts"],
-  "//": "src/v1 is the byte-identical v1 lift; it typechecks with tsconfig.v1.json once its seam is complete (devlog 070)",
+  "//": "src/v1 is the byte-identical v1 lift and needs v1's compiler options: GOAT 2 code reaches it only through @v1/surfaces, typed here by surfaces.types.ts; tsconfig.v1.json checks the implementation against those types (devlog 070)",
   "exclude": ["src/v1"]
 }

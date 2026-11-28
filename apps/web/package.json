@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "VITE_GOAT2_MODE=prototype vite",
     "build": "vite build",
-    "typecheck": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.v1.json",
     "test": "vitest run",
     "shots": "playwright test",
     "dev:host": "vite",
-    "build:prototype": "VITE_GOAT2_MODE=prototype vite build --base=./"
+    "build:prototype": "VITE_GOAT2_MODE=prototype vite build --base=./",
+    "typecheck:v1-all": "tsc -p tsconfig.v1-all.json"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
+    "@effect/atom-react": "4.1.2",
     "@goat2/bot-face": "workspace:*",
     "@goat2/contracts": "workspace:*",
     "@goat2/contracts-rs": "workspace:*",

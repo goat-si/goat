@@ -1,0 +1,4 @@
+# Shared base for every v1 surface (build wiring, goat2_providers_ui for lane F): files v1 index.css imports.
+apps/web/src/desktop/windowMaterial.css
+apps/web/src/appearance/liquidGlass.css
+apps/web/src/assets/fonts/Pretendard-Bold.woff2

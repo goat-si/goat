@@ -1,0 +1,17 @@
+/* Entry for the v1 CSS (devlog 070 audit-3 residual): the copied v1 index.css stays byte-identical; Tailwind's source
+   scanning for the lifted tree is declared here. postcss.config.js scopes the result to [data-v1]. */
+@import "../index.css";
+@source "../";
+
+/* v1 sets its interface text on <body> (index.css: font-family var(--font-sans); @apply text-foreground). GOAT 2 maps
+   body to the opt-in [data-v1-body], so every v1 boundary and the portal root get that typography here. */
+[data-v1] {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+}
+
+/* The portal root lets clicks through to GOAT 2 (seam/base-ui/portalRoot.ts); popups inside it take the pointer as they
+   would under v1's <body>. Zero specificity, so v1's own pointer-events-none (tooltips) still wins. */
+:where([data-v1-portal] *) {
+  pointer-events: auto;
+}
