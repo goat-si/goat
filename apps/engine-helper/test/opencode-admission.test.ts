@@ -335,6 +335,25 @@ test("native activity during a usage lookup invalidates the previous idle", asyn
   } finally { gate.release(); await session.shutdown(); }
 });
 
+test("an old catalog lookup cannot settle a later idle generation", async () => {
+  fake.reset(); const first = fake.holdProvider(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hello", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); await first.reached;
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+    const second = fake.holdProvider();
+    try {
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await second.reached;
+      first.release(); await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      second.release(); await finished.promise;
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 1);
+    } finally { second.release(); }
+  } finally { first.release(); await session.shutdown(); }
+});
+
 test("interrupt during a usage catalog lookup never finishes as done", async () => {
   fake.reset(); const gate = fake.holdProvider(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

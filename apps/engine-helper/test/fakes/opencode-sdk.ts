@@ -27,7 +27,7 @@ const nativeStatuses = new Map<string, "idle" | "busy">();
 let mcpStatus: "connected" | "failed" | "disabled" | "needs_auth" | "missing" = "connected";
 export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); nativeStatuses.clear(); mcpStatus = "connected"; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; ignorePromptAbort = false; historyGate = undefined; historyReached = undefined; historyFinished = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; modelLimits = undefined; providerGate = undefined; providerReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setModelLimits(limits: { input?: number; context: number }) { modelLimits = limits; }
-export function holdProvider() { providerGate = Promise.withResolvers<void>(); providerReached = Promise.withResolvers<void>(); return { reached: providerReached.promise, release: () => providerGate?.resolve() }; }
+export function holdProvider() { const gate = Promise.withResolvers<void>(); const reached = Promise.withResolvers<void>(); providerGate = gate; providerReached = reached; return { reached: reached.promise, release: () => gate.resolve() }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
 export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
