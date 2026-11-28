@@ -57,11 +57,19 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   Include your GOAT threadId; the answer comes back as a message in your GOAT thread. Keep working on
   other parts while waiting.
 
-## Delivery
-- Commit to `goat2_<lane>`, push to origin, open a PR **into `goat2`** with
-  `gh pr create -R goat-si/goat --base goat2`. Do not merge, do not touch `dev`, never force-push
-  shared branches. PR body: what was built, how it was verified (commands + results), open questions.
-- Author is `JUN <jun@lidgeai.com>`.
+## Delivery (owner rule 2026-11-28: merge locally now, remote CI later)
+- Commit on `goat2_<lane>` and push it. When a piece is green locally (`cargo fmt --check`,
+  `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`), merge it into `goat2` **locally**:
+  ```sh
+  until mkdir /tmp/goat2-merge.lock 2>/dev/null; do sleep 5; done   # one merger at a time
+  trap 'rmdir /tmp/goat2-merge.lock' EXIT
+  cd ~/Developer/goat2 && git pull --rebase origin goat2 || true
+  git merge --no-ff goat2_<lane> -m "merge goat2_<lane>: <what>"
+  cargo test --workspace            # must stay green after the merge
+  git push --force-with-lease origin goat2
+  ```
+  Then rebase your lane branch on the new `goat2` and keep going. Remote CI and PRs come later; a PR is
+  optional. Never touch `dev`. Author `JUN <jun@lidgeai.com>`.
 
 ## Lanes
 | Lane | Branch / folder | Crates | Done when |
