@@ -765,9 +765,10 @@ impl Inner {
         for (key, _) in state.pending.drain() {
             self.emit(EngineEvent::RequestClosed { key });
         }
-        for (_, waiter) in state.steer_waiters.drain() {
-            let _ = waiter.send(Err(reason.clone()));
-        }
+        // A waiting steer has no verdict, and the exit does not show Claude left it unread: its
+        // `steer` call answers Unknown. One whose write never landed answers from its failed
+        // delivery (Declined when Claude was not running).
+        state.steer_waiters.clear();
         self.flush_text(&mut state, AssistantMessagePhase::Commentary);
         let stopping = state.stopping || state.shutting_down;
         if let Some(mut turn) = state.turn.take() {
@@ -2453,7 +2454,7 @@ impl EngineSession for ClaudeSession {
             Ok(Ok(Ok(()))) => SteerResult::Accepted,
             Ok(Ok(Err(reason))) => SteerResult::Declined { reason },
             Ok(Err(_)) => SteerResult::Unknown {
-                reason: "The Claude turn ended before Claude acknowledged the message".into(),
+                reason: "Claude ended the turn or exited before acknowledging the message".into(),
             },
             Err(_) => {
                 let pending = inner
