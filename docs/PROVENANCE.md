@@ -29,3 +29,11 @@ New in GOAT 2 (no source): packages/runtime-stamp, packages/provider-icons/src/P
 packages/provider-icons/src/ProviderChip.tsx, apps/web/src/bot-home/*, apps/server/src/*,
 apps/desktop/src/*, docs/PRD.md, README.md, package/workspace manifests (modeled on goat's
 package.json / pnpm-workspace.yaml / catalog).
+
+## Bot face and motion (2026-11-28)
+
+| File | Source | License |
+|---|---|---|
+| `packages/bot-face/src/facePose.ts` (`facePose` idle/think/work, `blendPose`) | NousResearch/hermes-agent `apps/desktop/src/plugins/hermes-bots/avatar.tsx` (`facePose`, `settlePose`), main as of 2026-11-28 | MIT |
+| `packages/bot-face/src/motionTokens.ts` (`EASE_OUT`, `ENTRANCE_SECONDS`) | CopilotKit/OpenBot `app/src/lib/motion.ts` | MIT |
+| `docs/DESIGN.md` structure and rules | hermes-agent `apps/desktop/DESIGN.md`; OpenBot `docs/app-guidelines.md`; openmuse `docs/EXPERIENCE.md` | MIT (ideas, paraphrased) |

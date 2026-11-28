@@ -25,6 +25,15 @@ Electron. It is also thread-first, while the product direction is bot-first.
 4. **Official CLIs as engines**, T3-style. Keep the ToS-safe posture (no subscription login inside
    a custom engine).
 
+## Design guidelines and motion
+
+- Guidelines: [DESIGN.md](DESIGN.md) (principles, tokens, avatar + provider chip anatomy, folding, copy, checklist).
+- Bot motion: [MOTION.md](MOTION.md), states idle / ack / think / work / needs_you / done / error mapped to
+  ledger states, with timing; live reference [motion/playground.html](motion/playground.html); code `@goat2/bot-face`.
+- Method borrowed from the references: guidelines live in the repo as markdown next to code
+  (Hermes `DESIGN.md`, OpenBot `app-guidelines.md`), one motion vocabulary file (OpenBot `lib/motion.ts`),
+  and later a guard test that fails when a screen breaks the look (OpenBot `ui-look-guard.test.ts`).
+
 ## Non-goals (for now)
 
 - Tauri. Electron stays (browser use needs it; computer use lives in a signed helper).
