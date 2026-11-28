@@ -100,7 +100,9 @@ map is never held while a thread lock is taken.
    folder, no goat.jsonl, or no newline-terminated first event line. Anything else (an invalid but
    complete header or first line, a newer version) is kept and reported corrupt. I/O errors while probing
    fail `open`, and so does any card.json read error other than a missing file (an invalid card.json
-   is a cache miss). A dirty row without a folder is a finished delete.
+   is a cache miss). A dirty row without a folder is a finished delete. Both an abandoned create and
+   a finished delete sync `threads/` before they clear trash or drop the row, because the row may
+   cover an earlier delete whose rename was never synced; a failed sync fails `open` and keeps both.
 4. Settle every active run: its open requests resolve `cancelled`, then `run.finished` is
    `interrupted` when the run reached the engine (`run.accepted`, an item or request for it, or an
    accepted turn delivery) and `unknown` otherwise. An unknown run opens request `resend:<runId>`

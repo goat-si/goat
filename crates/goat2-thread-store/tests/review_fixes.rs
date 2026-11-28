@@ -977,3 +977,53 @@ fn startup_makes_a_rename_durable_before_finishing_the_delete() {
         "the thread's trash is cleared once the rename is durable"
     );
 }
+
+// Review round 9.
+#[test]
+fn abandoning_a_create_syncs_the_threads_directory_before_dropping_the_row() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let (store, _) = open(dir.path());
+        store
+            .create_thread(Some(tid("t")), created("old", "/w"))
+            .unwrap();
+        testing::set_faults(
+            &store,
+            Faults {
+                fail_delete_dir_sync: true,
+                ..Default::default()
+            },
+        );
+        assert!(store.delete_thread(&tid("t")).is_err());
+        testing::set_faults(&store, Faults::default());
+        // Same id recreated; the process dies after the creation intent (step 1).
+        assert!(
+            testing::create_thread_stopping_after(&store, tid("t"), created("new", "/w"), 1)
+                .is_err()
+        );
+        testing::crash(store);
+    }
+    // The directory still cannot be synced: the row must not be dropped.
+    assert!(
+        Store::open(
+            dir.path(),
+            StoreOptions {
+                faults: Faults {
+                    fail_delete_dir_sync: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(
+        trash_dirs(dir.path()).len(),
+        1,
+        "old trash kept while the rename is not durable"
+    );
+    let (store, report) = open(dir.path());
+    assert_eq!(report.abandoned_creates, vec!["t"]);
+    assert!(store.find(&Default::default()).is_empty());
+    assert!(trash_dirs(dir.path()).is_empty());
+}

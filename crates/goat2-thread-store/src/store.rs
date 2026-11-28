@@ -749,12 +749,25 @@ impl Store {
     /// undo it), then clear this thread's leftover trash and drop the row. A failed sync fails
     /// `open` and keeps the row.
     fn finish_missing_folder_delete(&self, id: &ThreadId) -> Result<()> {
+        self.sync_threads_dir()?;
+        self.clear_trash(id)?;
+        lock(&self.shared).index.delete(id.as_str())?;
+        Ok(())
+    }
+
+    /// Sync `threads/` so earlier renames (deletes moving folders to trash) survive a power loss.
+    fn sync_threads_dir(&self) -> Result<()> {
         if self.faults().fail_delete_dir_sync {
             return Err(StoreError::Io(injected("threads directory sync")));
         }
         if self.opts.fsync {
             sync_dir(&self.threads_dir())?;
         }
+        Ok(())
+    }
+
+    /// Remove this thread's leftover trash folders. Call only after `sync_threads_dir` succeeded.
+    fn clear_trash(&self, id: &ThreadId) -> Result<()> {
         let prefix = format!(".trash-{}-", id.as_str());
         for entry in fs::read_dir(self.threads_dir())? {
             let entry = entry?;
@@ -766,7 +779,6 @@ impl Store {
                 let _ = fs::remove_dir_all(entry.path());
             }
         }
-        lock(&self.shared).index.delete(id.as_str())?;
         Ok(())
     }
 
@@ -801,15 +813,20 @@ impl Store {
         }
     }
 
+    /// Drop a create that never committed. The row may also cover an earlier delete of the same
+    /// id whose rename was never synced, so `threads/` is synced before anything is removed; a
+    /// failed sync fails `open` and keeps the row and any trash.
     fn abandon_create(&self, id: &ThreadId) -> Result<()> {
+        self.sync_threads_dir()?;
         let dir = self.thread_dir(id);
         if self.probe(&dir)?.is_some() {
             let trash =
                 self.threads_dir()
                     .join(format!(".trash-{}-{}", id.as_str(), random_hex(8)));
             fs::rename(&dir, &trash)?;
-            let _ = fs::remove_dir_all(&trash);
+            self.sync_threads_dir()?;
         }
+        self.clear_trash(id)?;
         lock(&self.shared).index.delete(id.as_str())?;
         Ok(())
     }
