@@ -364,6 +364,54 @@ pub fn build(
     (frozen_prefix(&parts), record)
 }
 
+/// v1 ASK_FIRST, adapted: the question goes through `goat_ask`.
+pub const ASK_FIRST: &str = "Before anything sent under the person's name (messages, email, posts) or hard to undo (merging, deleting, purchasing), ask first: show the draft or plan in a question with goat_ask, then end your turn; the answer arrives as a new message.";
+/// v1 REPORT_RESULT (`channelWorkerBrief.ts`), with GOAT 2's tool name.
+pub const REPORT_RESULT: &str = "Before you end, call goat_thread_report_result with your outcome (succeeded, failed, blocked or cancelled) and a short summary; GOAT settles the task from that report.";
+/// v1 FINISH.
+pub const FINISH: &str = "When you finish, end with a short summary of the result.";
+
+/// v1 workerInstruction for a worker thread a bot started (local worker): the task first, then
+/// where it came from, the bot's notes in force, and the worker rules. Adapted: no notes file
+/// path or skills folder (the bot's notes are given inline; GOAT 2 has no skills folder yet).
+pub fn worker_prefix(host: &Host, bot: &BotProfile, task: &str, worker: &ThreadId) -> String {
+    let path = notes::notes_path(&host.options().data_dir, bot.bot_id.as_str());
+    let snap = notes::snapshot(&path, task).unwrap_or_default();
+    let notes_rule = if snap.section().is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Standing notes from the person; follow them. {}\nNotes in force:\n{}",
+            notes::NOTES_REPLACED_RULE,
+            snap.section()
+        )
+    };
+    let mut lines = vec![
+        task.to_owned(),
+        String::new(),
+        "---".to_owned(),
+        format!(
+            "This work came in through GOAT from {} as worker thread {worker}.",
+            bot.name
+        ),
+    ];
+    if !notes_rule.is_empty() {
+        lines.push(notes_rule);
+    }
+    lines.extend(
+        [
+            "Leave the bot's notes unchanged; this task did not ask to change a note.",
+            ASK_FIRST,
+            "If you need a decision from the person who asked, call goat_ask (kind question, with questions and options), then stop.",
+            REPORT_RESULT,
+            FINISH,
+            PERSONAL_DATA_RULE,
+        ]
+        .map(str::to_owned),
+    );
+    format!("{}{}", identity_section(bot), lines.join("\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

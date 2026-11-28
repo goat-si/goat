@@ -85,30 +85,48 @@ pub(crate) fn rotation_due(
 #[derive(Debug, Clone)]
 pub(crate) struct PendingBrief {
     bot: BotProfile,
-    record: brief::SessionRecord,
+    record: Option<brief::SessionRecord>,
 }
 
-/// Hook (first turn of a new engine session of a bot thread): put the frozen brief in front of
-/// the first message, as v1 sends its frozen prefix as the session's first message. Returns
-/// what [brief_taken] records once the engine accepted the turn.
+/// Hook (first turn of a new engine session): a bot thread's first message carries the frozen
+/// brief, as v1 sends its frozen prefix as the session's first message; a worker a bot started
+/// gets v1's worker instruction around its task. Returns what [brief_taken] records once the
+/// engine accepted the turn; None = nothing to add.
 pub(crate) fn apply_brief(
     host: &Host,
-    thread: &ThreadId,
+    card: &ThreadCard,
     engine_ref: &EngineRef,
     inputs: &mut [EngineInput],
 ) -> Option<PendingBrief> {
-    let bot = registry::bot_of_thread(host, thread)?;
-    let ids: Vec<InputId> = inputs.iter().map(|i| i.input_id.clone()).collect();
-    let first = inputs.first_mut()?;
-    let (prefix, mut record) = brief::build(host, &bot, &first.text, &ids);
-    record.engine_ref = Some(engine_ref.clone());
-    first.text = prefix;
-    Some(PendingBrief { bot, record })
+    match card.kind {
+        ThreadKind::Bot => {
+            let bot = registry::bot_of_thread(host, &card.id)?;
+            let ids: Vec<InputId> = inputs.iter().map(|i| i.input_id.clone()).collect();
+            let first = inputs.first_mut()?;
+            let (prefix, mut record) = brief::build(host, &bot, &first.text, &ids);
+            record.engine_ref = Some(engine_ref.clone());
+            first.text = prefix;
+            Some(PendingBrief {
+                bot,
+                record: Some(record),
+            })
+        }
+        ThreadKind::Worker => {
+            let parent = card.parent.as_ref()?;
+            let bot = registry::bot_of_thread(host, &parent.thread_id)?;
+            let first = inputs.first_mut()?;
+            first.text = brief::worker_prefix(host, &bot, &first.text, &card.id);
+            Some(PendingBrief { bot, record: None })
+        }
+        ThreadKind::User => None,
+    }
 }
 
 /// Hook: the engine accepted the briefed turn; later starts resume this session.
 pub(crate) fn brief_taken(host: &Host, pending: PendingBrief) {
-    if let Err(err) = brief::write_record(host, &pending.bot, &pending.record) {
+    if let Some(record) = &pending.record
+        && let Err(err) = brief::write_record(host, &pending.bot, record)
+    {
         tracing::warn!(bot = %pending.bot.bot_id, %err, "bot session record not written");
     }
 }

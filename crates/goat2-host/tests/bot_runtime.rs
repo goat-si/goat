@@ -599,3 +599,105 @@ async fn a_bot_reads_and_changes_its_notes_through_mcp() {
     assert!(file.starts_with(notes::NOTES_HEADER));
     assert_eq!(file.lines().filter(|l| l.starts_with("- ")).count(), 2);
 }
+
+#[tokio::test]
+async fn fix_tests_acks_starts_a_briefed_worker_and_reports_the_result() {
+    let t = setup().await;
+    let (_, id) = bot(&t);
+    say(&t, &id, "w-1", "fix the tests in this repo").await;
+    eventually("running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    assert!(
+        send_to_user(
+            &t,
+            &me,
+            NotifyKind::Ack,
+            "Starting a worker to fix the tests."
+        )
+        .await
+        .is_ok()
+    );
+    let started = t
+        .host
+        .thread_start(
+            &me,
+            goat2_host::api::ThreadStartArgs {
+                task: "Fix the failing tests in /tmp/repo".into(),
+                ..Default::default()
+            },
+        )
+        .await;
+    let SurfaceResult::Ok { value } = started else {
+        panic!("{started:?}")
+    };
+    let worker = ThreadId::new(value["started"]["childThreadId"].as_str().unwrap());
+    t.fake
+        .finish_turn(&id, "Starting a worker to fix the tests.");
+    eventually("worker running", || running(&t, &worker)).await;
+    // The right panel lists the bot's workers: a child card of the bot thread.
+    let card = t.host.store().card(&worker).unwrap();
+    assert_eq!(card.parent.as_ref().unwrap().thread_id, id);
+    let brief = t.fake.turn_texts(&worker).remove(0);
+    assert!(
+        brief.starts_with("## Identity") || brief.starts_with("Fix the failing tests"),
+        "{brief}"
+    );
+    assert!(brief.contains(
+        "Fix the failing tests in /tmp/repo\n\n---\nThis work came in through GOAT from GOAT"
+    ));
+    assert!(brief.contains("goat_thread_report_result"));
+    // The worker reports; the bot wakes with the result and tells the person.
+    let wme = caller(&t, &worker).await;
+    let reported = t
+        .host
+        .report_result(
+            &wme,
+            goat2_host::api::ReportResultArgs {
+                outcome: goat2_host::api::ReportOutcome::Succeeded,
+                summary: "3 tests fixed, all green".into(),
+            },
+        )
+        .await;
+    assert!(reported.is_ok());
+    t.fake.finish_turn(&worker, "Fixed.");
+    eventually("bot woken", || {
+        t.fake
+            .turn_texts(&id)
+            .iter()
+            .any(|x| x.contains("3 tests fixed, all green"))
+    })
+    .await;
+    eventually("bot running", || running(&t, &id)).await;
+    let me = caller(&t, &id).await;
+    assert!(
+        send_to_user(
+            &t,
+            &me,
+            NotifyKind::Result,
+            "The tests are fixed: 3 were failing, all green now."
+        )
+        .await
+        .is_ok()
+    );
+    t.fake
+        .finish_turn(&id, "The tests are fixed: 3 were failing, all green now.");
+    eventually("idle", || !running(&t, &id)).await;
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    let sent: Vec<(NotifyKind, String)> = notified(&t, &id)
+        .into_iter()
+        .map(|n| (n.kind, n.text))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            (
+                NotifyKind::Ack,
+                "Starting a worker to fix the tests.".to_owned()
+            ),
+            (
+                NotifyKind::Result,
+                "The tests are fixed: 3 were failing, all green now.".to_owned()
+            ),
+        ]
+    );
+}

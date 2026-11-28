@@ -750,16 +750,10 @@ impl Actor {
             runtime_mode: card.engine.runtime_mode,
         };
         let mut inputs: Vec<EngineInput> = batch.iter().map(to_engine).collect();
-        let brief = match self.brief_due.take() {
-            Some(engine_ref) if card.kind == goat2_contracts::ThreadKind::Bot => {
-                crate::bot::apply_brief(&self.host, &self.id, &engine_ref, &mut inputs)
-                    .map(|b| (engine_ref, b))
-            }
-            other => {
-                self.brief_due = other;
-                None
-            }
-        };
+        let brief = self.brief_due.take().and_then(|engine_ref| {
+            crate::bot::apply_brief(&self.host, &card, &engine_ref, &mut inputs)
+                .map(|b| (engine_ref, b))
+        });
         let delivered = |outcome| {
             input_ids
                 .iter()
