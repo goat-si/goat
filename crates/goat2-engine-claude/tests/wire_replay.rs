@@ -1832,3 +1832,78 @@ async fn token_usage_follows_the_current_request() {
     handle.session.shutdown().await;
     run.assert_replayed(1);
 }
+
+/// Thinking streams live (v1 reasoningDeltas, ClaudeAdapterV2.ts:6793-6830): each thinking_delta
+/// is a ContentDelta with ReasoningText on the reasoning item's id, before the snapshot completes
+/// that item under the same id; answer text keeps TextDelta on its own id.
+#[tokio::test]
+async fn thinking_streams_as_reasoning_deltas_on_the_reasoning_item() {
+    let run = Run::new("wire/thinking_stream.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::ApprovalRequired, None).await;
+    let turn_id = turn(
+        &handle,
+        "Think, then answer.",
+        MODEL,
+        RuntimeMode::ApprovalRequired,
+    )
+    .await;
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let reasoning: Vec<(usize, String)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(at, event)| match event {
+            EngineEvent::ContentDelta {
+                turn_id: t,
+                item_id,
+                stream_kind,
+                text,
+            } => {
+                assert_eq!(t, &turn_id);
+                assert_eq!(item_id.as_str(), "msg_t:0");
+                assert_eq!(
+                    *stream_kind,
+                    goat2_contracts::ContentStreamKind::ReasoningText
+                );
+                Some((at, text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasoning
+            .iter()
+            .map(|(_, t)| t.as_str())
+            .collect::<Vec<_>>(),
+        vec!["The user wants ", "a short answer."]
+    );
+    let completed = events
+        .iter()
+        .position(|event| {
+            matches!(event, EngineEvent::ItemCompleted { item, .. }
+                if item.id.as_str() == "msg_t:0"
+                    && matches!(&item.body, TurnItemBody::Reasoning { text, .. }
+                        if text == "The user wants a short answer."))
+        })
+        .expect("the reasoning item completes under the streamed id");
+    assert!(reasoning.iter().all(|(at, _)| *at < completed));
+    let text_deltas: Vec<(String, String)> = events
+        .iter()
+        .filter_map(|event| match event {
+            EngineEvent::TextDelta { item_id, text, .. } => {
+                Some((item_id.as_str().to_string(), text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text_deltas,
+        vec![("msg_t:1".to_string(), "Done.".to_string())]
+    );
+    assert_eq!(
+        answers(&events, AssistantMessagePhase::FinalAnswer),
+        vec!["Done."]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
