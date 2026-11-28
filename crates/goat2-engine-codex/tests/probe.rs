@@ -339,6 +339,83 @@ async fn a_malformed_cursor_fails_instead_of_ending_the_catalog() {
     assert!(message.contains("unreadable nextCursor"), "{message}");
 }
 
+/// Review r3: an entry is checked against the whole pinned `Model` definition (v1 decodes the
+/// response with Codex's schema), so a malformed nested field fails the catalog instead of
+/// quietly dropping an option.
+#[tokio::test]
+async fn a_malformed_nested_model_field_fails_the_catalog() {
+    let without = |key: &str| {
+        let mut m = model("gpt-6.1-terra", true, json!({}));
+        m.as_object_mut().unwrap().remove(key);
+        m
+    };
+    let with = |extra: Value| model("gpt-6.1-terra", true, extra);
+    let cases = [
+        ("no displayName", without("displayName")),
+        ("no description", without("description")),
+        ("no hidden", without("hidden")),
+        (
+            "no supportedReasoningEfforts",
+            without("supportedReasoningEfforts"),
+        ),
+        ("numeric displayName", with(json!({"displayName": 5}))),
+        (
+            "empty default effort",
+            with(json!({"defaultReasoningEffort": ""})),
+        ),
+        (
+            "effort without description",
+            with(json!({"supportedReasoningEfforts": [{"reasoningEffort": "low"}]})),
+        ),
+        (
+            "empty effort",
+            with(
+                json!({"supportedReasoningEfforts": [{"reasoningEffort": "", "description": ""}]}),
+            ),
+        ),
+        (
+            "tier without name",
+            with(json!({"serviceTiers": [{"id": "priority", "description": ""}]})),
+        ),
+        ("null serviceTiers", with(json!({"serviceTiers": null}))),
+        (
+            "unknown cyber program",
+            with(json!({"availableAccessPrograms": {"cyber": ["standard", "daybreakGreen"]}})),
+        ),
+        (
+            "unknown modality",
+            with(json!({"inputModalities": ["text", "video"]})),
+        ),
+        (
+            "numeric defaultServiceTier",
+            with(json!({"defaultServiceTier": 1})),
+        ),
+        (
+            "upgradeInfo without model",
+            with(json!({"upgradeInfo": {}})),
+        ),
+    ];
+    for (name, bad) in cases {
+        let page = json!({"data": [model("gpt-6.1-ember", false, json!({})), bad]});
+        let p = factory(api_key_catalog(page)).probe().await.unwrap();
+        assert_eq!(p.status, ServerProviderState::Error, "{name}");
+        assert!(p.models.is_empty(), "{name}: {:?}", p.models);
+        let message = p.message.unwrap();
+        assert!(message.contains("unreadable model"), "{name}: {message}");
+    }
+    // Unknown fields and the nullable or defaulted ones stay accepted.
+    let fine = with(
+        json!({"someFutureField": {"x": 1}, "upgrade": null, "availableAccessPrograms": null,
+        "serviceTiers": [{"id": "priority", "name": "Fast", "description": ""}], "inputModalities": ["text", "image", "audio"]}),
+    );
+    let p = factory(api_key_catalog(json!({"data": [fine]})))
+        .probe()
+        .await
+        .unwrap();
+    assert_eq!(p.status, ServerProviderState::Ready, "{:?}", p.message);
+    assert_eq!(p.models.len(), 1);
+}
+
 #[cfg(unix)]
 fn script(name: &str, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;

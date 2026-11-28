@@ -288,6 +288,119 @@ async fn deadline_models(
 }
 
 /// v1 `requestAllCodexModels`: every page of model/list.
+/// The pinned codex 0.167.0 `Model` definition (schema/codex-0.167.0/v2/ModelListResponse.json): v1
+/// decodes every client response with Codex's schema (packages/effect-codex-app-server/src/
+/// client.ts:276-288), so one entry that does not match (a missing or mistyped field, an unknown
+/// enum value, an empty reasoning effort) fails the whole catalog instead of thinning it. Unknown
+/// fields are tolerated, as there.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct ModelShape {
+    id: String,
+    model: String,
+    display_name: String,
+    description: String,
+    hidden: bool,
+    is_default: bool,
+    default_reasoning_effort: ReasoningEffort,
+    supported_reasoning_efforts: Vec<ReasoningEffortOptionShape>,
+    #[serde(default)]
+    additional_speed_tiers: Vec<String>,
+    availability_nux: Option<AvailabilityNuxShape>,
+    available_access_programs: Option<AccessProgramsShape>,
+    default_service_tier: Option<String>,
+    #[serde(default)]
+    input_modalities: Vec<InputModalityShape>,
+    model_specialty: Option<String>,
+    multi_agent_version: Option<MultiAgentVersionShape>,
+    #[serde(default)]
+    service_tiers: Vec<ServiceTierShape>,
+    #[serde(default)]
+    supports_personality: bool,
+    upgrade: Option<String>,
+    upgrade_info: Option<UpgradeInfoShape>,
+}
+
+/// `ReasoningEffort`: a non-empty string.
+#[derive(Deserialize)]
+#[serde(try_from = "String")]
+struct ReasoningEffort;
+
+impl TryFrom<String> for ReasoningEffort {
+    type Error = &'static str;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Err("an empty reasoning effort")
+        } else {
+            Ok(ReasoningEffort)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct ReasoningEffortOptionShape {
+    description: String,
+    reasoning_effort: ReasoningEffort,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AvailabilityNuxShape {
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AccessProgramsShape {
+    cyber: Vec<CyberAccessProgramShape>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum CyberAccessProgramShape {
+    Standard,
+    DaybreakBlue,
+    DaybreakRed,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum InputModalityShape {
+    Text,
+    Image,
+    Audio,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum MultiAgentVersionShape {
+    Disabled,
+    V1,
+    V2,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct ServiceTierShape {
+    description: String,
+    id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+struct UpgradeInfoShape {
+    migration_markdown: Option<String>,
+    model: String,
+    model_link: Option<String>,
+    retirement_at: Option<i64>,
+    upgrade_copy: Option<String>,
+}
+
 async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, String> {
     let mut models = Vec::new();
     let mut cursor: Option<String> = None;
@@ -304,9 +417,10 @@ async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, Strin
             .get("data")
             .and_then(Value::as_array)
             .ok_or_else(|| "model/list answered without data".to_string())?;
-        // Every entry must be readable: a partial catalog is not a catalog (v1 decodes the whole
-        // response with its schema and fails otherwise).
+        // Every entry must match the pinned schema: a partial catalog is not a catalog.
         for entry in data {
+            serde_json::from_value::<ModelShape>(entry.clone())
+                .map_err(|e| format!("model/list answered an unreadable model: {e}"))?;
             models.push(
                 model_from_codex(entry)
                     .ok_or_else(|| "model/list answered an unreadable model".to_string())?,
@@ -495,181 +609,25 @@ fn codex_home_setting(options: &CodexEngineOptions) -> Option<String> {
         .map(|(_, v)| v.to_string_lossy().into_owned())
 }
 
-/// The parts of a WHATWG URL v1's endpoint logic reads (no URL crate: dependencies are fixed).
-#[derive(Debug, PartialEq)]
-struct Url {
-    scheme: String,
-    /// Lowercase; IPv6 keeps its brackets.
-    host: String,
-    /// None when absent or the scheme's default.
-    port: Option<u16>,
-    path: String,
-    has_credentials: bool,
-    has_query: bool,
-    has_fragment: bool,
+/// WHATWG URL parsing (the `url` crate, as v1's `new URL`: percent-decoding, IPv4 forms, IPv6,
+/// UTS46/IDNA). `None` where `new URL` throws.
+fn parse_url(text: &str) -> Option<url::Url> {
+    url::Url::parse(text).ok()
 }
 
-impl Url {
-    fn parse(text: &str) -> Option<Url> {
-        let text = text.trim();
-        let (scheme, rest) = text.split_once("://")?;
-        let mut chars = scheme.chars();
-        if !chars.next()?.is_ascii_alphabetic()
-            || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-        {
-            return None;
-        }
-        let scheme = scheme.to_ascii_lowercase();
-        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let (authority, tail) = rest.split_at(end);
-        let (has_credentials, host_port) = match authority.rsplit_once('@') {
-            Some((_, hp)) => (true, hp),
-            None => (false, authority),
-        };
-        let (host, port) = if let Some(v6) = host_port.strip_prefix('[') {
-            let (inside, after) = v6.split_once(']')?;
-            // WHATWG serializes a valid IPv6 address compressed and lowercase; anything else fails.
-            let addr: std::net::Ipv6Addr = inside.parse().ok()?;
-            if !after.is_empty() && !after.starts_with(':') {
-                return None;
-            }
-            (format!("[{addr}]"), after.strip_prefix(':'))
-        } else {
-            let (raw, port) = match host_port.rsplit_once(':') {
-                Some((h, p)) => (h, Some(p)),
-                None => (host_port, None),
-            };
-            (domain_or_ipv4(raw)?, port)
-        };
-        let port = match port {
-            None | Some("") => None,
-            Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => Some(p.parse::<u16>().ok()?),
-            Some(_) => return None,
-        };
-        let default = match scheme.as_str() {
-            "http" | "ws" => Some(80),
-            "https" | "wss" => Some(443),
-            _ => None,
-        };
-        let port = port.filter(|p| Some(*p) != default);
-        let path_end = tail.find(['?', '#']).unwrap_or(tail.len());
-        let path = if tail[..path_end].is_empty() {
-            "/".to_string()
-        } else {
-            tail[..path_end].to_string()
-        };
-        Some(Url {
-            scheme,
-            host,
-            port,
-            path,
-            has_credentials,
-            has_query: tail[path_end..].starts_with('?'),
-            has_fragment: tail.contains('#'),
-        })
-    }
-
-    fn hostname(&self) -> &str {
-        &self.host
-    }
-
-    fn origin(&self) -> String {
-        match self.port {
-            Some(port) => format!("{}://{}:{port}", self.scheme, self.host),
-            None => format!("{}://{}", self.scheme, self.host),
-        }
-    }
-
-    fn is_http(&self) -> bool {
-        self.scheme == "http" || self.scheme == "https"
-    }
+/// v1 `url.hostname` (IPv6 keeps its brackets; IDNA hosts are punycode).
+fn hostname(url: &url::Url) -> &str {
+    url.host_str().unwrap_or("")
 }
 
-/// WHATWG host parsing for an ASCII host: percent-decode, lowercase, refuse forbidden code
-/// points, and normalize IPv4 (decimal, hex 0x.., octal 0.., fewer than four parts). A non-ASCII
-/// host would need IDNA, which this parser does not do: it is refused, so the route counts as
-/// unverified (never as "away from OpenAI").
-fn domain_or_ipv4(raw: &str) -> Option<String> {
-    let bytes = raw.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' {
-            let hex = raw.get(i + 1..i + 3)?;
-            decoded.push(u8::from_str_radix(hex, 16).ok()?);
-            i += 3;
-        } else {
-            decoded.push(bytes[i]);
-            i += 1;
-        }
-    }
-    let host = String::from_utf8(decoded).ok()?.to_ascii_lowercase();
-    if host.is_empty()
-        || !host.is_ascii()
-        || host.bytes().any(|b| {
-            b <= b' '
-                || b == 0x7f
-                || matches!(
-                    b,
-                    b'#' | b'%'
-                        | b'/'
-                        | b':'
-                        | b'<'
-                        | b'>'
-                        | b'?'
-                        | b'@'
-                        | b'['
-                        | b'\\'
-                        | b']'
-                        | b'^'
-                        | b'|'
-                )
-        })
-    {
-        return None;
-    }
-    // "Ends in a number": the last label (ignoring one trailing dot) is numeric -> must be IPv4.
-    let mut parts: Vec<&str> = host.split('.').collect();
-    if parts.last() == Some(&"") && parts.len() > 1 {
-        parts.pop();
-    }
-    let last = *parts.last()?;
-    let numeric = |p: &str| {
-        !p.is_empty()
-            && (p.bytes().all(|b| b.is_ascii_digit())
-                || (p.starts_with("0x") || p.starts_with("0X"))
-                    && p[2..].bytes().all(|b| b.is_ascii_hexdigit()))
-    };
-    if !numeric(last) {
-        return Some(host);
-    }
-    if parts.len() > 4 {
-        return None;
-    }
-    let mut values = Vec::with_capacity(parts.len());
-    for p in &parts {
-        let value = if let Some(h) = p.strip_prefix("0x").or_else(|| p.strip_prefix("0X")) {
-            if h.is_empty() {
-                0
-            } else {
-                u64::from_str_radix(h, 16).ok()?
-            }
-        } else if p.len() > 1 && p.starts_with('0') {
-            u64::from_str_radix(&p[1..], 8).ok()?
-        } else {
-            p.parse::<u64>().ok()?
-        };
-        values.push(value);
-    }
-    let (last_value, head) = values.split_last()?;
-    if head.iter().any(|v| *v > 255) || *last_value >= 256u64.pow(5 - values.len() as u32) {
-        return None;
-    }
-    let mut address = *last_value;
-    for (n, v) in head.iter().enumerate() {
-        address += v * 256u64.pow(3 - n as u32);
-    }
-    Some(std::net::Ipv4Addr::from(address as u32).to_string())
+/// v1 `url.origin`.
+fn origin(url: &url::Url) -> String {
+    url.origin().ascii_serialization()
+}
+
+/// v1 `/^https?:$/.test(url.protocol)`.
+fn is_http(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
 }
 
 /// v1 `readEffectiveBaseUrl` (OpenCodexRoute.ts:151-178): configuration wins only where the
@@ -699,23 +657,24 @@ fn read_effective_base_url(config: &Value, env_openai_base_url: Option<&str>) ->
     } else {
         non_null(selected.and_then(|s| s.get("base_url")))?
     };
-    let url = Url::parse(base.as_str()?)?;
-    if url.has_credentials || url.has_query || url.has_fragment {
+    let url = parse_url(base.as_str()?)?;
+    // `url.username || url.password || url.search || url.hash`: an empty "?" or "#" is "" in JS.
+    if !url.username().is_empty()
+        || url.password().is_some_and(|p| !p.is_empty())
+        || url.query().is_some_and(|q| !q.is_empty())
+        || url.fragment().is_some_and(|f| !f.is_empty())
+    {
         return None;
     }
-    Some(
-        format!("{}{}", url.origin(), url.path)
-            .trim_end_matches('/')
-            .to_string(),
-    )
+    Some(url.as_str().trim_end_matches('/').to_string())
 }
 
 /// v1 `routesAwayFromOpenAi`.
 fn routes_away_from_openai(effective_base_url: Option<&str>) -> bool {
-    let Some(url) = effective_base_url.and_then(Url::parse) else {
+    let Some(url) = effective_base_url.and_then(parse_url) else {
         return false;
     };
-    let host = url.hostname().trim_end_matches('.');
+    let host = hostname(&url).trim_end_matches('.');
     !host.is_empty()
         && !["openai.com", "chatgpt.com"]
             .iter()
@@ -750,9 +709,8 @@ fn routes_to_native_openai(config: &Value) -> bool {
     match route_base_url(config) {
         None => false,
         Some(None) => true,
-        Some(Some(base)) => Url::parse(&base).is_some_and(|u| {
-            u.scheme == "https"
-                && (u.hostname() == "api.openai.com" || u.hostname() == "chatgpt.com")
+        Some(Some(base)) => parse_url(&base).is_some_and(|u| {
+            u.scheme() == "https" && matches!(hostname(&u), "api.openai.com" | "chatgpt.com")
         }),
     }
 }
@@ -760,8 +718,8 @@ fn routes_to_native_openai(config: &Value) -> bool {
 /// v1 `codexCustomEndpoint`: the origin of a custom endpoint Codex sends model requests to.
 fn custom_endpoint(config: &Value) -> Option<String> {
     let base = route_base_url(config)??;
-    let url = Url::parse(&base)?;
-    (url.is_http() && !routes_to_native_openai(config)).then(|| url.origin())
+    let url = parse_url(&base)?;
+    (is_http(&url) && !routes_to_native_openai(config)).then(|| origin(&url))
 }
 
 /// v1 `codexEndpoint`: the configured endpoint, else the effective route's when it leaves OpenAI.
@@ -770,9 +728,9 @@ fn codex_endpoint(config: Option<&Value>, effective_base_url: Option<&str>) -> O
     if custom.is_some() || !routes_away_from_openai(effective_base_url) {
         return custom;
     }
-    Url::parse(effective_base_url?)
-        .filter(Url::is_http)
-        .map(|u| u.origin())
+    parse_url(effective_base_url?)
+        .filter(is_http)
+        .map(|u| origin(&u))
 }
 
 const REASONING_LABELS: [(&str, &str); 8] = [
@@ -1577,61 +1535,104 @@ mod tests {
     }
     #[test]
     fn urls_follow_whatwg_origins() {
-        let u = Url::parse("HTTPS://API.Example.com:443/v1/").unwrap();
-        assert_eq!(u.origin(), "https://api.example.com");
+        // Every expected value below was checked against Node's `new URL` (v1's parser).
+        let o = |text: &str| parse_url(text).map(|u| origin(&u));
         assert_eq!(
-            Url::parse("http://127.0.0.1:80").unwrap().origin(),
-            "http://127.0.0.1"
+            o("HTTPS://API.Example.com:443/v1/").as_deref(),
+            Some("https://api.example.com")
         );
         assert_eq!(
-            Url::parse("http://[::1]:8080/x").unwrap().origin(),
-            "http://[::1]:8080"
+            o("http://127.0.0.1:80").as_deref(),
+            Some("http://127.0.0.1")
         );
-        assert_eq!(Url::parse("http://host:99999"), None);
-        assert_eq!(Url::parse("http://:80"), None);
-        assert_eq!(Url::parse("not a url"), None);
-        assert_eq!(Url::parse("http://[::1]x"), None);
-        assert!(Url::parse("https://u:p@h/").unwrap().has_credentials);
-        // Hosts are percent-decoded and lowercased as Node's URL does, so an encoded OpenAI host
-        // is still OpenAI.
         assert_eq!(
-            Url::parse("https://%61pi.openai.com/v1").unwrap().origin(),
-            "https://api.openai.com"
+            o("http://[::1]:8080/x").as_deref(),
+            Some("http://[::1]:8080")
+        );
+        for invalid in [
+            "http://host:99999",
+            "http://:80",
+            "not a url",
+            "http://[::1]x",
+            "http://[::::]/",
+            "http://[1:2:3]/",
+            "http://1.2.3.256/",
+            "http://1.2.3.4.5/",
+            "http://a%2fb/",
+            "http://a%zz/",
+        ] {
+            assert_eq!(o(invalid), None, "{invalid}");
+        }
+        assert_eq!(parse_url("https://u:p@h/").unwrap().username(), "u");
+        // Percent-encoded and dotted OpenAI hosts are still OpenAI.
+        assert_eq!(
+            o("https://%61pi.openai.com/v1").as_deref(),
+            Some("https://api.openai.com")
         );
         assert!(!routes_away_from_openai(Some(
             "https://%61pi.openai.com/v1"
         )));
         assert!(!routes_away_from_openai(Some("https://API.OPENAI.COM./v1")));
-        // IPv6 must be a real address and is serialized compressed.
-        assert_eq!(Url::parse("http://[::::]/"), None);
-        assert_eq!(Url::parse("http://[1:2:3]/"), None);
         assert_eq!(
-            Url::parse("http://[0:0:0:0:0:0:0:1]:443/")
-                .unwrap()
-                .origin(),
-            "http://[::1]:443"
+            o("http://[0:0:0:0:0:0:0:1]:443/").as_deref(),
+            Some("http://[::1]:443")
         );
-        // IPv4 forms are normalized (hex, octal, short) or refused when out of range.
+        assert_eq!(hostname(&parse_url("http://[::1]/").unwrap()), "[::1]");
+        // IPv4 number forms.
+        assert_eq!(o("http://0x7f.1/").as_deref(), Some("http://127.0.0.1"));
         assert_eq!(
-            Url::parse("http://0x7f.1/").unwrap().origin(),
-            "http://127.0.0.1"
+            o("http://017700000001/").as_deref(),
+            Some("http://127.0.0.1")
         );
         assert_eq!(
-            Url::parse("http://017700000001/").unwrap().origin(),
-            "http://127.0.0.1"
+            o("http://2130706433:8080/").as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+        // UTS46/IDNA: an internationalized host is punycode and away from OpenAI; fullwidth and
+        // other mapped spellings of an OpenAI host are OpenAI.
+        assert_eq!(
+            o("https://bücher.example/v1").as_deref(),
+            Some("https://xn--bcher-kva.example")
+        );
+        assert!(routes_away_from_openai(Some("https://bücher.example/v1")));
+        assert_eq!(
+            o("https://ａpi.openai.com/v1").as_deref(),
+            Some("https://api.openai.com")
+        );
+        assert!(!routes_away_from_openai(Some("https://ａpi.openai.com/v1")));
+        assert!(!routes_away_from_openai(Some(
+            "https://ＡＰＩ．ＯＰＥＮＡＩ．ＣＯＭ/v1"
+        )));
+        assert!(!routes_away_from_openai(Some("https://chatgpt。com/x")));
+        assert_eq!(
+            o("https://xn--bcher-kva.example/").as_deref(),
+            Some("https://xn--bcher-kva.example")
         );
         assert_eq!(
-            Url::parse("http://2130706433:8080/").unwrap().origin(),
-            "http://127.0.0.1:8080"
+            codex_endpoint(None, Some("https://bücher.example/v1")).as_deref(),
+            Some("https://xn--bcher-kva.example")
         );
-        assert_eq!(Url::parse("http://1.2.3.256/"), None);
-        assert_eq!(Url::parse("http://1.2.3.4.5/"), None);
-        // Forbidden code points and invalid escapes fail; a non-ASCII host is refused (no IDNA),
-        // which leaves the route unverified, never "away from OpenAI".
-        assert_eq!(Url::parse("http://a%2fb/"), None);
-        assert_eq!(Url::parse("http://a%zz/"), None);
-        assert_eq!(Url::parse("http://bücher.example/"), None);
-        assert!(!routes_away_from_openai(Some("http://bücher.example/v1")));
+        // Effective base URL is `url.toString()` without trailing slashes, as v1.
+        assert_eq!(
+            read_effective_base_url(
+                &json!({"openai_base_url": "https://bücher.example/v1/"}),
+                None
+            )
+            .as_deref(),
+            Some("https://xn--bcher-kva.example/v1")
+        );
+        assert_eq!(
+            read_effective_base_url(&json!({"openai_base_url": "https://h/v1?"}), None).as_deref(),
+            Some("https://h/v1?")
+        );
+        assert_eq!(
+            read_effective_base_url(&json!({"openai_base_url": "https://u@h/v1"}), None),
+            None
+        );
+        assert_eq!(
+            read_effective_base_url(&json!({"openai_base_url": "https://h/v1#x"}), None),
+            None
+        );
     }
 
     #[test]
