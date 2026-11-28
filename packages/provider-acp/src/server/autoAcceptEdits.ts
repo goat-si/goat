@@ -71,8 +71,8 @@ export interface AcpUnreadToolCalls {
   /** Records the tool calls a dropped notification may have described. */
   readonly add: (
     unread: { readonly sessionId?: string; readonly toolCallId?: string },
-    /** The tool calls tracked for that session, used when the notification names none. */
-    trackedToolCallIds: Iterable<string>,
+    /** The tool calls tracked for that session, retained for callers that pass them. */
+    trackedToolCallIds?: Iterable<string>,
   ) => void;
   readonly has: (sessionId: string, toolCallId: string) => boolean;
 }
@@ -81,20 +81,35 @@ export function makeAcpUnreadToolCalls(): AcpUnreadToolCalls {
   // A notification whose session cannot be read is recorded for every session.
   const ANY_SESSION = Symbol("any session");
   const bySession = new Map<string | typeof ANY_SESSION, Set<string>>();
+  // A notification whose toolCallId cannot be read may have been the first update for an unseen
+  // tool call, so taint every tool call in that session (or every session if sessionId is missing).
+  const allInSession = new Set<string>();
+  let anySessionAllTools = false;
   let size = 0;
   return {
-    add: (unread, trackedToolCallIds) => {
+    add: (unread) => {
+      if (unread.toolCallId === undefined) {
+        if (unread.sessionId === undefined) {
+          anySessionAllTools = true;
+          return;
+        }
+        if (!allInSession.has(unread.sessionId)) {
+          if (size < MAX_UNREAD_TOOL_CALLS) allInSession.add(unread.sessionId);
+          size += 1;
+        }
+        return;
+      }
       const session = unread.sessionId ?? ANY_SESSION;
       const ids = bySession.get(session) ?? new Set<string>();
       bySession.set(session, ids);
-      for (const id of unread.toolCallId === undefined ? trackedToolCallIds : [unread.toolCallId]) {
-        if (ids.has(id)) continue;
-        if (size < MAX_UNREAD_TOOL_CALLS) ids.add(id);
-        size += 1;
-      }
+      if (ids.has(unread.toolCallId)) return;
+      if (size < MAX_UNREAD_TOOL_CALLS) ids.add(unread.toolCallId);
+      size += 1;
     },
     has: (sessionId, toolCallId) =>
+      anySessionAllTools ||
       size > MAX_UNREAD_TOOL_CALLS ||
+      allInSession.has(sessionId) ||
       bySession.get(sessionId)?.has(toolCallId) === true ||
       bySession.get(ANY_SESSION)?.has(toolCallId) === true,
   };

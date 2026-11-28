@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- reads native Antigravity swarm state read-only beside AntigravityChildWork.
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 
 import * as Option from "effect/Option";
@@ -100,14 +101,53 @@ export async function readDiskSwarmMembersByConversationId(
   maxStepBytes: number,
   nativeIdPattern: RegExp,
 ): Promise<ReadonlyMap<string, DiskSwarmMember>> {
-  const file = await antigravityManagedPath(
-    profileRoot,
-    ["antigravity-acp", "brain", rootSessionId, ".system_generated", "swarm", "members.json"],
-    "file",
-  );
+  const segments = [
+    "antigravity-acp",
+    "brain",
+    rootSessionId,
+    ".system_generated",
+    "swarm",
+    "members.json",
+  ] as const;
+  const file = await antigravityManagedPath(profileRoot, segments, "file");
   if (file === undefined || file.info.size > maxStepBytes) return new Map();
-  const raw = await NodeFSP.readFile(file.path, "utf8").catch(() => undefined);
-  if (raw === undefined) return new Map();
+  let handle: NodeFSP.FileHandle;
+  try {
+    handle = await NodeFSP.open(
+      file.path,
+      NodeFS.constants.O_RDONLY | (NodeFS.constants.O_NOFOLLOW ?? 0),
+    );
+  } catch {
+    return new Map();
+  }
+  let raw: string | undefined;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > maxStepBytes) return new Map();
+    // Re-verify the canonical managed path matches the opened fd inode so a component swap
+    // between initial validation and open cannot direct reads outside the profile.
+    const verified = await antigravityManagedPath(profileRoot, segments, "file");
+    if (
+      verified === undefined ||
+      verified.info.dev !== stat.dev ||
+      verified.info.ino !== stat.ino
+    ) {
+      return new Map();
+    }
+    const buffer = Buffer.alloc(maxStepBytes + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, null);
+      if (bytesRead === 0) break;
+      offset += bytesRead;
+    }
+    if (offset > maxStepBytes) return new Map();
+    raw = buffer.toString("utf8", 0, offset);
+  } catch {
+    return new Map();
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
   const decoded = Option.getOrUndefined(decodeSwarmRoster(raw));
   const members = decoded?.members;
   if (members === undefined) return new Map();

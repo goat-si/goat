@@ -10,7 +10,8 @@ import {
   parseSessionUpdateEvent,
   type AcpToolCallState,
 } from "./runtimeModel.ts";
-import { acpChangedPathsOfToolCall } from "./clientPolicy.ts";
+import { acpChangedPathsOfToolCall, acpPermissionDisposition } from "./clientPolicy.ts";
+import { autoAcceptPolicyRequest } from "./autoAcceptEdits.ts";
 
 describe("ACP tracked file changes", () => {
   const trackedToolCall = (
@@ -103,16 +104,67 @@ describe("ACP tracked file changes", () => {
     // Tool ids are only unique within a session.
     expect(unread.has("session-2", "tool-1")).toBe(false);
 
-    // Without a tool call id, every tool call tracked for the session is recorded.
+    // Without a tool call id, every tool call in the session (including unseen ones whose first
+    // update was dropped) is tainted, while other sessions stay unaffected.
     unread.add({ sessionId: "session-1" }, ["tool-2", "tool-3"]);
     expect(unread.has("session-1", "tool-2")).toBe(true);
     expect(unread.has("session-1", "tool-3")).toBe(true);
-    expect(unread.has("session-1", "tool-4")).toBe(false);
+    expect(unread.has("session-1", "tool-4")).toBe(true);
+    expect(unread.has("session-2", "tool-4")).toBe(false);
 
-    // Without a session, the tool call is recorded for every session.
+    // Without a session, the named tool call is recorded for every session.
     unread.add({ toolCallId: "tool-5" }, []);
     expect(unread.has("session-1", "tool-5")).toBe(true);
     expect(unread.has("session-2", "tool-5")).toBe(true);
+    expect(unread.has("session-2", "tool-6")).toBe(false);
+
+    // Without either session or tool call id, every tool call in every session is tainted.
+    unread.add({}, []);
+    expect(unread.has("session-2", "tool-6")).toBe(true);
+    expect(unread.has("session-3", "never-seen")).toBe(true);
+  });
+
+  it("asks instead of auto-approving after an undecodable first update with unreadable toolCallId or sessionId", () => {
+    const policy = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      cwd: "/work",
+      autoAcceptEdits: true,
+    };
+    const safeRequest: EffectAcpSchema.RequestPermissionRequest = {
+      sessionId: "session-1",
+      options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+      toolCall: {
+        toolCallId: "tool-first",
+        kind: "edit",
+        locations: [{ path: "/work/safe.txt" }],
+      },
+    };
+
+    const sessionDropped = makeAcpUnreadToolCalls();
+    const droppedFirst = unreadToolCallUpdate("session/update", {
+      sessionId: "session-1",
+      update: { sessionUpdate: "tool_call", toolCallId: 7 },
+    });
+    expect(droppedFirst).toEqual({ sessionId: "session-1" });
+    sessionDropped.add(droppedFirst!, []);
+    expect(
+      acpPermissionDisposition(
+        policy,
+        autoAcceptPolicyRequest(safeRequest, undefined, sessionDropped),
+      ),
+    ).toBe("ask");
+
+    const globalDropped = makeAcpUnreadToolCalls();
+    const droppedUnknownSession = unreadToolCallUpdate("session/update", null);
+    expect(droppedUnknownSession).toEqual({});
+    globalDropped.add(droppedUnknownSession!, []);
+    expect(
+      acpPermissionDisposition(
+        policy,
+        autoAcceptPolicyRequest(safeRequest, undefined, globalDropped),
+      ),
+    ).toBe("ask");
   });
 
   it("counts every tool call as unread once too many are recorded", () => {
