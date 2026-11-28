@@ -271,6 +271,11 @@ export interface AcpAdapterV2Flavor {
     cwd: string,
   ) => Effect.Effect<void>;
   readonly subagentsIdleOnTurnCompletion?: boolean;
+  /**
+   * Subagents the agent goes on running after its prompt, with no update when one ends. Asked
+   * when the prompt ends and whenever a reply ends, including mid-prompt and in a steered prompt
+   * that stays open; the native task ids it returns hold the turn open and the rest become idle.
+   */
   readonly subagentsOutlivingPrompt?: (input: {
     readonly sessionId: string;
     readonly nativeTaskIds: ReadonlyArray<string>;

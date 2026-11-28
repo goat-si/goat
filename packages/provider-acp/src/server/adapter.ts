@@ -3708,8 +3708,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               if (update.sessionUpdate === "usage_update") {
                 context.backgroundReportMessage = undefined;
                 context.replyOpen = false;
-                if (context.promptSettled)
-                  yield* idleReportedSubagents(context, flavor, emitSubagent);
+                yield* idleReportedSubagents(context, flavor, emitSubagent);
                 yield* rearmDeferredFinalize(context);
               } else if (acpRootSessionUpdateIngestsOutput(notification)) {
                 context.replyOpen = true;

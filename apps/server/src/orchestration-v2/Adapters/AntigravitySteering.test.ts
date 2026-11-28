@@ -25,6 +25,7 @@ import type { AcpAdapterV2RuntimeInput as AntigravityAdapterV2RuntimeInput } fro
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
@@ -42,6 +43,8 @@ import {
   makeAntigravityAcpAdapterFlavor,
   type AntigravityAdapterV2Options,
 } from "./AntigravityAdapterV2.ts";
+const encodeUnknownJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
 const layerSession = Layer.mergeAll(
   NodeServices.layer,
   IdAllocator.layer,
@@ -512,6 +515,83 @@ describe("Antigravity steering", () => {
         "failed",
         "a silent steer prompt must still hit the inactivity timeout",
       );
+    }).pipe(Effect.provide(layerSession)),
+  );
+
+  // agy answers a steered prompt only when the next one arrives, so a steered turn can stay open
+  // for hours; a child that reported meanwhile must not keep showing as running.
+  it.effect("idles a detached subagent that reports while a steered prompt is still open", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const profile = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-antigravity-kids-",
+      });
+      const records = (conversationId: string, kind: string) =>
+        path.join(profile, "antigravity-acp", "brain", conversationId, ".system_generated", kind);
+      const write = (directory: string, name: string, value: unknown) =>
+        fileSystem
+          .makeDirectory(directory, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fileSystem.writeFileString(path.join(directory, name), encodeUnknownJson(value)),
+            ),
+          );
+      yield* write(records("mock-session-1", "subagents"), "child-1.json", {});
+      yield* write(records("child-1", "messages"), "launch.json", {
+        sender: "mock-session-1",
+        sourceMetadata: { tool: { toolCall: { id: "call_research", name: "invoke_subagent" } } },
+      });
+      const opened = yield* openSessionWithRunningCommand({}, profile, {
+        holdsFirstPrompt: false,
+      });
+      const { session, providerThread, usage, send, startTurn, until, throughPromptSettled } =
+        opened;
+      yield* startTurn(1, false);
+      const prompt = yield* throughPromptSettled;
+      const providerTurnId = prompt.flatMap((event) =>
+        event.type === "provider_turn.updated" ? [event.providerTurn.id] : [],
+      )[0];
+      assert.isDefined(providerTurnId);
+      const launched = prompt.findLast((event) => event.type === "subagent.updated");
+      assert.equal(launched?.type === "subagent.updated" && launched.subagent.status, "running");
+      yield* TestClock.adjust("10 minutes");
+
+      yield* session.steerTurn({
+        threadId: ThreadId.make("thread-antigravity-wake"),
+        runId: RunId.make("run-antigravity-wake-1"),
+        providerThread,
+        providerTurnId,
+        message: {
+          messageId: MessageId.make("message-antigravity-steer"),
+          text: "Also check the footnotes",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+        },
+      });
+      assert.lengthOf(opened.prompts, 2);
+      yield* write(records("mock-session-1", "messages"), "report.json", { sender: "child-1" });
+      yield* write(records("mock-session-1", "subagents"), "child-1.json", {
+        state: "SUBAGENT_STATE_KILLED",
+      });
+      yield* send(usage);
+      // Events stay ordered, so an idle the usage update caused arrives before this reply.
+      yield* send({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Checking the footnotes now." },
+      });
+      const midTurn = yield* until((event) =>
+        encodeUnknownJson(event).includes("Checking the footnotes now."),
+      );
+      assert.include(
+        midTurn.flatMap((event) =>
+          event.type === "subagent.updated" ? [event.subagent.status] : [],
+        ),
+        "idle",
+        "a reported, killed subagent must leave running before the steered prompt settles",
+      );
+      yield* opened.releaseSteer;
     }).pipe(Effect.provide(layerSession)),
   );
 });
