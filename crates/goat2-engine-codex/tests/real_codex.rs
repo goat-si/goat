@@ -394,6 +394,11 @@ async fn real_codex_sign_in_starts_and_cancels() {
         );
         let cancelled = factory.auth_cancel(&target, &flow).await.expect("cancel");
         assert_eq!(cancelled.phase, ProviderAuthPhase::Cancelled);
+        let last = tokio::time::timeout(Duration::from_secs(40), updates.recv())
+            .await
+            .expect("the stream ends with the terminal phase")
+            .expect("a cancelled state on the stream");
+        assert_eq!(last.phase, ProviderAuthPhase::Cancelled);
         assert!(
             tokio::time::timeout(Duration::from_secs(40), updates.recv())
                 .await

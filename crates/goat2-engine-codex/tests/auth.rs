@@ -185,7 +185,11 @@ async fn cancel_ends_the_flow_and_its_codex_login() {
     let cancelled = f.auth_cancel(&target, &flow).await.unwrap();
     assert_eq!(cancelled.phase, ProviderAuthPhase::Cancelled);
     assert_eq!(cancelled.message.as_deref(), Some("Sign-in cancelled."));
-    // No further phase after the answer; the sender goes once Codex's login is cancelled.
+    // The stream ends with the same terminal phase, then closes (engine API stream rule).
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Cancelled
+    );
     assert!(next(&mut updates).await.is_none());
 }
 
@@ -436,9 +440,12 @@ async fn after_cancel_nothing_more_is_sent_and_codex_has_ended() {
         !multi.alive(0),
         "the flow's Codex ended before cancel answered"
     );
-    // The login would have completed at 400 ms: nothing arrives.
+    // The login would have completed at 400 ms: only the terminal phase arrives.
     tokio::time::sleep(Duration::from_millis(700)).await;
-    assert!(updates.try_recv().is_err());
+    assert_eq!(
+        updates.try_recv().unwrap().phase,
+        ProviderAuthPhase::Cancelled
+    );
     assert!(next(&mut updates).await.is_none());
 }
 
@@ -539,4 +546,100 @@ async fn the_deadline_bounds_the_whole_flow_including_verification() {
         started_at.elapsed()
     );
     assert!(multi.ended(0).await);
+}
+
+/// Review r2 P1: a reader that falls behind still ends on the terminal phase: an update queued
+/// before cancel is followed by Cancelled on the stream.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_late_reader_sees_cancelled_after_anything_queued() {
+    let (_multi, options) = Multi::new("late-reader", vec![completing_login("l5")]);
+    let f = CodexEngineFactory::new(options);
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, None, tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    // Waiting is queued but not read yet.
+    for _ in 0..200 {
+        if !updates.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(updates.len(), 1, "Waiting is queued");
+    f.auth_cancel(&target, &flow).await.unwrap();
+    let mut seen = Vec::new();
+    while let Some(state) = next(&mut updates).await {
+        seen.push(state.phase);
+    }
+    assert_eq!(
+        seen,
+        [ProviderAuthPhase::Waiting, ProviderAuthPhase::Cancelled]
+    );
+}
+
+/// A transcript whose initialize answer comes after `ms` (Codex stalled while starting).
+#[cfg(unix)]
+fn stalled_initialize(ms: u64) -> Vec<Entry> {
+    let mut entries = load("codex-0.167.0/basic.json").entries[..3].to_vec();
+    if let Entry::EmitInbound { after_ms, .. } = &mut entries[1] {
+        *after_ms = Some(ms);
+    }
+    entries
+}
+
+/// Review r2 P1: cancel while Codex is still initializing: the process the flow started has
+/// exited (not just been signalled) when cancel answers.
+#[cfg(unix)]
+#[tokio::test]
+async fn cancel_while_codex_initializes_waits_for_its_exit() {
+    let (multi, options) = Multi::new("init-cancel", vec![stalled_initialize(5_000)]);
+    let f = CodexEngineFactory::new(options);
+    let target = default_target();
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    let flow = f
+        .auth_start(&target, None, tx)
+        .await
+        .unwrap()
+        .flow_id
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(multi.alive(0), "Codex is up and initializing");
+    f.auth_cancel(&target, &flow).await.unwrap();
+    assert!(
+        !multi.alive(0),
+        "the flow's Codex exited before cancel answered"
+    );
+    assert_eq!(
+        next(&mut updates).await.unwrap().phase,
+        ProviderAuthPhase::Cancelled
+    );
+    assert!(next(&mut updates).await.is_none());
+}
+
+/// Review r2 P1: the deadline passing while Codex initializes ends the process before the
+/// expiry is reported.
+#[cfg(unix)]
+#[tokio::test]
+async fn expiry_while_codex_initializes_ends_it_before_reporting() {
+    let (multi, mut options) = Multi::new("init-expiry", vec![stalled_initialize(5_000)]);
+    options.auth_timeout = Duration::from_millis(500);
+    let f = CodexEngineFactory::new(options);
+    let (tx, mut updates) = mpsc::unbounded_channel();
+    f.auth_start(&default_target(), None, tx).await.unwrap();
+    let end = next(&mut updates).await.unwrap();
+    assert!(
+        !multi.alive(0),
+        "Codex exited before the expiry was reported"
+    );
+    assert_eq!(end.phase, ProviderAuthPhase::Failed);
+    assert_eq!(
+        end.message.as_deref(),
+        Some("Sign-in expired. Start again.")
+    );
+    assert!(next(&mut updates).await.is_none());
 }

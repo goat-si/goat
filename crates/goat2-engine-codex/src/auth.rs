@@ -235,6 +235,19 @@ struct Codex {
 
 impl Codex {
     async fn open(options: &CodexEngineOptions, target: &ProviderTarget) -> Result<Self, String> {
+        let codex = Self::spawn(options, target)?;
+        match codex.initialize(options).await {
+            Ok(()) => Ok(codex),
+            Err(message) => {
+                codex.close().await;
+                Err(message)
+            }
+        }
+    }
+
+    /// The instance's home laid out and its app-server started; the caller owns the process
+    /// from here (initialize can be cancelled without losing it).
+    fn spawn(options: &CodexEngineOptions, target: &ProviderTarget) -> Result<Self, String> {
         let layout = instance_layout(options, Some(target));
         if let Some(layout) = &layout {
             materialize(layout)?;
@@ -249,30 +262,32 @@ impl Codex {
         };
         let (conn, inbound) =
             Connection::start_with(stdin, stdout, None, options.transport.clone());
-        let codex = Self {
+        Ok(Self {
             child,
             conn,
             inbound,
-        };
-        let deadline = Instant::now() + CALL_TIMEOUT;
+        })
+    }
+
+    /// v1's handshake: initialize, then initialized.
+    async fn initialize(&self, options: &CodexEngineOptions) -> Result<(), String> {
         let initialized = timeout_at(
-            deadline,
-            codex.conn.request_value(
+            Instant::now() + CALL_TIMEOUT,
+            self.conn.request_value(
                 methods::INITIALIZE,
                 &InitializeParams::goat(&options.client_version),
             ),
         )
         .await;
         if !matches!(initialized, Ok(Ok(_)))
-            || codex
+            || self
                 .conn
                 .notify(methods::INITIALIZED, &Value::Null)
                 .is_err()
         {
-            codex.close().await;
             return Err(FAILED.into());
         }
-        Ok(codex)
+        Ok(())
     }
 
     async fn call(&self, method: &str, params: Value) -> Option<Value> {
@@ -480,20 +495,50 @@ impl AuthFlows {
                         None,
                     )
                 };
-                // Stopped: the canceller already answered; it waits for this task, so the flow's
-                // Codex is gone when the canceller returns.
-                let mut codex = tokio::select! {
+                let failed = |message: &str| {
+                    state(
+                        &instance,
+                        ProviderAuthPhase::Failed,
+                        Some(&id),
+                        None,
+                        message,
+                        None,
+                    )
+                };
+                // The task owns the process from the moment it exists: every way out below ends
+                // the process group (and waits for it) before the flow is released. Stopped: the
+                // canceller already sent the terminal state and waits for this task.
+                let mut codex = match Codex::spawn(&options, &target) {
+                    Ok(codex) => codex,
+                    Err(message) => return slot.finish(&id, failed(&message)),
+                };
+                enum Opened {
+                    Ready,
+                    Stopped,
+                    Expired,
+                    Failed(String),
+                }
+                let opened = tokio::select! {
                     biased;
-                    _ = &mut stopped => return,
-                    _ = tokio::time::sleep_until(deadline) => return slot.finish(&id, expired()),
-                    opened = Codex::open(&options, &target) => match opened {
-                        Ok(codex) => codex,
-                        Err(message) => {
-                            let failed = state(&instance, ProviderAuthPhase::Failed, Some(&id), None, &message, None);
-                            return slot.finish(&id, failed);
-                        }
+                    _ = &mut stopped => Opened::Stopped,
+                    _ = tokio::time::sleep_until(deadline) => Opened::Expired,
+                    ready = codex.initialize(&options) => match ready {
+                        Ok(()) => Opened::Ready,
+                        Err(message) => Opened::Failed(message),
                     },
                 };
+                match opened {
+                    Opened::Ready => {}
+                    Opened::Stopped => return codex.close().await,
+                    Opened::Expired => {
+                        codex.close().await;
+                        return slot.finish(&id, expired());
+                    }
+                    Opened::Failed(message) => {
+                        codex.close().await;
+                        return slot.finish(&id, failed(&message));
+                    }
+                }
                 let end = tokio::select! {
                     biased;
                     _ = &mut stopped => None,
@@ -534,17 +579,24 @@ impl AuthFlows {
         let instance = target.instance_id.clone();
         let slot = self.slot(&instance);
         let _op = slot.op.lock().await;
-        slot.end(Some(flow_id), None, options.kill_grace + STOP_MARGIN)
-            .await
-            .map_err(|_| EngineError::Unavailable(NOT_ACTIVE.into()))?;
-        Ok(state(
+        let cancelled = state(
             &instance,
             ProviderAuthPhase::Cancelled,
             Some(flow_id),
             None,
             CANCELLED,
             None,
-        ))
+        );
+        // On the stream too, after anything already queued, so the stream always ends with the
+        // terminal phase (engine API stream rule; v1 publishes the cancellation).
+        slot.end(
+            Some(flow_id),
+            Some(cancelled.clone()),
+            options.kill_grace + STOP_MARGIN,
+        )
+        .await
+        .map_err(|_| EngineError::Unavailable(NOT_ACTIVE.into()))?;
+        Ok(cancelled)
     }
 
     /// v1 `providerAuthFlow.logout`: a running flow ends first (its stream gets the cancelled state
