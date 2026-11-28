@@ -70,3 +70,10 @@ Newest at the bottom.
   (https://goat-si.github.io/goat2-design/prd/part1/): per-thread folder with `goat.jsonl` as the
   only source, card index rebuilt from folders, one Codex process per thread, caps 4 runs / 2 starts
   / 4 children per bot / depth 1, quitting the app ends the work, append-only text streaming.
+- **Host is Rust from the start (supersedes the TypeScript + Node entry above).** UI stays
+  TypeScript/React. Codex via the official `codex-app-server-protocol` crate, Claude by driving the
+  `claude` CLI's stream-json control protocol directly (what the Agent SDK wraps), ACP via Zed's
+  `agent-client-protocol` crate, MCP on `rmcp` keeping GOAT 1's agent-surface shape. GOAT v1
+  behaviour (thread.send/wait/watch/report_result, queue edit/promote-to-steer, child wakes, follow-up
+  modes, restart settlement) is ported with equal behaviour, checked against v1's capability flags
+  and recorded-session scenarios. Builds run through GOAT v1 on other hosts, not in Aside.
