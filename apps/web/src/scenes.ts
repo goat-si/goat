@@ -8,8 +8,8 @@ export function sceneUi(scene: string): Partial<UiState> {
     case "FF-1": return { ...base, sidebarOpen: false };
     case "12P-1": case "U8-1": return { ...base, pinned: [] };
     case "25D-0": return { ...base, pinned: [], panelThreadId: "t-review-7712" };
-    case "LXD-0": return { ...base, mode: "threads", threadId: null };
-    case "C2Y-0": case "1MFK-1": return { ...base, mode: "threads", threadId: "t-perf6" };
+    case "1N65-1": return { ...base, mode: "threads", threadId: "t-billing" };
+    case "1NEM-1": case "1OXX-1": return { ...base, mode: "threads", threadId: "t-billing" };
     default: return base;
   }
 }

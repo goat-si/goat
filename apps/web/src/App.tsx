@@ -12,6 +12,8 @@ import { clock, duration, shortTime } from "./lib/format.ts";
 import { Face } from "./bot-home/Face.tsx";
 import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
 import { NewBotDialog } from "./bot-home/NewBot.tsx";
+import { ThreadMode } from "./threads/ThreadMode.tsx";
+import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -78,7 +80,7 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
       main={main ? <P.RailMainBot face={<Face bot={main} size={17} />} badge={needsCount > 0 ? <P.RailBadge count={needsCount} /> : null}
         button={btn(main.name, () => setUi({ mode: "bots", botId: main.botId, panelThreadId: null }), { "data-active": ui.mode === "bots" && ui.botId === main.botId, title: main.name })} /> : null}
       extra={railExtra}
-      home={<P.RailHome button={{ ...plannedProps("thread-list-slice"), "data-active": false }} />}
+      home={<P.RailHome button={btn("Threads", () => setUi({ mode: "threads" }), { "data-active": ui.mode === "threads", title: "Threads" })} />}
       more={<div style={{ position: "relative" }}>
         <P.RailMore button={btn("Add a bot to the rail", () => setRailSearch((v) => !v), { "data-active": railSearch, title: "Add a bot to the rail" })} />
         {railSearch && <RailSearchPopover rows={rows} railBots={ui.railBots} onAdd={(id) => setUi((s) => ({ railBots: s.railBots.includes(id) ? s.railBots : [...s.railBots, id] }))} onClose={() => setRailSearch(false)} />}
@@ -98,8 +100,15 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
 
   const sidebar = ui.sidebarOpen ? <BotSidebar rows={rows} ui={ui} setUi={setUi} onNewBot={() => setNewBot(true)} /> : null;
   const mainArea = bot
-    ? <P.Main chat={<BotChat bot={bot} />} panel={ui.panelOpen ? <Overview bot={bot} scene={scene} /> : null} />
+    ? <P.Main chat={<BotChat bot={bot} onOpenTask={(id) => setUi({ panelThreadId: id, panelOpen: true })} />} panel={!ui.panelOpen ? null : ui.panelThreadId ? <WorkerPanel threadId={ui.panelThreadId} onBack={() => setUi({ panelThreadId: null })} onOpen={() => setUi((s) => ({ mode: "threads", threadId: s.panelThreadId, panelThreadId: null }))} /> : <Overview bot={bot} scene={scene} onOpenTask={(id) => setUi({ panelThreadId: id })} />} />
     : <P.Main chat={<Disconnected />} panel={null} />;
+  if (ui.mode === "threads") {
+    return (
+      <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
+        <ThreadMode ui={ui} setUi={setUi} rail={rail} lights={desktop ? null : <P.ThreadTrafficLights />} stamp={stamp} toggleSidebar={toggleSidebar} />
+      </div>
+    );
+  }
   return (
     <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
       <P.Frame top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail} sidebar={sidebar} main={mainArea} />
@@ -226,7 +235,7 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 
 // ---------------------------------------------------------------- chat
 
-function BotChat({ bot }: { bot: BotRowData }) {
+function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string) => void }) {
   const client = useClient();
   const snap = useHost();
   const thread = useThread(bot.threadId);
@@ -246,7 +255,7 @@ function BotChat({ bot }: { bot: BotRowData }) {
     else if (e.kind === "bot") items.push(<P.BotMessage key={e.key} text={e.text} />);
     else if (e.kind === "child") {
       const worked = e.reported ? ` · worked for ${duration(e.at, e.reported.at)}` : " · working";
-      items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={{ "data-child-row": e.childThreadId }} />);
+      items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={btn(e.task, () => onOpenTask(e.childThreadId), { "data-child-row": e.childThreadId })} />);
     }
   }
   for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
@@ -310,7 +319,7 @@ function RequestCard({ threadId, request, onHide }: { threadId: string; request:
 
 // ---------------------------------------------------------------- right panel
 
-function Overview({ bot, scene }: { bot: BotRowData; scene: string | null }) {
+function Overview({ bot, scene, onOpenTask }: { bot: BotRowData; scene: string | null; onOpenTask: (id: string) => void }) {
   const snap = useHost();
   const { now } = useHostContext();
   const parent = useThread(bot.threadId);
@@ -328,7 +337,7 @@ function Overview({ bot, scene }: { bot: BotRowData; scene: string | null }) {
           {workers.map((c) => (
             <P.TaskRow key={c.id} icon={c.status === "running" ? <span data-spin="" style={{ display: "inline-flex" }}><P.TaskRunningIcon /></span> : <P.TaskDoneIcon />}
               title={c.title} meta={c.status === "running" ? "Working" : childTimes.get(c.id) ?? shortTime(c.updatedAt, now()).toLowerCase()}
-              root={{ "data-task": c.id }} />
+              root={btn(c.title, () => onOpenTask(c.id), { "data-task": c.id })} />
           ))}
         </P.PanelSectionCount>
       )}

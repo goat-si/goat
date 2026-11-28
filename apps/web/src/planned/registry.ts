@@ -4,7 +4,6 @@ export type PlannedState = "planned" | "undecided";
 export const PLANNED = {
   "runtime-picker-other": { state: "planned", what: "Run a bot on Claude, Antigravity, OpenCode or Pi" },
   "runtime-picker-change": { state: "planned", what: "Switch an existing thread's model (change_thread)" },
-  "thread-list-slice": { state: "planned", what: "Thread mode: every thread, newest first (next slice)" },
   inbox: { state: "planned", what: "Every request that needs you, in one place" },
   multiplexer: { state: "planned", what: "Open threads side by side in panes" },
   "library-memory": { state: "undecided", what: "Browse and edit what bots remember" },

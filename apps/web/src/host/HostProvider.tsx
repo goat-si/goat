@@ -38,13 +38,13 @@ export function createHostFromLocation(loc: Location = window.location): HostCon
     return { client, now: () => new Date(), desktop: false, build: null };
   }
   const scene = fakeScene ?? "demo";
-  const world = scene === "1MFK-1" ? withQueue(demoWorld()) : demoWorld();
+  const world = scene === "1OXX-1" ? withQueue(demoWorld()) : demoWorld();
   // Scenes freeze the boards' clock so times read as on the boards; the prototype demo keeps real time.
   const frozen = fakeScene !== null;
-  const fake = new FakeHost(world, { connect: scene === "12P-1" ? "never" : "open", now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });
+  const fake = new FakeHost(world, { connect: scene === "12P-1" || scene === "1N65-1" ? "never" : "open", now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });
   // 12P-1 is a cold start: the host is not up yet, the UI draws the last session's cache.
-  const cache = scene === "12P-1" ? {
-    load: () => ({ cards: Object.fromEntries(Object.values(world.threads).map((t) => [t.card.id, t.card])), bots: Object.fromEntries(world.bots.map((b) => [b.botId, b])), lines: { "t-reviewer": world.threads["t-reviewer"]!.lines } }),
+  const cache = scene === "12P-1" || scene === "1N65-1" ? {
+    load: () => ({ cards: Object.fromEntries(Object.values(world.threads).map((t) => [t.card.id, t.card])), bots: Object.fromEntries(world.bots.map((b) => [b.botId, b])), lines: scene === "12P-1" ? { "t-reviewer": world.threads["t-reviewer"]!.lines } : {} }),
     save: () => {},
   } : null;
   const client = new HostClient(fake, { outbox: frozen ? memoryStorage() : localStorageOutbox("goat2.demo.outbox.v1"), cache, demo: scene });

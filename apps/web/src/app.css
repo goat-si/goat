@@ -23,3 +23,5 @@ textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
 [data-pinned-grid] { flex-wrap: wrap; }
 /* New bot dialog backdrop fills the window (2PU-1 draws it at 1440x900). */
 [data-new-bot] [data-backdrop] { width: 100% !important; height: 100% !important; }
+/* Board outline layers drawn over content (thread frame card edge) never take clicks. */
+[data-overlay] { pointer-events: none; }

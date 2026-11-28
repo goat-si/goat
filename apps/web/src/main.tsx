@@ -1,8 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./app.css";
-import "./v1/v1.css";
-import { Preview } from "./v1/Preview.tsx";
 import { App } from "./App.tsx";
 import { HostProvider, createHostFromLocation } from "./host/HostProvider.tsx";
 import { UiStore } from "./ui-state/uiState.ts";
@@ -16,8 +14,8 @@ if (scene === "12P-1") host.client.sendMessage({ botId: "reviewer", threadId: "t
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {new URLSearchParams(location.search).has("v1preview") ? <Preview /> : <HostProvider value={host}>
+    <HostProvider value={host}>
       <App ui={ui} scene={scene} />
-    </HostProvider>}
+    </HostProvider>
   </StrictMode>,
 );

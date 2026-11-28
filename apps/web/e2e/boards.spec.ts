@@ -29,6 +29,7 @@ export async function sideBySide(page: Page, id: string) {
   await sbs.setContent(`<body style="margin:0;background:#f0f;display:flex;gap:8px"><img src="data:image/jpeg;base64,${board}" width="${w}" height="${h}"><img src="data:image/png;base64,${shot.toString("base64")}" width="${w}" height="${h}"></body>`);
   await sbs.screenshot({ path: join(out, `${id}-sbs.png`) });
   await sbs.close();
+  await page.bringToFront();
 }
 
 test("2R-1 bot home", async ({ page }) => {
@@ -111,4 +112,49 @@ test("1FKW-0 drag a row onto the tiles pins it; right-click unpins", async ({ pa
   await sideBySide(page, "1FKW-0");
   await page.locator("[data-tile=standup]").click({ button: "right" });
   await expect(page.locator("[data-bot-row=standup]")).toBeVisible();
+});
+
+test("1NEM-1 thread view", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await expect(page.getByText("Worked for 4m 12s")).toBeVisible();
+  await expect(page.getByText(/Working for/)).toBeVisible();
+  await sideBySide(page, "1NEM-1");
+});
+
+test("1N65-1 thread mode first entry", async ({ page }) => {
+  await open(page, "1N65-1");
+  await expect(page.getByText("Priority (2)")).toBeVisible();
+  await sideBySide(page, "1N65-1");
+});
+
+test("1OXX-1 queued message: edit, reorder via arrows, delete", async ({ page }) => {
+  await open(page, "1OXX-1");
+  await expect(page.getByText("Also add a regression test for the sidebar key change")).toBeVisible();
+  await sideBySide(page, "1OXX-1");
+  await page.getByLabel("Edit queued message").click();
+  await page.getByLabel("Message", { exact: true }).fill("Also add a regression test (edited)");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.getByText("Also add a regression test (edited)")).toBeVisible();
+  await page.getByLabel("Delete queued message").click();
+  await expect(page.getByText("Also add a regression test (edited)")).toHaveCount(0);
+});
+
+test("thread mode: open a thread from the rail and back to bots", async ({ page }) => {
+  await open(page, "2R-1");
+  await page.getByRole("button", { name: "Threads", exact: true }).click();
+  await page.locator("[data-thread-row=t-billing]").click();
+  await expect(page.locator("[data-timeline=t-billing]")).toBeVisible();
+  await page.getByRole("button", { name: "GOAT", exact: true }).first().click();
+  await expect(page.getByLabel("Message GOAT")).toBeVisible();
+});
+
+test("25D-0 worker thread in the right panel: open, go to thread, back", async ({ page }) => {
+  await open(page, "25D-0");
+  await expect(page.locator("[data-worker-panel=t-review-7712]")).toContainText("81 passed");
+  await sideBySide(page, "25D-0");
+  await page.getByLabel("Back to Overview").click();
+  await expect(page.getByText("Tasks")).toBeVisible();
+  await page.locator("[data-task=t-review-7712]").click();
+  await page.getByLabel("Go to thread").click();
+  await expect(page.locator("[data-timeline=t-review-7712]")).toBeVisible();
 });

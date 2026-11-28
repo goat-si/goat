@@ -88,38 +88,38 @@ export function demoWorld(): FakeWorld {
   const c7709 = { ...blankCard("t-review-7709", "worker", "Review #7709", at(16, 10, 0, -1), { botId: "reviewer", parent: parent("r0-tool"), model: MODEL.model, cwd: "~/Developer/opencodex", projectId: "opencodex" }) };
   add(thread(c7709, [[at(16, 0, 0, -1), created(c7709)]]));
 
-  // Person-started threads (thread mode, LXD-0 / C2Y-0 / 1MFK-1).
+  // Person-started threads (thread mode, 1N65-1 / 1NEM-1 / 1OXX-1).
   const user = (id: string, title: string, projectId: string, o: Partial<ThreadCard>, t: string) => ({ ...blankCard(id, "user", title, t, { botId: null, parent: null, model: MODEL.model, cwd: `~/Developer/${projectId}`, projectId }), ...o });
-  const p6 = user("t-perf6", "Perf Lane 6: Shell-snapshot callers", "goat", { status: "running" }, at(15, 40));
-  add(thread(p6, [
-    [at(15, 30), created(p6)],
-    [at(15, 30), userIn("in-p1", "Find every shell-snapshot caller, add the cache and get check:changed passing.")],
-    [at(15, 30), { type: "run.started", runId: "run-p1", inputIds: ["in-p1"], generation: 1, engineRef: null }],
-    [at(15, 31), tool("t-perf6", "run-p1", "p1-1", at(15, 31), "Explored", "41 call sites of shellSnapshot()")],
-    [at(15, 32), tool("t-perf6", "run-p1", "p1-2", at(15, 32), "Read", "GitManager.ts +6 files")],
-    [at(15, 33), { type: "item.completed", runId: "run-p1", engineLocator: null, item: item("t-perf6", "run-p1", "p1-3", at(15, 33), { type: "file_change", fileName: "shellSnapshotCache.ts", additions: 118, deletions: 22 }) }],
-    [at(15, 34), { type: "item.completed", runId: "run-p1", engineLocator: null, item: item("t-perf6", "run-p1", "p1-4", at(15, 34), { type: "command_execution", input: "pnpm check:changed", title: "pnpm check:changed", exitCode: 1, outputIndicatesFailure: true }) }],
-    [at(15, 34, 12), say("t-perf6", "run-p1", "p1-a", at(15, 34, 12), "The cache is in. One test depends on the cache invalidation order, so I'm changing it to wait for the cache to clear.")],
-    [at(15, 34, 12), { type: "run.finished", runId: "run-p1", outcome: "completed" }],
-    [at(15, 40, 38), userIn("in-p2", "Make the test wait for the cache to clear.")],
-    [at(15, 40, 38), { type: "run.started", runId: "run-p2", inputIds: ["in-p2"], generation: 1, engineRef: null }],
+  const B = "t-billing";
+  const billing = user(B, "Refactor billing webhooks", "api-server", { status: "running" }, at(15, 40, 38));
+  const cmd = (id: string, t: string, input: string, failed = false, status: "completed" | "running" = "completed"): Ev => ({ type: "item.completed", runId: id.startsWith("b2") ? "run-b2" : "run-b1", engineLocator: null,
+    item: { ...item(B, id.startsWith("b2") ? "run-b2" : "run-b1", id, t, { type: "command_execution", input, title: input, ...(failed ? { exitCode: 1, outputIndicatesFailure: true } : { exitCode: 0 }) }), status } });
+  add(thread(billing, [
+    [at(15, 30), created(billing)],
+    [at(15, 30), userIn("in-b1", "The sidebar flickers when I switch threads quickly. Can you find out why and fix it?")],
+    [at(15, 30), { type: "run.started", runId: "run-b1", inputIds: ["in-b1"], generation: 1, engineRef: null }],
+    [at(15, 31), tool(B, "run-b1", "b1-1", at(15, 31), "Explored", "3 files, 2 searches")],
+    [at(15, 32), { type: "item.completed", runId: "run-b1", engineLocator: null, item: item(B, "run-b1", "b1-2", at(15, 32), { type: "file_change", fileName: "Sidebar.tsx", additions: 118, deletions: 22 }) }],
+    [at(15, 33), cmd("b1-3", at(15, 33), "bun run typecheck")],
+    [at(15, 34), cmd("b1-4", at(15, 34), "bun test sidebar.test.ts", true)],
+    [at(15, 34, 12), say(B, "run-b1", "b1-a", at(15, 34, 12), "The flicker came from the sidebar list re-keying every row when the active thread changed, so React remounted the whole list on each switch. I keyed rows by thread id and memoized the row renderer; typecheck passes.")],
+    [at(15, 34, 12), { type: "run.finished", runId: "run-b1", outcome: "completed" }],
+    [at(15, 40, 38), { type: "run.started", runId: "run-b2", inputIds: [], generation: 1, engineRef: null }],
+    [at(15, 40, 40), cmd("b2-1", at(15, 40, 40), "bun test sidebar.test.ts", false, "running")],
   ]));
-  add(thread(user("t-t3", "T3 Code Catch-Up PR Status", "goat", { status: "needs_you", needsYou: { kind: "question", summary: "Pick the PR order" }, children: { running: 2, total: 23 } }, at(15, 20)), []));
-  add(thread(user("t-sume", "Build Sume API Aggregator", "ima2-gen", { status: "needs_you", needsYou: { kind: "approval", summary: "Approve the API key change" }, children: { running: 2, total: 17 } }, at(15, 10)), []));
-  add(thread(user("t-incoming", "Review Incoming PRs for N…", "opencodex", { status: "needs_you", needsYou: { kind: "decision", summary: "Merge #9179?" } }, at(15, 5)), []));
-  add(thread(user("t-perf5", "Perf Lane 5: Keepalive leases", "goat", { status: "running" }, at(15, 35)), []));
-  add(thread(user("t-l9", "L9 Windows check PR #525", "ima2-gen", {}, at(12, 0)), []));
-  add(thread(user("t-perf4", "Perf Lane 4: Client-runtime flags", "goat", {}, at(11, 0)), []));
-  add(thread(user("t-perf3", "Perf Lane 3: Trace firehose & sampling", "goat", {}, at(10, 0)), []));
-  add(thread(user("t-perf1", "Perf Lane 1: Pen ControlMaster", "goat", {}, at(9, 0)), []));
+  add(thread(user("t-auth", "Fix flaky auth redirect test", "web-dashboard", { status: "needs_you", needsYou: { kind: "approval", summary: "Run the e2e suite?" } }, at(15, 38)), []));
+  add(thread(user("t-csv", "Add CSV export to reports", "web-dashboard", { status: "needs_you", needsYou: { kind: "question", summary: "Which columns?" } }, at(15, 36)), []));
+  add(thread(user("t-cron", "Migrate cron jobs to queue", "api-server", { status: "failed" }, at(15, 20)), []));
+  add(thread(user("t-copy", "Update onboarding copy", "web-dashboard", {}, at(15, 10)), []));
+  add(thread(user("t-mem", "Investigate memory leak in worker", "api-server", { status: "running" }, at(15, 39)), []));
+  add(thread(user("t-inv", "Write migration for invoices table", "api-server", { status: "running" }, at(15, 36)), []));
   return { epoch: "demo", bots, threads };
 }
 
-/** 1MFK-1: two queued messages behind the running turn of Perf Lane 6. */
+/** 1OXX-1: a queued message behind the running turn. */
 export function withQueue(w: FakeWorld): FakeWorld {
-  const t = w.threads["t-perf6"]!;
+  const t = w.threads["t-billing"]!;
   const n = t.lines.length;
-  t.lines.push(line(n + 1, at(15, 40, 50), userIn("in-q1", "Also run the web tests after the cache fix")));
-  t.lines.push(line(n + 2, at(15, 40, 55), userIn("in-q2", "Then open a PR against dev and link the stall report")));
+  t.lines.push(line(n + 1, at(15, 40, 50), userIn("in-q1", "Also add a regression test for the sidebar key change")));
   return w;
 }
