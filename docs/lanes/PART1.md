@@ -20,8 +20,12 @@ Pages: `index`, `perf` (GOAT v1 bottlenecks), `cases` (ADE survey), `model`, `st
   card index (`cards.sqlite`) is a rebuildable cache. No "read every thread body" API. No migrations
   of the log (per-line `v`). Cursor `(epoch, seq)`. Append-only text streaming `{itemId, offset, text}`.
 - Copy user messages and final assistant text; tools as name/summary/engine locator only; no deltas stored.
-- Follow-ups: human/worker threads `steer`, bot threads `followup`, `interrupt` only by explicit button;
-  a refused steer fails closed. Interrupt is demoted to followup while children run.
+- Follow-ups: human/worker threads `steer`, bot threads `followup`, `interrupt` only by explicit button.
+  As in v1: a steer refused at admission (or a start onto a native turn GOAT never owned,
+  `CodexTurnStartGuard.ts:113-172`) fails closed; a steer the engine declines after admission becomes a
+  queued followup with the same message id, child-result wakes too (`EffectWorker.ts:310-360`). No
+  interrupt demotion: Stop holds the queue, stops wait-mode children, async children keep running and
+  report later as inputs (`ChildNeedsStop.ts:5-50`). Owner decision 2026-11-28, see docs/parity/.
 - Caps: 4 concurrent runs, 2 concurrent starts, 4 children per bot, depth 1.
 - One Codex app-server process per thread; idle 10 min -> stop. Agent commands under `nice -n 10`.
 - Quitting the app ends the work; on next start running runs become `interrupted` / `unknown`
