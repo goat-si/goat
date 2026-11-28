@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { ServerProviderEntry } from "./wire.ts";
 import { useAction, useProviderCall, useProviderEntries } from "./context.tsx";
 import { CLOUD, CLOUD_LATER, DRIVERS } from "./catalogMeta.ts";
-import { SEPARATE_ACCOUNT_DRIVERS, headerLine, maskEmail, nextInstanceId, providerState, titleParts, iconOf } from "./view.ts";
+import { SEPARATE_ACCOUNT_DRIVERS, routedVia, headerLine, maskEmail, nextInstanceId, providerState, titleParts, iconOf } from "./view.ts";
 import { Button, Chevron, DotMark, ErrorLine, FAINT, INK, LinkButton, Logo, MUTED, Plus, Row, Section, Toggle, text } from "./ui.tsx";
 
 const INSTALLING = new Set(["downloading", "extracting", "verifying"]);
@@ -233,7 +233,8 @@ function AccountSection({ e, onAddAccount }: { e: ServerProviderEntry; onAddAcco
   } else if (a.status === "unauthenticated") {
     body = <Row label="Account" actions={canAuth ? <Button primary onClick={() => void start()} disabled={act.busy !== null}>Sign in</Button> : null}>{flow?.phase === "failed" ? (flow.message ?? "Sign-in failed.") : "Not signed in"}</Row>;
   } else {
-    body = <Row label="Account">{e.driver === "omo" ? "Uses your Pi sign-in" : "Uses its own sign-in"}</Row>;
+    const routed = routedVia(e);
+    body = <Row label="Account">{routed ? `Routed through ${routed} · no sign-in needed` : e.driver === "omo" ? "Uses your Pi sign-in" : "Uses its own sign-in"}</Row>;
   }
   return (
     <Section title="Account">

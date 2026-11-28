@@ -38,6 +38,10 @@ describe("state", () => {
     expect(providerState({ ...byId(list, "codex"), probe: { ...byId(list, "codex").probe, status: "warning", auth: { status: "unknown" } } }))
       .toMatchObject({ dot: "grey", word: "Status unknown", need: "unknown" });
     expect(rowLine(byId(list, "codex"))).toBe("Ready · ChatGPT Pro");
+    // Real host: a Codex instance routed through a local endpoint needs no OpenAI sign-in (v1 routed Codex).
+    const routed = { ...byId(list, "codex-2"), probe: { ...byId(list, "codex-2").probe, auth: { status: "unknown" as const, endpoint: "http://127.0.0.1:10100" } } };
+    expect(providerState(routed)).toMatchObject({ word: "Ready", need: "none" });
+    expect(rowLine(routed)).toBe("Ready · routed through 127.0.0.1:10100");
     expect(providerState({ ...byId(list, "codex"), probe: { ...byId(list, "codex").probe, status: "warning", message: "Checking status…" } }))
       .toMatchObject({ dot: "grey", word: "Checking…" });
   });

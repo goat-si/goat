@@ -46,10 +46,18 @@ export function titleParts(e: ServerProviderEntry): { name: string; account: str
 }
 export const title = (e: ServerProviderEntry) => { const t = titleParts(e); return t.account ? `${t.name} \u00b7 ${t.account}` : t.name; };
 
-/** Sidebar line: the state word, then what helps tell rows apart (plan, model sources). */
+/** "127.0.0.1:10100" when the instance sends its requests through another endpoint (v1 auth.endpoint, a routed Codex). */
+export function routedVia(e: ServerProviderEntry): string | null {
+  const ep = e.probe.auth.endpoint;
+  if (!ep) return null;
+  try { return new URL(ep).host || ep; } catch { return ep; }
+}
+
+/** Sidebar line: the state word, then what helps tell rows apart (plan, model sources, route). */
 export function rowLine(e: ServerProviderEntry): string {
   const s = providerState(e);
-  const extra = s.word === "Ready" ? e.probe.auth.label : undefined;
+  const routed = e.probe.auth.status === "unknown" ? routedVia(e) : null;
+  const extra = s.word === "Ready" ? e.probe.auth.label ?? (routed ? `routed through ${routed}` : undefined) : undefined;
   return extra ? `${s.word} \u00b7 ${extra}` : s.word;
 }
 
