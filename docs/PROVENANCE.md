@@ -186,3 +186,20 @@ priority aging and parked waits (core/sched.rs), 4 children per parent and depth
 coalescing and record-before-wake (core/actor.rs), restart wake with `interrupted_by_restart` (core/settle.rs),
 per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine group memory policy, host launch contract
 (server.rs).
+## P2-S engine-sdk core (lane goat2_engine_sdk, v1 goat origin/dev 916b5ccc1b2)
+
+| GOAT 2 path | Source | How |
+|---|---|---|
+| crates/goat2-engine-sdk/src/process.rs | GOAT 2 crates/goat2-engine-codex/src/process.rs at origin/goat2_engine_codex c297ed6ee1b | verbatim copy (drivers may not depend on each other, structure/40_deps.md); candidate for a shared crate |
+| crates/goat2-engine-sdk/src/jsonl.rs | packages/provider-pi/src/server/rpc.ts:1,104-133,239-289 | ported to Rust: LF-only framing, trailing CR strip, oversized-record drop, id-matched responses, pending calls fail when the transport goes down |
+| crates/goat2-engine-sdk/src/capabilities/cursor.json | packages/provider-cursor/src/server/capabilities.ts:3-101 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/opencode.json | packages/provider-opencode/src/server/adapterProtocol.ts:27-122 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/muse.json | packages/provider-muse/src/server/capabilities.ts:3-97 | verbatim (TS literal evaluated to JSON) |
+| crates/goat2-engine-sdk/src/capabilities/pi.json | packages/provider-pi/src/server/piToolOutput.ts:7-103 | verbatim; v1 returns it for Pi and OmO (provider-pi/src/server/adapter.ts:138-139) |
+| apps/engine-helper/src/sdkLoader.ts | packages/provider-cursor/src/server/sdk.ts:1-17 | adapted: createRequire loading kept, fake-SDK override is new |
+| apps/engine-helper/src/rejections.ts | packages/provider-cursor/src/server/CursorSdk.ts:14-45 (containRejections use) | adapted: classifier registry; unclassified rejections end only this helper |
+| apps/engine-helper/src/main.ts | packages/provider-pi/src/server/rpc.ts:1 | LF-only framing rule (readline splits U+2028/U+2029) |
+| apps/engine-helper (protocol, server, fake engine, items), crates/goat2-engine-sdk/src/helper.rs | - | new: v1 runs these SDKs in-process in its server; GOAT 2's host is Rust, so one Node helper per thread carries them (crash isolation = process isolation, same as one Codex app-server per thread) |
+
+Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.ts is plain LF JSONL request/response plus events over stdio; a Node hop would add a process and a failure point with no SDK to host.
+
