@@ -379,6 +379,8 @@ it("locator and coordinate clicks refuse native select and file input elements b
       <iframe id="select-frame" style="position:absolute;left:240px;top:10px;width:160px;height:60px;border:0"
         srcdoc='<body style="margin:0"><select style="width:160px;height:60px"><option>One</option></select></body>'></iframe>
       <iframe id="deep-frame" style="position:absolute;left:240px;top:90px;width:120px;height:40px;border:0"></iframe>
+      <iframe id="scaled-frame" style="position:absolute;left:240px;top:150px;width:120px;height:40px;border:0;transform:scale(1.5);transform-origin:top left"
+        srcdoc='<body style="margin:0"><select style="width:120px;height:40px"><option>Scaled</option></select></body>'></iframe>
       <script>
         window.pointerEvents = [];
         addEventListener("pointerdown", (event) => window.pointerEvents.push(event.target.id || event.target.tagName), true);
@@ -476,6 +478,14 @@ it("locator and coordinate clicks refuse native select and file input elements b
       },
     });
     await expect(ServerBrowserPage.click(page, { x: 300, y: 110 })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      detail: {
+        beforeInput: true,
+        clickRefusal: "invalid_geometry",
+        kind: "invalid_geometry",
+      },
+    });
+    await expect(ServerBrowserPage.click(page, { x: 300, y: 175 })).rejects.toMatchObject({
       tag: "PreviewAutomationExecutionError",
       detail: {
         beforeInput: true,

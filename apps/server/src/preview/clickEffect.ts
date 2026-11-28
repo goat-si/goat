@@ -323,6 +323,16 @@ const contentOrigin = (x: number, y: number) => `(() => {
   const el = ${deepestElementScript(x, y)};
   if (!el) return null;
   const box = el.getBoundingClientRect();
+  if (Math.abs(box.width - el.offsetWidth) > 0.5 || Math.abs(box.height - el.offsetHeight) > 0.5)
+    return null;
+  for (let current = el; current;) {
+    const currentStyle = getComputedStyle(current);
+    for (const property of ["transform", "rotate", "scale", "translate", "zoom"]) {
+      const value = currentStyle.getPropertyValue(property);
+      if (value !== "" && value !== (property === "zoom" ? "1" : "none")) return null;
+    }
+    current = current.parentElement ?? current.getRootNode().host;
+  }
   const style = getComputedStyle(el);
   return [box.left + el.clientLeft + parseFloat(style.paddingLeft),
     box.top + el.clientTop + parseFloat(style.paddingTop)];
