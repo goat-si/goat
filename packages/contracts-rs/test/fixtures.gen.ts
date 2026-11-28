@@ -1668,7 +1668,25 @@ export const log_event__request_opened_runless_item = {
     "parentItemId": null,
     "providerThreadId": null,
     "providerTurnId": null,
-    "questions": [],
+    "questions": [
+      {
+        "allowCustomAnswer": true,
+        "header": "Target",
+        "id": "target",
+        "options": [
+          {
+            "description": "Update the main branch",
+            "label": "main"
+          },
+          {
+            "description": "Update the release branch",
+            "label": "release",
+            "value": "release/1.2"
+          }
+        ],
+        "question": "Which branch should the background job update?"
+      }
+    ],
     "requestId": "example",
     "runId": null,
     "startedAt": null,
@@ -2501,7 +2519,25 @@ export const log_line__request_opened_runless_item = {
     "parentItemId": null,
     "providerThreadId": null,
     "providerTurnId": null,
-    "questions": [],
+    "questions": [
+      {
+        "allowCustomAnswer": true,
+        "header": "Target",
+        "id": "target",
+        "options": [
+          {
+            "description": "Update the main branch",
+            "label": "main"
+          },
+          {
+            "description": "Update the release branch",
+            "label": "release",
+            "value": "release/1.2"
+          }
+        ],
+        "question": "Which branch should the background job update?"
+      }
+    ],
     "requestId": "example",
     "runId": null,
     "startedAt": null,

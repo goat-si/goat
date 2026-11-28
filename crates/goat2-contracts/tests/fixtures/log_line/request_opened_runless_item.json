@@ -16,7 +16,25 @@
     "parentItemId": null,
     "providerThreadId": null,
     "providerTurnId": null,
-    "questions": [],
+    "questions": [
+      {
+        "id": "target",
+        "header": "Target",
+        "question": "Which branch should the background job update?",
+        "options": [
+          {
+            "label": "main",
+            "description": "Update the main branch"
+          },
+          {
+            "label": "release",
+            "description": "Update the release branch",
+            "value": "release/1.2"
+          }
+        ],
+        "allowCustomAnswer": true
+      }
+    ],
     "requestId": "example",
     "runId": null,
     "startedAt": null,

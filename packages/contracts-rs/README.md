@@ -19,6 +19,11 @@ pnpm --filter @goat2/contracts-rs typecheck
   reads as `null` because the log is never migrated. Every `uint64` carries `maximum: 2^53-1`
   (`MAX_SAFE_WIRE_INTEGER`) so JavaScript numbers stay exact; the Rust types enforce the same bound when
   encoding and decoding (`serde_util::safe_u64`), so serde, the schemas and the TypeScript `number` agree.
+- Optional fields (`field?: T` in TypeScript, for example `RequestOpened.item`): writers omit them when
+  absent, and the generated TypeScript types describe that written shape. Readers (serde and the schemas)
+  also accept an explicit `null` there and read it as absent, so a validator built from the schemas is
+  slightly looser than the TypeScript type. Code that builds frames or lines must omit the field, not send
+  `null`.
 
 ## Format freeze
 
