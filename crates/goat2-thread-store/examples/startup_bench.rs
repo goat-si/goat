@@ -136,6 +136,7 @@ fn run_events(r: usize, done: bool, accepted: bool) -> Vec<LogEvent> {
             run_id: RunId::new(&run),
             outcome: RunOutcome::Completed,
             reason: None,
+            token_usage: None,
         }));
     }
     events

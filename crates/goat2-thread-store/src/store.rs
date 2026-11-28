@@ -619,6 +619,7 @@ impl Store {
                 run_id: run_id.clone(),
                 outcome,
                 reason: Some("The host restarted before the run finished.".into()),
+                token_usage: None,
             }));
             store.append_locked(&mut slot, events)?;
             report.settled.push(Settled {
@@ -1645,10 +1646,10 @@ impl Store {
                 let line = LogLine::new(
                     seq,
                     at.clone(),
-                    LogEvent::Checkpoint(Checkpoint {
+                    LogEvent::Checkpoint(Box::new(Checkpoint {
                         card: snapshot,
                         fold: fold_state.clone(),
-                    }),
+                    })),
                 );
                 fold::apply(&mut card, &mut fold_state, &line);
                 lines.push(line);
@@ -1989,7 +1990,7 @@ impl Store {
                 && WRITE_CHECKPOINTS
                 && line::checkpoint_is_complete(raw)
             {
-                checkpoint = Some((line.seq, cp.clone()));
+                checkpoint = Some((line.seq, (**cp).clone()));
                 return Ok(false);
             }
             count += 1;
