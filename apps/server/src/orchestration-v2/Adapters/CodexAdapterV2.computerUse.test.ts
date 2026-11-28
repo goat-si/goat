@@ -99,8 +99,26 @@ describe("Codex computer use attachment", () => {
             },
           });
           f.turnCompleted(2);
-          // The next protocol request must be turn/start, even with a background command alive.
-          // No goal/terminal reads, unsubscribe, resume or deferral note are expected after Stop.
+          // A completed turn checks which retained commands still have a live terminal.
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id,
+                method: "thread/backgroundTerminals/list",
+                params: { threadId: f.nativeThreadId },
+              },
+            },
+            {
+              type: "emit_inbound",
+              frame: {
+                id: id++,
+                result: { data: [{ processId: "http-server-process" }], nextCursor: null },
+              },
+            },
+          );
+          // Stop + re-approval runs straight to turn/start, even with a background command alive.
+          // No goal reads, unsubscribe, resume or deferral note are expected after Stop.
           yield* f.turnStart(id++, 3, { computerUse: mode !== "user", screenCode: true });
           f.turnCompleted(3);
           if (mode !== "user") id = f.reload(id, { ...managed, enabled: false });

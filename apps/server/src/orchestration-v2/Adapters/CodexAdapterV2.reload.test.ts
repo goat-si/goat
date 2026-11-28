@@ -603,7 +603,7 @@ describe("Codex GOAT authority reload (#1569)", () => {
               params: {
                 threadId: f.nativeThreadId,
                 cursor: null,
-                limit: 1,
+                limit: 100,
                 sortDirection: "desc",
                 itemsView: "summary",
               },
