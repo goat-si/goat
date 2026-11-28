@@ -58,6 +58,9 @@ use crate::process::{ChildProcess, StderrTail, group_rss_bytes_of};
 use crate::protocol::{self, Inbound};
 use crate::util;
 
+/// v1 `ClaudeBackgroundWorkBlocksQueryReplacementError` message (ClaudeQueryRunnerErrors.ts:66).
+const BACKGROUND_WORK_BLOCKS_REOPEN: &str = "Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again.";
+
 /// v1 `ProviderDriverKind` slug for Claude.
 pub const DRIVER: &str = "claudeAgent";
 
@@ -258,6 +261,9 @@ struct State {
     shutting_down: bool,
     /// The process is being stopped on purpose (interrupt or shutdown).
     stopping: bool,
+    /// The last turn Claude settled with its own result (a start whose write is acknowledged after
+    /// that still answers Accepted).
+    last_finished: Option<String>,
     /// The interrupt control in flight: request id and the turn it stops.
     interrupt_request: Option<(String, String)>,
     /// Why the process is going away when it is not the CLI's own doing.
@@ -380,6 +386,7 @@ async fn start_session(
             shutting_down: false,
             stopping: false,
             interrupt_request: None,
+            last_finished: None,
             exit_hint: None,
         }),
         events,
@@ -1715,6 +1722,7 @@ impl Inner {
         let done = matches!(outcome, TurnOutcome::Done) && state.lifecycle == Lifecycle::Absent;
         self.end_steers(&turn_id, steers, &mut state.steer_waiters, done, &ended);
         state.turn = None;
+        state.last_finished = Some(turn_id.clone());
         self.emit(EngineEvent::TurnFinished { turn_id, outcome });
         self.settled.notify_waiters();
     }
@@ -2026,6 +2034,16 @@ impl Inner {
             || model.effort != current_model.effort
             || model.settings != current_model.settings;
         if relaunch {
+            // v1 refuses to replace a process that runs background work
+            // (ClaudeAdapterV2.ts:8918-8926; text from ClaudeQueryRunnerErrors.ts:61-67).
+            let background = self
+                .state
+                .lock()
+                .map(|state| !state.async_subagents.is_empty())
+                .unwrap_or(false);
+            if background {
+                return Err(BACKGROUND_WORK_BLOCKS_REOPEN.to_string());
+            }
             // v1 reopens the query when its policy or model identity changes.
             self.bump_generation();
             self.kill_process().await;
@@ -2330,6 +2348,11 @@ impl EngineSession for ClaudeSession {
                 if let Some(turn) = state.turn.as_mut() {
                     turn.confirmed = true;
                 }
+                TurnStartResult::Accepted { turn_id }
+            }
+            // Claude answered and settled the turn before the write was acknowledged: its
+            // TurnFinished is already out, so the start stands.
+            Delivery::Written if state.last_finished.as_deref() == Some(turn_id.as_str()) => {
                 TurnStartResult::Accepted { turn_id }
             }
             // Written, but Claude exited before the turn could be confirmed.
@@ -2639,6 +2662,12 @@ impl EngineSession for ClaudeSession {
                 state.pinned_mode,
             )
         };
+        // Effort, thinking and fast mode are launch settings; a live process cannot take them.
+        if model.effort != current_model.effort || model.settings != current_model.settings {
+            return Err(EngineError::Unsupported(
+                "changing effort, thinking or fast mode needs a new Claude process".into(),
+            ));
+        }
         if model.api_model_id != current_model.api_model_id && !model.api_model_id.is_empty() {
             inner
                 .control(
