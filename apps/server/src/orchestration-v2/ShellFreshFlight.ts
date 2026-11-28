@@ -11,15 +11,17 @@ export const makeFreshFlight = Effect.fn("ShellFreshFlight.make")(function* <A, 
   onRegression: (minimum: number, observed: number) => E,
 ) {
   const scope = yield* Effect.scope;
-  const flights = new Map<
-    string,
-    Deferred.Deferred<{ readonly sequence: number; readonly value: A }, E>
-  >();
+  type Slot = {
+    readonly minimum: number;
+    readonly done: Deferred.Deferred<{ readonly sequence: number; readonly value: A }, E>;
+  };
+  const flights = new Map<string, Array<Slot>>();
+  let flightCount = 0;
   let closed = false;
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       closed = true;
-      const pending = [...flights.values()];
+      const pending = [...flights.values()].flatMap((slots) => slots.map((slot) => slot.done));
       flights.clear();
       return pending;
     }).pipe(
@@ -32,34 +34,42 @@ export const makeFreshFlight = Effect.fn("ShellFreshFlight.make")(function* <A, 
     build: Effect.Effect<{ readonly sequence: number; readonly value: A }, E>,
   ) {
     const minimum = yield* barrier;
-    while (true) {
-      const result = yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (closed) return yield* Effect.interrupt;
-          let done = flights.get(key);
-          if (done === undefined && flights.size >= MAX_FLIGHTS)
-            return { snapshot: yield* restore(build), owned: true };
-          let owned = false;
-          if (done === undefined) {
-            owned = true;
-            done = Deferred.makeUnsafe<{ readonly sequence: number; readonly value: A }, E>();
-            flights.set(key, done);
-            const owner = done;
-            yield* build.pipe(
-              Effect.onExit((exit) =>
-                Effect.sync(() => {
-                  if (flights.get(key) === owner) flights.delete(key);
-                }).pipe(Effect.andThen(Deferred.done(owner, exit))),
-              ),
-              Effect.forkIn(scope),
-            );
-          }
-          return { snapshot: yield* restore(Deferred.await(done)), owned };
-        }),
-      );
-      if (result.snapshot.sequence >= minimum) return result.snapshot.value;
-      if (result.owned) return yield* Effect.fail(onRegression(minimum, result.snapshot.sequence));
-    }
+    const snapshot = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        if (closed) return yield* Effect.interrupt;
+        let slot = flights.get(key)?.find((entry) => entry.minimum >= minimum);
+        if (slot === undefined && flightCount >= MAX_FLIGHTS) return yield* restore(build);
+        if (slot === undefined) {
+          slot = {
+            minimum,
+            done: Deferred.makeUnsafe<{ readonly sequence: number; readonly value: A }, E>(),
+          };
+          const slots = flights.get(key) ?? [];
+          slots.push(slot);
+          flights.set(key, slots);
+          flightCount++;
+          const owner = slot;
+          yield* build.pipe(
+            Effect.onExit((exit) =>
+              Effect.sync(() => {
+                const current = flights.get(key);
+                const index = current?.indexOf(owner) ?? -1;
+                if (current !== undefined && index >= 0) {
+                  current.splice(index, 1);
+                  flightCount--;
+                  if (current.length === 0) flights.delete(key);
+                }
+              }).pipe(Effect.andThen(Deferred.done(owner.done, exit))),
+            ),
+            Effect.forkIn(scope),
+          );
+        }
+        return yield* restore(Deferred.await(slot.done));
+      }),
+    );
+    if (snapshot.sequence < minimum)
+      return yield* Effect.fail(onRegression(minimum, snapshot.sequence));
+    return snapshot.value;
   });
   return { run };
 });

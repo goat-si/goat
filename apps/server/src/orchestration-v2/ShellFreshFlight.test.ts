@@ -34,6 +34,8 @@ it.effect("a caller arriving after a mutation does not join an older snapshot", 
     const second = yield* flight
       .run("active", barrier, build)
       .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Effect.yieldNow;
+    expect(reads).toBe(2);
     yield* Deferred.succeed(release, undefined);
     expect(yield* Fiber.join(first)).toBe(1);
     expect(yield* Fiber.join(second)).toBe(2);
