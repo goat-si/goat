@@ -1,6 +1,6 @@
 import { makeRegistryResolveWithRefresh } from "./registryResolveRefresh.ts";
 import { makeAcpRegistryIndexCache, registryLaunchIdentity } from "./registryIndexCache.ts";
-import { resolveAbsoluteLocalCommand } from "./localCommandPath.ts";
+import { isSameResolvedPath, resolveAbsoluteLocalCommand } from "./localCommandPath.ts";
 import { makeRegistryRuntimeTemp, prepareRegistryRuntimeSpawn } from "./registryRuntimeTemp.ts";
 import type * as Scope from "effect/Scope";
 import { withoutNpmPrefix, withPreferredPath } from "./managedCommandPath.ts";
@@ -919,6 +919,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       agent: AcpRegistryAgent,
       packageSpec: string,
       managerPath: string,
+      managedPrefix: string,
       environment: NodeJS.ProcessEnv,
     ) {
       const packageIdentity = parseNpxPackageSpec(packageSpec);
@@ -927,14 +928,23 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         timeout: PACKAGE_QUERY_TIMEOUT,
         truncatedOutputReason: "install_failed" as const,
       } as const;
-      const globalRoot = yield* runCommand(managerPath, ["root", "--global"], commandOptions).pipe(
-        Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)),
-      );
-      const globalPrefix = yield* runCommand(
+      const prefixArgs = ["--prefix", managedPrefix];
+      const globalRoot = yield* runCommand(
         managerPath,
-        ["prefix", "--global"],
+        ["root", "--global", ...prefixArgs],
         commandOptions,
       ).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      const globalPrefix = yield* runCommand(
+        managerPath,
+        ["prefix", "--global", ...prefixArgs],
+        commandOptions,
+      ).pipe(Effect.flatMap((output) => parsePackageManagerPath(managerPath, output)));
+      if (!(yield* isSameResolvedPath(fileSystem, path, platform, globalPrefix, managedPrefix))) {
+        return yield* new AcpRegistryError({
+          reason: "install_failed",
+          detail: `'${managerPath}' reported global prefix ${globalPrefix} instead of GOAT's managed prefix ${managedPrefix}. It may be a shim that ignores --prefix; put a real npm first on PATH.`,
+        });
+      }
       const packageRoot = path.join(globalRoot, ...packageIdentity.name.split("/"));
       const manifestPath = path.join(packageRoot, "package.json");
       const manifestInfo = yield* fileSystem.stat(manifestPath).pipe(Effect.option);
@@ -1071,7 +1081,14 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
     const discover =
       distribution === "npx"
-        ? () => discoverNpmGlobalPackage(agent, packageSpec, managerPath, packageEnvironment)
+        ? () =>
+            discoverNpmGlobalPackage(
+              agent,
+              packageSpec,
+              managerPath,
+              packageRoot,
+              packageEnvironment,
+            )
         : () => discoverUvGlobalPackage(agent, packageSpec, managerPath, packageEnvironment);
     const existing = yield* discover();
     if (Option.isSome(existing)) {
@@ -1082,11 +1099,15 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     const managerDirectory = yield* managerBinDirectory(managerPath);
     const installEnvironment = withPreferredPath(packageEnvironment, managerDirectory, platform);
     if (distribution === "npx") {
-      yield* runCommand(managerPath, ["install", "--global", packageSpec], {
-        env: installEnvironment,
-        timeout: PACKAGE_INSTALL_TIMEOUT,
-        truncatedOutputReason: "install_failed",
-      });
+      yield* runCommand(
+        managerPath,
+        ["install", "--global", packageSpec, "--prefix", packageRoot],
+        {
+          env: installEnvironment,
+          timeout: PACKAGE_INSTALL_TIMEOUT,
+          truncatedOutputReason: "install_failed",
+        },
+      );
     } else {
       yield* runCommand(managerPath, ["tool", "install", "--force", packageSpec], {
         env: installEnvironment,
@@ -1100,6 +1121,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         agent,
         packageSpec,
         managerPath,
+        packageRoot,
         packageEnvironment,
       );
       if (Option.isNone(installed)) {
