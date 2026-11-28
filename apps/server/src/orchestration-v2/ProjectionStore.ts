@@ -169,7 +169,7 @@ import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
-import { mapShellChunks, reduceShellChunks } from "./shellChunks.ts";
+import { mapShellChunks, partitionShells, reduceShellChunks } from "./shellChunks.ts";
 import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@goat/shared/mcpApp";
@@ -7083,7 +7083,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }
       const threadRows = [...rowsByThreadId.values()];
       const threadIds = [...rowsByThreadId.keys()];
-      const forkSourceIds = shellForkSourceIds(threadRows);
+      const forkSourceIds = yield* shellForkSourceIds(threadRows);
+      const activeRunIds = yield* reduceShellChunks(threadRows, Array<string>(), (ids, row) => {
+        if (row.active_run_id !== null && row.active_run_status === "running")
+          ids.push(row.active_run_id);
+      });
       const readForThreadIds = <A>(
         read: (ids: ReadonlyArray<ThreadId>) => Effect.Effect<ReadonlyArray<A>, unknown>,
         ids: ReadonlyArray<ThreadId> = threadIds,
@@ -7108,16 +7112,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           AND aggregate_kind = 'thread'
       `,
         readForThreadIds(selectShellProviderThreadRows),
-        readForThreadIds((ids) =>
-          selectShellPendingTurnItemRows(
-            ids,
-            threadRows.flatMap((row) =>
-              row.active_run_id !== null && row.active_run_status === "running"
-                ? [row.active_run_id]
-                : [],
-            ),
-          ),
-        ),
+        readForThreadIds((ids) => selectShellPendingTurnItemRows(ids, activeRunIds)),
       ]);
       return {
         targetThreadIds,
@@ -7149,7 +7144,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       let retainedProviderRows = providerThreadRows;
       let retainedPendingRows = pendingTurnItemRows;
       if (omitIdleSubagents) {
-        const selected = selectShellDecodeRows({
+        const selected = yield* selectShellDecodeRows({
           targetThreadIds,
           threadRows,
           providerThreadRows,
@@ -7157,17 +7152,33 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         });
         shellIndex = selected.shellIndex;
         const keep = selected.keep;
-        retainedRows = threadRows.filter((row) => keep.has(row.thread_id));
-        retainedProviderRows = providerThreadRows.filter(
-          (row) => row.owner_thread_id === null || keep.has(row.owner_thread_id),
+        retainedRows = yield* reduceShellChunks(
+          threadRows,
+          Array<ShellThreadRow>(),
+          (rows, row) => {
+            if (keep.has(row.thread_id)) rows.push(row);
+          },
         );
-        retainedPendingRows = pendingTurnItemRows.filter((row) => keep.has(row.thread_id));
+        retainedProviderRows = yield* reduceShellChunks(
+          providerThreadRows,
+          Array<(typeof providerThreadRows)[number]>(),
+          (rows, row) => {
+            if (row.owner_thread_id === null || keep.has(row.owner_thread_id)) rows.push(row);
+          },
+        );
+        retainedPendingRows = yield* reduceShellChunks(
+          pendingTurnItemRows,
+          Array<(typeof pendingTurnItemRows)[number]>(),
+          (rows, row) => {
+            if (keep.has(row.thread_id)) rows.push(row);
+          },
+        );
       }
-      const { runsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
+      const { runsByThreadId, itemCountsByThreadId } = yield* runMapsByThreadId({
         runRows,
         itemCountRows,
       });
-      const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
+      const shellItemCountsByThreadId = yield* shellItemCountMap(shellItemCountRows);
       const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
         yield* pendingBackgroundDataByThreadId({
           providerThreadRows: retainedProviderRows,
@@ -7207,11 +7218,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       );
 
+      const { threads, archivedThreads } = yield* partitionShells(shells);
       return {
         schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
         snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0,
-        threads: shells.filter((thread) => thread.archivedAt === null),
-        archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
+        threads,
+        archivedThreads,
         ...(shellIndex === undefined ? {} : { shellIndex }),
       };
     }, Effect.mapError(shellSnapshotReadError));
@@ -7342,7 +7354,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             }
 
             const threadIds = [...rowsByThreadId.keys()];
-            const forkSourceIds = shellForkSourceIds([...rowsByThreadId.values()]);
+            const forkSourceIds = yield* shellForkSourceIds([...rowsByThreadId.values()]);
             const [
               runRows,
               itemCountRows,
@@ -7367,11 +7379,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 ),
               ),
             ]);
-            const { runsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
+            const { runsByThreadId, itemCountsByThreadId } = yield* runMapsByThreadId({
               runRows,
               itemCountRows,
             });
-            const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
+            const shellItemCountsByThreadId = yield* shellItemCountMap(shellItemCountRows);
             const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
               yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
 

@@ -25,3 +25,15 @@ export const mapShellChunks = Effect.fnUntraced(function* <A, B, E, R>(
   }
   return results;
 });
+
+export const partitionShells = Effect.fnUntraced(function* <
+  A extends { readonly archivedAt: unknown },
+>(rows: ReadonlyArray<A>) {
+  return yield* reduceShellChunks(
+    rows,
+    { threads: Array<A>(), archivedThreads: Array<A>() },
+    (result, row) => {
+      (row.archivedAt === null ? result.threads : result.archivedThreads).push(row);
+    },
+  );
+});
