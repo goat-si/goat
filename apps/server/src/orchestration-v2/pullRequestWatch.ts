@@ -98,6 +98,15 @@ const remarkMode = (remark: PullRequestComment, policy: PullRequestWatchPolicy) 
  * dropped. Every change still moves the watch forward, so a held or ignored one is never
  * reported again. A conflict on a thread idle past `conflictMaxIdleDays` is dropped.
  */
+function isReviewAcknowledgement(remark: PullRequestComment): boolean {
+  return (
+    remark.author?.login.toLowerCase().replace(/\[bot\]$/, "") === "coderabbitai" &&
+    /<!-- This is an auto-generated reply by CodeRabbit -->[\s\S]*?<summary>[^\p{L}<]*Actions? performed<\/summary>\s*(?:<dl>\s*<dd>\s*<br>\s*)?(?:Full review|Review) triggered\./u.test(
+      remark.body.slice(0, 1_000),
+    )
+  );
+}
+
 export function evaluatePullRequestWatch(
   watch: ThreadPullRequestWatch,
   detail: Pick<
@@ -271,7 +280,9 @@ export function evaluatePullRequestWatch(
     );
   });
   const byMode = (mode: PullRequestWatchWakeMode) =>
-    fresh.filter((remark) => remarkMode(remark, policy) === mode);
+    fresh.filter(
+      (remark) => !isReviewAcknowledgement(remark) && remarkMode(remark, policy) === mode,
+    );
   for (const mode of ["react", "keep_as_context"] as const) {
     const told = byMode(mode);
     if (told.length > 0) sort({ kind: "remarks", remarks: told }, mode);
