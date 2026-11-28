@@ -497,4 +497,86 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
         expect(yield* afterRestart.store.update((entries) => entries)).toEqual([]);
       }),
   );
+
+  it.effect(
+    "restores the displaced compensating undo on definitive server rejection of replacement",
+    () =>
+      Effect.gen(function* () {
+        const storage = { value: null as string | null };
+        const h = yield* makeHarness({ connected: false, storage });
+        yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+        yield* h.reconnect();
+        const sent = yield* Queue.take(h.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* h.disconnect();
+
+        // Queue compensating unsettle offline, then let its first live replay fail transiently.
+        yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+        });
+        yield* h.reconnect();
+        const failedUndo = yield* Queue.take(h.requests);
+        yield* Deferred.fail(
+          failedUndo.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+
+        // Definitive server rejection of live settle restores the compensating unsettle on disk.
+        const rejectedSettle = h.commands.settle.run(h.registry, target);
+        const settleReq = yield* Queue.take(h.requests);
+        yield* Deferred.fail(settleReq.reply, new Error("Thread cannot be settled"));
+        expect((yield* Effect.promise(() => rejectedSettle))._tag).toBe("Failure");
+        expect((yield* h.store.update((e) => e)).map((e) => e.action.type)).toEqual(["unsettle"]);
+      }),
+  );
+
+  it.effect(
+    "recovers the durably persisted replacement settle across offline fallback and restart",
+    () =>
+      Effect.gen(function* () {
+        const storage = { value: null as string | null };
+        const failNextWrite = { value: false };
+        const before = yield* makeHarness({ connected: false, storage, failNextWrite });
+        yield* Effect.promise(() => before.commands.settle.run(before.registry, target));
+        yield* before.reconnect();
+        const sent = yield* Queue.take(before.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* before.disconnect();
+
+        // Queue compensating unsettle offline, then replace with settle while still offline.
+        yield* Effect.promise(() => before.commands.unsettle.run(before.registry, undo));
+        const offlineReplace = yield* Effect.promise(() =>
+          before.commands.settle.run(before.registry, target),
+        );
+        expect(offlineReplace._tag).toBe("Success");
+        const storedAfterReplace = yield* before.store.update((e) => e);
+        expect(storedAfterReplace.map((e) => e.action.type)).toEqual(["settle"]);
+
+        // Restart into a fresh runtime with the same storage: replays the replacement settle.
+        const afterRestart = yield* makeHarness({ connected: false, storage });
+        yield* afterRestart.reconnect();
+        const replayed = yield* Queue.take(afterRestart.requests);
+        expect(replayed.command).toMatchObject({
+          type: "thread.settle",
+          commandId: storedAfterReplace[0]!.commandId,
+        });
+        yield* Deferred.succeed(replayed.reply, { sequence: 2 });
+        yield* waitFor(afterRestart.registry, afterRestart.pendingSyncAtom, (s) => s.size === 0);
+      }),
+  );
 });

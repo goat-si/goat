@@ -412,27 +412,11 @@ export function createThreadTriageOutbox<R, E>(input: {
     return stored.some((entry) => entry.commandId === commandId);
   });
 
-  const forgetSupersededCompensationsEffect = Effect.fn(
-    "ThreadTriageOutbox.forgetSupersededCompensations",
-  )(function* (
-    registry: AtomRegistry.AtomRegistry,
-    environmentId: EnvironmentId,
-    threadId: ThreadId,
-    nextAction: PendingThreadTriage["action"]["type"],
-  ) {
-    const isSupersededCompensation = (entry: PendingThreadTriage) =>
-      entry.environmentId === environmentId &&
-      entry.threadId === threadId &&
-      isCompensatingAction(entry.action) &&
-      supersedesAction(nextAction, entry.action.type);
-    yield* update(registry, (stored) => {
-      const kept = stored.filter((entry) => !isSupersededCompensation(entry));
-      return kept.length === stored.length ? stored : kept;
-    });
-  });
-
   /** Queues the action on the device when its environment is not connected. */
-  function queueWhenOffline<I extends { readonly threadId: ThreadId }, CE>(
+  function queueWhenOffline<
+    I extends { readonly threadId: ThreadId; readonly commandId?: CommandId },
+    CE,
+  >(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
     toAction: (input: I) => PendingThreadTriage["action"],
   ): AtomCommand<
@@ -455,29 +439,82 @@ export function createThreadTriageOutbox<R, E>(input: {
               // Read before sending: the change is judged against what the user saw when acting.
               const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
               const thread = snapshot?.threads.find((candidate) => candidate.id === threadId);
-              // Persist removal of any superseded compensating undo BEFORE sending the live command
-              // so a crash or post-send storage failure cannot replay it after restart.
-              yield* forgetSupersededCompensationsEffect(
-                registry,
-                environmentId,
-                threadId,
-                action.type,
-              );
-              const result = yield* Effect.promise(() => command.run(registry, target));
+              const queuedAt = DateTime.nowUnsafe();
+              const applicable =
+                snapshot != null &&
+                thread !== undefined &&
+                input.apply(thread, action, queuedAt) !== thread;
+              const isSupersededCompensation = (entry: PendingThreadTriage) =>
+                entry.environmentId === environmentId &&
+                entry.threadId === threadId &&
+                isCompensatingAction(entry.action) &&
+                supersedesAction(action.type, entry.action.type);
+              // Atomically replace any superseded compensating undo with the new intent BEFORE
+              // sending so neither a crash nor an offline fallback write can lose intent or replay
+              // the superseded undo after restart.
+              let replacedCompensations: PendingThreadTriage[] = [];
+              let writeAheadEntry: PendingThreadTriage | undefined;
+              if (applicable) {
+                const random = yield* SecureRandom.SecureRandom;
+                const replacementId =
+                  target.input.commandId ?? CommandId.make(yield* random.uuidV4());
+                yield* update(registry, (stored) => {
+                  const matching = stored.filter(isSupersededCompensation);
+                  if (matching.length === 0) return stored;
+                  replacedCompensations = matching;
+                  writeAheadEntry = {
+                    environmentId,
+                    threadId,
+                    commandId: replacementId,
+                    action,
+                    queuedAt,
+                    seen: seenState(thread),
+                    attempted: true,
+                  };
+                  return [
+                    ...stored.filter(
+                      (entry) =>
+                        entry.environmentId !== environmentId ||
+                        entry.threadId !== threadId ||
+                        (!isSupersededCompensation(entry) &&
+                          !supersedesAction(action.type, entry.action.type)),
+                    ),
+                    writeAheadEntry,
+                  ];
+                });
+              }
+              const sendTarget: Target<I> =
+                writeAheadEntry === undefined
+                  ? target
+                  : {
+                      ...target,
+                      input: { ...target.input, commandId: writeAheadEntry.commandId },
+                    };
+              const result = yield* Effect.promise(() => command.run(registry, sendTarget));
               if (result._tag === "Success") {
                 // Only clear entries this action actually supersedes; unrelated compensations stay.
                 yield* forgetSupersededEffect(registry, environmentId, threadId, action.type);
                 return result;
               }
-              if (!hasUnavailableReason(result.cause)) {
+              if (writeAheadEntry !== undefined) {
+                const persistedId = writeAheadEntry.commandId;
+                if (hasUnavailableReason(result.cause) || isTransient(result.cause)) {
+                  // Replacement intent is already durably persisted from the atomic pre-send swap.
+                  triggerReplayIfLive(registry, environmentId);
+                  return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
+                }
+                // Definitive server rejection: atomically restore the displaced compensating undo.
+                yield* update(registry, (stored) =>
+                  stored.some((entry) => entry.commandId === persistedId)
+                    ? [
+                        ...stored.filter((entry) => entry.commandId !== persistedId),
+                        ...replacedCompensations,
+                      ]
+                    : stored,
+                );
                 return result;
               }
-              const queuedAt = DateTime.nowUnsafe();
-              if (
-                snapshot == null ||
-                thread === undefined ||
-                input.apply(thread, action, queuedAt) === thread
-              ) {
+              if (!hasUnavailableReason(result.cause) || !applicable) {
                 return result;
               }
               const stored = yield* queue(registry, environmentId, thread, action, queuedAt).pipe(
