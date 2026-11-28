@@ -42,8 +42,16 @@ pub struct SessionSpec {
     pub process_generation: u64,
     /// Text GOAT adds to the engine's own instructions (bot brief, GOAT rules). None = nothing.
     pub instructions: Option<Instructions>,
+    /// The provider instance this session runs as: its launch settings and its private home.
+    /// None = the driver's defaults (its CLI on PATH, the shared home).
+    pub instance: Option<ProviderTarget>,
+}
+
+impl SessionSpec {
     /// How to launch the engine binary. None = the driver's default (its CLI on PATH).
-    pub launch: Option<LaunchSpec>,
+    pub fn launch(&self) -> Option<&LaunchSpec> {
+        self.instance.as_ref()?.launch.as_ref()
+    }
 }
 
 /// Instructions GOAT injects. Each driver maps them to its engine's mechanism (Claude
@@ -329,6 +337,16 @@ pub trait EngineFactory: Send + Sync + 'static {
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
         Err(EngineError::Unsupported("probe".into()))
     }
+    /// [Self::probe] for one provider instance (its launch settings and home: a second
+    /// account's sign-in state differs from the first). The host probes every instance through
+    /// this, the default one included. Default: [Self::probe].
+    async fn probe_instance(
+        &self,
+        target: &ProviderTarget,
+    ) -> Result<ProviderProbeResult, EngineError> {
+        let _ = target;
+        self.probe().await
+    }
 
     // Provider sign-in and install (v1 providerAuth.* / providerInstall.*, provider wire). The
     // driver owns the provider-specific steps; the host routes commands, shows the latest state
@@ -395,12 +413,39 @@ pub trait EngineFactory: Send + Sync + 'static {
     }
 }
 
-/// The provider instance a sign-in is for: several instances can share one driver kind, each
-/// with its own binary and environment (e.g. its `CODEX_HOME`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One provider instance, as a session, probe or sign-in runs it: several instances can share
+/// one driver kind, each with its own binary, environment and home (v1 provider instances).
+///
+/// `home` is a private folder the host owns for this instance
+/// (`<dataDir>/provider-homes/<instanceId>`, mode 0700, created by the host before it hands the
+/// target over). The driver lays out its own files in it (Codex: v1's auth overlay shadow
+/// home, CodexHomeLayout.ts) and points its CLI there. None = the driver's shared home (the
+/// default instance, whose id is the driver kind). `shared_home` is the shared home a person
+/// set for the instance (v1 provider settings `homePath`); None = the driver's default (e.g.
+/// `~/.codex`).
+///
+/// Lifetime: turning an instance off or removing it never deletes its home; its credentials
+/// stay until the person signs out (`auth_logout`), as in v1. Home paths are never written to
+/// goat.jsonl, tracing or the providers frame: `Debug` prints whether they are set, not the
+/// paths, and the launch environment's keys only.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderTarget {
     pub instance_id: ProviderInstanceId,
     pub launch: Option<LaunchSpec>,
+    pub home: Option<PathBuf>,
+    pub shared_home: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for ProviderTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let set = |p: &Option<PathBuf>| if p.is_some() { "<set>" } else { "<none>" };
+        f.debug_struct("ProviderTarget")
+            .field("instance_id", &self.instance_id)
+            .field("launch", &self.launch)
+            .field("home", &set(&self.home))
+            .field("shared_home", &set(&self.shared_home))
+            .finish()
+    }
 }
 
 /// Controls one engine process.
@@ -474,6 +519,8 @@ mod launch_spec_tests {
         let target = ProviderTarget {
             instance_id: "codex".into(),
             launch: Some(spec.clone()),
+            home: Some("/data/provider-homes/codex-2".into()),
+            shared_home: Some("/Users/someone/.codex-work".into()),
         };
         for printed in [
             format!("{spec:?}"),
@@ -483,6 +530,10 @@ mod launch_spec_tests {
             assert!(!printed.contains("sk-SECRET-VALUE"), "{printed}");
             assert!(printed.contains("OPENAI_API_KEY"), "{printed}");
             assert!(printed.contains("/usr/local/bin/codex"), "{printed}");
+        }
+        for printed in [format!("{target:?}"), format!("{target:#?}")] {
+            assert!(!printed.contains("provider-homes"), "{printed}");
+            assert!(!printed.contains(".codex-work"), "{printed}");
         }
     }
 }

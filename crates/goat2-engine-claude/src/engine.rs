@@ -352,7 +352,7 @@ async fn start_session(
     spec: SessionSpec,
 ) -> Result<EngineHandle, EngineError> {
     let mut launch = options.launch.clone();
-    if let Some(spec_launch) = &spec.launch {
+    if let Some(spec_launch) = spec.launch() {
         if let Some(binary) = &spec_launch.binary {
             launch.binary = binary.clone();
         }

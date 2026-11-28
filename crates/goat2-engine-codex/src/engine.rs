@@ -142,12 +142,11 @@ pub(crate) fn base_launch(options: &CodexEngineOptions, program: &Path, cwd: Pat
 /// arguments, environment) on top.
 fn launch_for(options: &CodexEngineOptions, spec: &SessionSpec) -> Launch {
     let program = spec
-        .launch
-        .as_ref()
+        .launch()
         .and_then(|l| l.binary.clone())
         .unwrap_or_else(|| options.program.clone());
     let mut launch = base_launch(options, &program, PathBuf::from(&spec.engine.cwd));
-    if let Some(host) = &spec.launch {
+    if let Some(host) = spec.launch() {
         launch.args.extend(host.args.iter().map(OsString::from));
         launch.env_set.extend(
             host.env

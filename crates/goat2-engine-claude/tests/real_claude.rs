@@ -21,7 +21,7 @@ async fn real_claude_answers_one_turn() {
         options.launch.env.push(("CLAUDE_CONFIG_DIR".into(), dir));
     }
     let mut spec = run.spec("haiku", RuntimeMode::ApprovalRequired, None);
-    spec.launch = None;
+    spec.instance = None;
     // No GOAT MCP server is listening in this test.
     spec.mcp.url = String::new();
     let mut handle = ClaudeEngineFactory::new(options)
