@@ -256,6 +256,8 @@ struct State {
     /// Background subagents, kept past their turn until `task_notification` or exit
     /// (v1 `sessionSubagentsByTaskId`, `ClaudeAdapterV2.ts:2572-2574`).
     async_subagents: HashMap<String, BackgroundSubagent>,
+    /// Background shell commands Claude runs (v1 local_bash roster, ClaudeBackgroundTasks.ts).
+    background_commands: std::collections::BTreeSet<String>,
     ordinal: u32,
     exited: bool,
     shutting_down: bool,
@@ -381,6 +383,7 @@ async fn start_session(
             lifecycle: Lifecycle::Unknown,
             tasks: HashMap::new(),
             async_subagents: HashMap::new(),
+            background_commands: std::collections::BTreeSet::new(),
             ordinal: 0,
             exited: false,
             shutting_down: false,
@@ -579,6 +582,7 @@ impl Inner {
                     state.pinned_mode = folds.permission_mode;
                     state.model = model.clone();
                     state.exited = false;
+                    state.background_commands.clear();
                     state.stopping = false;
                     state.exit_hint = None;
                     true
@@ -775,6 +779,8 @@ impl Inner {
             return None;
         }
         state.exited = true;
+        // Background commands die with the process.
+        state.background_commands.clear();
         let reason = if state.shutting_down {
             "shutdown".to_string()
         } else {
@@ -1220,6 +1226,7 @@ impl Inner {
             turn.absorbed_result = false;
             turn.held_result = None;
         }
+        self.track_background_commands(state, subtype, message);
         match subtype {
             "task_started" | "task_progress" | "task_updated" | "task_notification" => {
                 self.on_task(state, subtype, message)
@@ -1250,6 +1257,41 @@ impl Inner {
                     },
                 );
                 self.complete(state, &turn_id, item, Some(&id));
+            }
+            _ => {}
+        }
+    }
+
+    /// v1 applyBackgroundTaskRosterMessage (ClaudeAdapterV2.ts:6350-6440) for the opaque kind
+    /// (`local_bash`, ClaudeBackgroundTasks.ts:6-13): a started task joins the roster unless it is
+    /// explicitly foreground, a notification removes it, `background_tasks_changed` replaces it.
+    fn track_background_commands(&self, state: &mut State, subtype: &str, message: &Value) {
+        let is_command =
+            |value: &Value| value.get("task_type").and_then(Value::as_str) == Some("local_bash");
+        match subtype {
+            "task_started" if is_command(message) => {
+                if message.get("is_backgrounded").and_then(Value::as_bool) == Some(false) {
+                    return;
+                }
+                if let Some(task_id) = protocol::str_field(message, "task_id") {
+                    state.background_commands.insert(task_id);
+                }
+            }
+            "task_notification" => {
+                if let Some(task_id) = protocol::str_field(message, "task_id") {
+                    state.background_commands.remove(&task_id);
+                }
+            }
+            "background_tasks_changed" => {
+                let Some(tasks) = message.get("tasks").and_then(Value::as_array) else {
+                    return;
+                };
+                state.background_commands = tasks
+                    .iter()
+                    .filter(|task| is_command(task))
+                    .filter_map(|task| protocol::str_field(task, "task_id"))
+                    .filter(|id| !id.is_empty())
+                    .collect();
             }
             _ => {}
         }
@@ -2039,7 +2081,9 @@ impl Inner {
             let background = self
                 .state
                 .lock()
-                .map(|state| !state.async_subagents.is_empty())
+                .map(|state| {
+                    !state.async_subagents.is_empty() || !state.background_commands.is_empty()
+                })
                 .unwrap_or(false);
             if background {
                 return Err(BACKGROUND_WORK_BLOCKS_REOPEN.to_string());
