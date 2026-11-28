@@ -439,8 +439,9 @@ impl Shared {
                     Some(read) => {
                         let _ = match read.response {
                             Ok(value) => responder.respond(value),
-                            Err((code, message)) => responder
-                                .respond_with_error(agent_client_protocol::Error::new(code, message)),
+                            Err((code, message)) => responder.respond_with_error(
+                                agent_client_protocol::Error::new(code, message),
+                            ),
                         };
                         for event in read.events {
                             self.on_flavor_event(event);
@@ -1065,7 +1066,8 @@ impl Shared {
                     }
                 }
             }
-            self.state.lock().expect("state").model_selection = Some(settings.model_selection.clone());
+            self.state.lock().expect("state").model_selection =
+                Some(settings.model_selection.clone());
         }
         Ok(())
     }
