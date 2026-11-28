@@ -10,6 +10,7 @@ export interface MuseHostOptions {
   env?: NodeJS.ProcessEnv;
   fullAccess?: boolean;
   timeoutMs?: number;
+  readOnly?: boolean;
 }
 
 type MuseSdk = { spawnMspConnection(options: SpawnMspConnectionOptions): MspHandshake };
@@ -32,7 +33,7 @@ export async function createMuseHost(options: MuseHostOptions): Promise<{
   const sdk = await loadSdk<MuseSdk>("muse", "@muse-code/sdk");
   const handshake = sdk.spawnMspConnection({
     command: options.binary,
-    args: [...(options.args ?? []), ...museServeArgs(options.fullAccess === true)],
+    args: [...(options.args ?? []), ...(options.readOnly ? ["serve", "--disable-shell", "--disable-write", "--no-session-log"] : museServeArgs(options.fullAccess === true))],
     ...(options.cwd ? { cwd: options.cwd } : {}),
     env: museEnvironment(options.env ?? process.env),
     shutdownTimeoutMs: 10_000,
@@ -48,7 +49,7 @@ export async function createMuseHost(options: MuseHostOptions): Promise<{
     const host = await Promise.race([
       handshake.initialize({
         clientInfo: { name: "t3_code", title: "T3 Code", version: "1" },
-        capabilities: { requestedCapabilities: ["sessionMcp"] },
+        capabilities: { requestedCapabilities: options.readOnly ? [] : ["sessionMcp"] },
       }),
       deadline,
     ]);
