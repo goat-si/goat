@@ -412,13 +412,13 @@
                     <div style={{ boxSizing: 'border-box', color: '#5D5D5D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '12px', lineHeight: '16px', textAlign: 'center' }}>
                       Routine On PR opened ran · 3:02 PM
                     </div>
-                    <div style={{ boxSizing: 'border-box', maxWidth: '680px', paddingBlock: '2px', paddingInline: '4px' }}>
-                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '16px', lineHeight: '26px' }}>
+                    <div style={{ alignSelf: 'start', backgroundColor: '#F0F0F0', borderRadius: '18px', boxSizing: 'border-box', maxWidth: '560px', paddingBlock: '9px', paddingInline: '14px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#0D0D0D', fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: '15px', lineHeight: '23px' }}>
                         opencodex #7712 리뷰 끝났어요. 계정별로 Antigravity 모델 목록을 거르는 PR이고 테스트 81개 모두 통과했어요. 하나 걸리는 건, 계정 목록을 못 불러오면 빈 목록이 보여요.
                       </div>
                     </div>
-                    <div style={{ borderBottomColor: '#ECECEC99', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', paddingBottom: '8px', paddingTop: '4px' }}>
-                      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', paddingInline: '4px' }}>
+                    <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
+                      <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: 0, gap: '6px', height: '24px', justifyContent: 'center', paddingInline: '4px' }}>
                         <svg width="12" height="12" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
                           <path d="m9 18 6-6-6-6" fill="none" stroke="#5D5D5D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
@@ -427,7 +427,7 @@
                         </div>
                       </div>
                     </div>
-                    <div style={{ backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', paddingBlock: '14px', paddingInline: '16px' }}>
+                    <div style={{ alignSelf: 'start', backgroundColor: '#FFFFFF', borderRadius: '16px', boxShadow: '#00000014 0px 0px 0px 1px, #0000000D 0px 1px 2px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px', maxWidth: '560px', paddingBlock: '14px', paddingInline: '16px', width: '100%' }}>
                       <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
                         <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
                           <circle cx="12" cy="12" r="10" fill="none" stroke="#0D0D0D" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />

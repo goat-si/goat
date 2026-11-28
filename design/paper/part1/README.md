@@ -50,3 +50,15 @@ bottom and right edges of the window: no 8px bottom/right inset; the workspace k
 and has **no bottom or right border line**: borders are top + left only, so the bottom-left curve ends cleanly at the
 window's bottom edge (owner correction ~22:35 KST). All desktop boards were changed and the bot home
 boards re-exported.
+
+**Bot chat fixes from Grok Bot hands-on (owner, 2026-11-28 ~23:00 KST, Grok Bot 1.3.x desktop).** Applied to every bot
+home board:
+- Bot replies sit in a gray bubble (`#F0F0F0`, radius 18, 9/14 padding, max 560px, 15/23 text), as the PRD bot-reply
+  rule says ("말풍선 하나"); before, bot text was unbubbled like a thread transcript. User messages stay a dark pill on the right.
+- The composer had an empty 28px placeholder where the send button belongs; it is now a black round send button with an
+  up arrow (Grok: black circle, arrow up).
+- The task row ("Review #7712 · worked for 4m 12s") is a centered quiet event line like Grok's "Messaged 5 agents" /
+  "Created 3 routines", no divider; clicking it still opens the task in the side panel (25D-0).
+- The decision card is limited to the bubble column (max 560px, left-aligned).
+Not changed (open, owner to decide): Grok shows the bot name as a floating centered pill that opens details and keeps
+the details panel closed by default; GOAT 2 keeps the name in the 40px top bar and the panel open on 2R-1.
