@@ -1,0 +1,156 @@
+import type { WorktreeSetupSnapshot } from "@goat/contracts";
+import type { OpenThreadOptions } from "../../lib/sentFromNavigation";
+import {
+  type EnvironmentId,
+  type MessageId,
+  type OrchestrationV2TurnItem,
+  type RunAttemptId,
+  type ScopedThreadRef,
+  type ServerProviderSkill,
+  type RunId,
+  ThreadId,
+  type TurnItemId,
+} from "@goat/contracts";
+import type { AsyncResult, Atom } from "effect/reactivity";
+import type { CommandOutputView } from "@goat/client-runtime/state/command-output";
+import type { WorkflowOpening } from "@goat/client-runtime/state/subagentRuntime";
+import { useEffect, useRef, createContext, type MouseEvent, type ReactNode } from "react";
+import { type LegendListRef } from "@legendapp/list/react";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
+import { type ChatFileAttachment } from "../../types";
+import { type OpenTurnDiff } from "../../diffPanelStore";
+import { type ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
+import { type AssistantCitationTarget } from "./AssistantCitationSource";
+import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
+import { type TimestampFormat } from "@goat/contracts/settings";
+import type { TurnItemDetailSource } from "../../state/queries";
+import { type HandoffTimelineRun } from "./V2LifecycleRow";
+
+/**
+ * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
+ * from the environment; the guest page reads them through its own routes.
+ */
+export interface TurnItemSource {
+  readonly detail: TurnItemDetailSource;
+  readonly commandOutput: (target: {
+    readonly threadId: ThreadId;
+    readonly itemId: TurnItemId;
+  }) => Atom.Atom<AsyncResult.AsyncResult<CommandOutputView, unknown>>;
+}
+
+export interface TimelineRowSharedState {
+  citationRequest: AssistantCitationTarget | null;
+  listRef: React.RefObject<LegendListRef | null>;
+  timestampFormat: TimestampFormat;
+  routeThreadKey: string;
+  threadRef: ScopedThreadRef | null;
+  markdownCwd: string | undefined;
+  resolvedTheme: "light" | "dark";
+  workspaceRoot: string | undefined;
+  skills: ReadonlyArray<ServerProviderSkill>;
+  runs: ReadonlyArray<HandoffTimelineRun>;
+  activeThreadEnvironmentId: EnvironmentId;
+  onRevertToTurnCount: (targetTurnCount: number, messageId: MessageId) => void;
+  onUseArtifactTemplate: (template: CodexArtifactTemplate) => void;
+  onSendAppMessage: ((text: string) => Promise<void>) | undefined;
+  onAppFullscreenChange: (rowId: string, fullscreen: boolean) => void;
+  onRunShellCommand: ((command: string) => void) | undefined;
+  findActive: boolean;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+  displayThreadKey?: string;
+  onOpenTurnDiff: OpenTurnDiff | undefined;
+  /**
+   * Draws a published HTML visual. Unset, the row loads it from the environment; the guest page
+   * loads it through its own route.
+   */
+  renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
+  /** Unset, expanded rows read detail and command output from the environment. */
+  turnItemSource: TurnItemSource | undefined;
+  onOpenThread: (
+    threadId: OrchestrationV2TurnItem["threadId"],
+    options?: OpenThreadOptions,
+  ) => void;
+  workflowOpening: WorkflowOpening | null;
+  /** Absent hides "Fork from this response", as in the guest view. */
+  onForkFromRun:
+    | ((input: {
+        readonly sourceThreadId: ThreadId;
+        readonly runId: RunId;
+        /** Where the destination menu opens. */
+        readonly anchor?: { readonly x: number; readonly y: number };
+      }) => Promise<void>)
+    | undefined;
+  onRollbackCheckpoint: (input: {
+    readonly checkpointId: string;
+    readonly scopeId: string;
+  }) => void;
+  onToggleTurnFold: (runId: RunId) => void;
+  onToggleAttemptFold: (attemptId: RunAttemptId) => void;
+  onFileOpen: (attachment: ChatFileAttachment) => void;
+  onFileDownload: (attachment: ChatFileAttachment) => void;
+  openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
+  onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
+  onToggleWorkEntry: (anchorKey: string, collapsed: boolean, entryId?: string) => void;
+  onWorkEntryContentReady?: (anchorKey: string, entryId: string) => void;
+  onCancelWorktreeSetup: (() => void) | null;
+  onRetryCloudRun: ((runId: RunId) => void) | null;
+  retryableWorkspacePreparationRunIds: ReadonlySet<RunId>;
+  onRetryWorkspacePreparation: ((runId: RunId) => void) | null;
+  onWorktreeSetupWorkLocally: (() => void) | null;
+  onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
+  workGroupViewState: WorkGroupViewState;
+}
+
+export interface TimelineRowActivityState {
+  isWorking: boolean;
+  isCompacting: boolean;
+  isRevertingCheckpoint: boolean;
+  activeTurnInProgress: boolean;
+  awaitingUser: boolean;
+  isPreparingWorktree: boolean;
+  providerStartingLabel: string | null;
+  latestRunId: RunId | null;
+  /** In zen, the latest line of the open answer, shown in place of "Thinking". */
+  liveAnswerPreview: string | null;
+  backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
+}
+
+export const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
+
+export const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+
+export interface WorkGroupViewState {
+  scrollPositions: Map<string, WorkGroupScrollAnchor>;
+  expandedEntries: Set<string>;
+}
+
+/** One image the group's agent viewed; `item` is null until its URL resolves. */
+export interface WorkGroupViewedImage {
+  readonly path: string;
+  readonly item: ExpandedImageItem | null;
+}
+
+export const WorkGroupViewCtx = createContext<{
+  state: WorkGroupViewState;
+  viewedImages: ReadonlyArray<WorkGroupViewedImage>;
+  onToggleEntry: (collapsed: boolean, entryId: string) => void;
+  onContentReady?: ((entryId: string) => void) | undefined;
+} | null>(null);
+
+export type TimelineWorkEntry = Extract<
+  MessagesTimelineRow,
+  { kind: "work" }
+>["groupedEntries"][number];
+
+export type TimelineRow = MessagesTimelineRow;
+
+export function useInitialOutputReady(pending: boolean, onReady: (() => void) | undefined) {
+  const notified = useRef(false);
+  // oxlint-disable-next-line goat/react-effect-budget -- reveals a disclosure after its first async output commits
+  useEffect(() => {
+    if (!pending && !notified.current) {
+      notified.current = true;
+      onReady?.();
+    }
+  }, [pending, onReady]);
+}
