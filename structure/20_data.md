@@ -35,7 +35,7 @@ no "read every thread body" API, no log migrations (per-line `v`), index epoch n
 | `user.notified` | `send_to_user` ack / result |
 | `checkpoint` | `{card, fold}` after each run |
 
-`Fold` (contracts `log.rs`, owned by lane C, shaped with lane A): `{activeRunId, activeRunInputIds, activeRunReachedEngine, queuedInputIds, heldInputs, openRequests, runningChildIds, lastRunOutcome, counters {inputs, runs, items}}` — enough to continue from a checkpoint without the log before it (fields beyond the first cut requested by lane A 2026-11-28, pending lane C merge).
+`Fold` (contracts `log.rs`, owned by lane C, shaped with lane A): `{activeRunId, activeRunInputIds, activeRunReachedEngine, queuedInputs [{inputId, text, mode, source, attachments?}], heldInputs, openRequests, runningChildIds, lastRunOutcome, counters {inputs, runs, items}}` — enough to continue from a checkpoint without the log before it (fields beyond the first cut requested by lane A 2026-11-28, pending lane C merge).
 
 Input text over 64 KB is refused by the store; the host turns it into an attachment (`blobs/`) first. One type for `card.json` and `checkpoint`; the store never keeps its own.
 
