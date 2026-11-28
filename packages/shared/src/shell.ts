@@ -22,11 +22,19 @@ import * as Path from "effect/Path";
 import * as Semaphore from "effect/Semaphore";
 import type { ShellEnvironmentPatch } from "@goat/contracts";
 import * as HostProcess from "./HostProcess.ts";
-import { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
+import {
+  buildEnvironmentCaptureCommand,
+  buildWindowsEnvironmentCaptureCommand,
+  extractEnvironmentValue,
+  extractEnvironmentValues,
+} from "./shellEnvironmentCapture.ts";
+export {
+  buildEnvironmentCaptureCommand,
+  extractEnvironmentValues,
+} from "./shellEnvironmentCapture.ts";
 export { windowsEnvironmentValueCommand } from "./windowsTelemetryValueSelection.ts";
 import { locateXcodeGitWithXcrun } from "./macosGit.ts";
 import * as Context from "effect/Context";
-const SHELL_ENV_NAME_PATTERN = /^[A-Z0-9_]+$/;
 const WINDOWS_PATH_DELIMITER = ";";
 const POSIX_PATH_DELIMITER = ":";
 const WINDOWS_SHELL_CANDIDATES = ["pwsh.exe", "powershell.exe"] as const;
@@ -121,12 +129,25 @@ async function resolveSpawnExecutableWithNode(
     return undefined;
   }
 
-  for (const pathEntry of (readEnvPath(env) ?? "").split(pathDelimiterForPlatform(platform))) {
-    const normalizedPathEntry = normalizePathEntry(pathEntry, platform);
+  const pathValue = readEnvPath(env) ?? "";
+  for (const pathEntry of pathValue.split(pathDelimiterForPlatform(platform))) {
+    // A raw empty component of a nonempty POSIX PATH is the current directory.
+    const emptyComponent = pathEntry === "" && pathValue !== "" && platform !== "win32";
+    const normalizedPathEntry = emptyComponent ? "." : normalizePathEntry(pathEntry, platform);
     if (normalizedPathEntry.length === 0) continue;
     for (const candidate of candidates) {
       const candidatePath = path.join(normalizedPathEntry, candidate);
-      if (await isExecutable(candidatePath)) return candidatePath;
+      // Anchored before the probe: callers may launch it from another cwd or through a wrapper,
+      // and the cwd can change while the probe waits.
+      let probePath = candidatePath;
+      if (emptyComponent) {
+        try {
+          probePath = path.resolve(candidatePath);
+        } catch {
+          continue;
+        }
+      }
+      if (await isExecutable(probePath)) return probePath;
     }
   }
   return undefined;
@@ -189,131 +210,6 @@ export function readPathFromLaunchctl(
   } catch {
     return undefined;
   }
-}
-
-function envCaptureStart(name: string): string {
-  return `__GOAT_ENV_${name}_START__`;
-}
-
-function envCaptureEnd(name: string): string {
-  return `__GOAT_ENV_${name}_END__`;
-}
-
-const DEBUG_TRAP_SHELLS = new Set(["bash", "zsh", "sh", "ksh", "ksh93"]);
-const POSIX_CAPTURE_SYNTAX = { assignment: "__GOAT_PRINTENV=$(", orElse: " || " };
-const PRINTENV_CAPTURE_SYNTAX = new Map(
-  [...DEBUG_TRAP_SHELLS, "dash", "ash"].map((shell) => [shell, POSIX_CAPTURE_SYNTAX] as const),
-).set("fish", { assignment: "set -l __GOAT_PRINTENV (", orElse: "; or " });
-// Network PATH entries must be probed inside the shell's deadline, away from the desktop thread.
-const PRINTENV_LOOKUP_COMMAND = `/bin/sh -c 'command -v printenv || { [ -n "$1" ] && PATH="$1" command -v printenv; } || printf %s /usr/bin/printenv' goat`;
-
-export function buildEnvironmentCaptureCommand(
-  shell: string,
-  names: ReadonlyArray<string>,
-): string {
-  const executableName = NodePath.basename(shell).toLowerCase();
-  const isNushell = executableName.startsWith("nu");
-  const syntax = PRINTENV_CAPTURE_SYNTAX.get(executableName);
-  const supportsFallback = syntax !== undefined;
-  const inheritedPath = resolvePathEnvironmentVariable(process.env)
-    .split(POSIX_PATH_DELIMITER)
-    .filter(Boolean)
-    .map((entry) => NodePath.posix.resolve(entry))
-    .join(POSIX_PATH_DELIMITER);
-  const lookupPrintenv = `${PRINTENV_LOOKUP_COMMAND} '${inheritedPath.replaceAll("'", "'\\''")}'`;
-  const { assignment, orElse } = syntax ?? POSIX_CAPTURE_SYNTAX;
-  const resolvePrintenv = `${assignment}${lookupPrintenv}); `;
-
-  const capture = names
-    .map((name) => {
-      if (!SHELL_ENV_NAME_PATTERN.test(name)) {
-        throw new Error(`Unsupported environment variable name: ${name}`);
-      }
-
-      if (isNushell) {
-        // Without a configured conversion, Nu expands home paths only in a list PATH.
-        const defaultValue =
-          name === "PATH"
-            ? "if ($env.PATH? | describe | str starts-with 'list') { " +
-              "$env.PATH | each {|p| if ($p | str starts-with '~') { " +
-              "$p | path expand --no-symlink } else { $p } } | str join (char esep) " +
-              "} else { $env.PATH? | default '' }"
-            : `$env.${name}? | default ''`;
-        const value =
-          `if $env.${name}? == null { '' } else if ` +
-          `$env.ENV_CONVERSIONS?.${name}?.to_string? != null { ` +
-          `$env.${name} | do $env.ENV_CONVERSIONS.${name}.to_string $env.${name} ` +
-          `} else { ${defaultValue} }`;
-        return [
-          `print '${envCaptureStart(name)}'`,
-          `print (${value})`,
-          `print '${envCaptureEnd(name)}'`,
-        ].join("; ");
-      }
-
-      return [
-        `printf '%s\\n' '${envCaptureStart(name)}'`,
-        supportsFallback
-          ? `printenv ${name}${orElse}"$__GOAT_PRINTENV" ${name}${orElse}true`
-          : `printenv ${name} || true`,
-        `printf '%s\\n' '${envCaptureEnd(name)}'`,
-      ].join("; ");
-    })
-    .join("; ");
-
-  // A DEBUG trap that echoes each command (e.g. into the terminal title) would print the markers.
-  // OpenBSD ksh (also its /bin/sh) exits on `trap - DEBUG`, so try it in a subshell first.
-  const command = supportsFallback ? resolvePrintenv + capture : capture;
-  return DEBUG_TRAP_SHELLS.has(executableName)
-    ? `(trap - DEBUG) 2>/dev/null && trap - DEBUG; ${command}`
-    : command;
-}
-
-function buildWindowsEnvironmentCaptureCommand(names: ReadonlyArray<string>): string {
-  return [
-    "$ErrorActionPreference = 'Stop'",
-    // Redirected PowerShell output uses the console code page, which mangles non-ASCII paths.
-    "try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}",
-    ...names.flatMap((name) => {
-      if (!SHELL_ENV_NAME_PATTERN.test(name)) {
-        throw new Error(`Unsupported environment variable name: ${name}`);
-      }
-
-      return [
-        `Write-Output '${envCaptureStart(name)}'`,
-        windowsEnvironmentValueCommand(name),
-        "if ($null -ne $value -and $value.Length -gt 0) { Write-Output $value }",
-        `Write-Output '${envCaptureEnd(name)}'`,
-      ];
-    }),
-  ].join("; ");
-}
-
-function extractEnvironmentValue(output: string, name: string): string | undefined {
-  const startMarker = envCaptureStart(name);
-  const endMarker = envCaptureEnd(name);
-  const startIndex = output.indexOf(startMarker);
-  if (startIndex === -1) return undefined;
-
-  const valueStartIndex = startIndex + startMarker.length;
-  const endIndex = output.indexOf(endMarker, valueStartIndex);
-  if (endIndex === -1) return undefined;
-
-  const value = output
-    .slice(valueStartIndex, endIndex)
-    .replace(/^\r?\n/, "")
-    .replace(/\r?\n$/, "");
-
-  return value.length > 0 ? value : undefined;
-}
-
-export function extractEnvironmentValues(output: string, names: ReadonlyArray<string>) {
-  const environment: Partial<Record<string, string>> = {};
-  for (const name of names) {
-    const value = extractEnvironmentValue(output, name);
-    if (value !== undefined) environment[name] = value;
-  }
-  return environment;
 }
 
 export type ShellEnvironmentReader = (
@@ -632,6 +528,40 @@ const isExecutableFile = Effect.fnUntraced(function* (
   return canExecuteFile(filePath);
 });
 
+// Keep case variants: Windows can make PATH directories case-sensitive.
+function pathEntriesForPlatform(pathValue: string, platform: NodeJS.Platform): string[] {
+  const pathEntries: string[] = [];
+  const seenPathEntries = new Set<string>();
+  for (const entry of pathValue.split(pathDelimiterForPlatform(platform))) {
+    // A raw empty component of a nonempty POSIX PATH is the current directory.
+    const pathEntry =
+      entry === "" && pathValue !== "" && platform !== "win32"
+        ? "."
+        : normalizePathEntry(entry, platform);
+    if (pathEntry.length === 0 || seenPathEntries.has(pathEntry)) continue;
+
+    seenPathEntries.add(pathEntry);
+    pathEntries.push(pathEntry);
+  }
+  return pathEntries;
+}
+
+// Relative POSIX PATH entries resolve against the working directory, so caches keyed by them include it.
+// null: a relative entry is present but the working directory cannot be read, so nothing is cached.
+function pathSearchCwd(pathValue: string, platform: NodeJS.Platform): string | null | undefined {
+  if (platform === "win32") return undefined;
+  if (
+    pathEntriesForPlatform(pathValue, platform).every((entry) => NodePath.posix.isAbsolute(entry))
+  ) {
+    return undefined;
+  }
+  try {
+    return process.cwd();
+  } catch {
+    return null;
+  }
+}
+
 // Called within the traced command resolvers.
 const findOnPath = Effect.fnUntraced(function* (
   pathValue: string,
@@ -639,18 +569,20 @@ const findOnPath = Effect.fnUntraced(function* (
   platform: NodeJS.Platform,
   windowsPathExtensions: ReadonlyArray<string>,
   isLast: (match: string) => boolean,
+  // The caller's snapshot, so a cache key and the search it stores agree on the directory.
+  cwd: string | null | undefined,
 ): Effect.fn.Return<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
   const path = yield* Path.Path;
-  // Keep case variants: Windows can make PATH directories case-sensitive.
-  const pathEntries: string[] = [];
-  const seenPathEntries = new Set<string>();
-  for (const entry of pathValue.split(pathDelimiterForPlatform(platform))) {
-    const pathEntry = normalizePathEntry(entry, platform);
-    if (pathEntry.length === 0 || seenPathEntries.has(pathEntry)) continue;
+  const pathEntries = pathEntriesForPlatform(pathValue, platform);
 
-    seenPathEntries.add(pathEntry);
-    pathEntries.push(pathEntry);
-  }
+  // A match through an empty component is anchored: callers may launch it from another cwd or
+  // through a wrapper. A literal "." keeps its relative spelling; the first of the two wins, as
+  // in the deduplicated walk.
+  const anchorsCwd =
+    typeof cwd === "string" &&
+    pathValue
+      .split(pathDelimiterForPlatform(platform))
+      .find((entry) => entry === "" || entry === ".") === "";
 
   const listings = yield* PathDirectoryListings;
   const matches: string[] = [];
@@ -662,10 +594,15 @@ const findOnPath = Effect.fnUntraced(function* (
     }
     for (const candidate of commandCandidates) {
       if (listing?.names && !listing.names.has(candidate.toLowerCase())) continue;
-      const candidatePath = path.join(pathEntry, candidate);
-      if (yield* isExecutableFile(candidatePath, platform, windowsPathExtensions)) {
-        matches.push(candidatePath);
-        if (isLast(candidatePath)) return matches;
+      // Probe what is returned: other relative entries stay relative, since the cached cwd
+      // spelling goes stale when the directory is renamed.
+      const match =
+        anchorsCwd && pathEntry === "."
+          ? path.join(cwd, candidate)
+          : path.join(pathEntry, candidate);
+      if (yield* isExecutableFile(match, platform, windowsPathExtensions)) {
+        matches.push(match);
+        if (isLast(match)) return matches;
         break;
       }
     }
@@ -702,12 +639,17 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     return null;
   }
 
-  const cacheKey = [platform, pathValue, windowsPathExtensions.join(";"), command].join(
-    COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR,
-  );
+  const cwd = pathSearchCwd(pathValue, platform);
+  const cacheKey = [
+    platform,
+    pathValue,
+    windowsPathExtensions.join(";"),
+    command,
+    ...(cwd === undefined ? [] : [cwd]),
+  ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
   const cache = yield* CommandResolutionCache;
   const nowNanos = yield* Clock.monotonicTimeNanos;
-  const cached = cache.get(cacheKey);
+  const cached = cwd === null ? undefined : cache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
     return cached.resolvedPath;
   }
@@ -718,8 +660,9 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     platform,
     windowsPathExtensions,
     () => true,
+    cwd,
   );
-  cacheCommandResolution(cache, cacheKey, resolvedPath, nowNanos);
+  if (cwd !== null) cacheCommandResolution(cache, cacheKey, resolvedPath, nowNanos);
   return resolvedPath;
 });
 
@@ -742,12 +685,14 @@ export const resolveCommandPaths = Effect.fn("shell.resolveCommandPaths")(functi
   const platform = yield* HostProcess.Platform;
   const env = options.env ?? (yield* HostProcess.Environment);
   const windowsPathExtensions = platform === "win32" ? resolveWindowsPathExtensions(env) : [];
+  const pathValue = resolvePathEnvironmentVariable(env);
   return yield* findOnPath(
-    resolvePathEnvironmentVariable(env),
+    pathValue,
     resolveCommandCandidates(command, platform, windowsPathExtensions, path.extname),
     platform,
     windowsPathExtensions,
     options.until,
+    pathSearchCwd(pathValue, platform),
   );
 });
 
@@ -777,15 +722,19 @@ const resolveMacosGit = Effect.fn("shell.resolveMacosGit")(function* (
     Effect.gen(function* () {
       const locateXcodeGit = yield* XcodeGitLocation;
       const cache = yield* CommandResolutionCache;
+      const pathValue = resolvePathEnvironmentVariable(env);
+      const nowNanos = yield* Clock.currentTimeNanos;
+      // Read after the clock, so the lookup below starts in the directory the key names.
+      const cwd = pathSearchCwd(pathValue, "darwin");
       const cacheKey = [
         "xcode-git",
         String(spawnResolverCacheId(resolveExecutable)),
         String(spawnResolverCacheId(locateXcodeGit)),
-        resolvePathEnvironmentVariable(env),
+        pathValue,
         env.DEVELOPER_DIR ?? "",
+        ...(cwd === undefined ? [] : [cwd]),
       ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
-      const nowNanos = yield* Clock.currentTimeNanos;
-      const cached = cache.get(cacheKey);
+      const cached = cwd === null ? undefined : cache.get(cacheKey);
       // An Xcode update or removal deletes the binary; look again instead of failing the spawn.
       if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
         const cachedPath = cached.resolvedPath;
@@ -797,14 +746,21 @@ const resolveMacosGit = Effect.fn("shell.resolveMacosGit")(function* (
           return cachedPath ?? "git";
         }
       }
-      const onPath = yield* Effect.promise(async () => resolveExecutable("git", "darwin", env));
-      const located = onPath === MACOS_GIT_SHIM ? yield* locateXcodeGit(env) : undefined;
+      const pathGit = yield* Effect.promise(async () => resolveExecutable("git", "darwin", env));
+      const located = pathGit === MACOS_GIT_SHIM ? yield* locateXcodeGit(env) : undefined;
       const realGit =
         located !== undefined &&
         (yield* Effect.promise(async () => resolveExecutable(located, "darwin", env))) !== undefined
           ? located
-          : null;
-      cacheCommandResolution(cache, cacheKey, realGit, yield* Clock.currentTimeNanos);
+          : // A match anchored to the cwd came through an empty PATH entry, which a child would search
+            // again from its own cwd; launch the file that was checked instead of bare `git`.
+            typeof cwd === "string" && pathGit === NodePath.posix.join(cwd, "git")
+            ? pathGit
+            : null;
+      // The lookups above await and the cwd can move meanwhile; cache only what the key's cwd found.
+      if (cwd !== null && pathSearchCwd(pathValue, "darwin") === cwd) {
+        cacheCommandResolution(cache, cacheKey, realGit, yield* Clock.currentTimeNanos);
+      }
       return realGit ?? "git";
     }),
   );
