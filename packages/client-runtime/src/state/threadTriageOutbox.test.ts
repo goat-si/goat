@@ -427,31 +427,32 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
   );
 
   it.effect(
-    "exposes cleanup failure after a live settle and prevents the superseded unsettle from replaying",
+    "clears a superseded compensating unsettle before sending live settle so a restart cannot replay it",
     () =>
       Effect.gen(function* () {
+        const storage = { value: null as string | null };
         const failNextWrite = { value: false };
-        const h = yield* makeHarness({ connected: false, failNextWrite });
-        yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
-        yield* h.reconnect();
-        const sent = yield* Queue.take(h.requests);
+        const before = yield* makeHarness({ connected: false, storage, failNextWrite });
+        yield* Effect.promise(() => before.commands.settle.run(before.registry, target));
+        yield* before.reconnect();
+        const sent = yield* Queue.take(before.requests);
         yield* Deferred.fail(
           sent.reply,
           new RpcClientError.RpcClientError({
             reason: new Socket.SocketCloseError({ code: 1006 }),
           }),
         );
-        yield* h.disconnect();
+        yield* before.disconnect();
 
         // Queue compensating unsettle offline, then let its first live replay fail transiently.
-        yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
-        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+        yield* Effect.promise(() => before.commands.unsettle.run(before.registry, undo));
+        before.registry.set(before.snapshotAtom(ENVIRONMENT_ID), {
           ...SNAPSHOT,
           snapshotSequence: 2,
           threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
         });
-        yield* h.reconnect();
-        const failedUndo = yield* Queue.take(h.requests);
+        yield* before.reconnect();
+        const failedUndo = yield* Queue.take(before.requests);
         expect(failedUndo.command.type).toBe("thread.unsettle");
         yield* Deferred.fail(
           failedUndo.reply,
@@ -460,26 +461,40 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
           }),
         );
 
-        // Live settle succeeds on the server, but storage cleanup fails transiently.
+        // If pre-send storage removal fails, live settle refuses to send so disk stays consistent.
         failNextWrite.value = true;
-        const liveSettle = h.commands.settle.run(h.registry, target);
-        const settleReq = yield* Queue.take(h.requests);
+        const failedSettle = yield* Effect.promise(() =>
+          before.commands.settle.run(before.registry, target),
+        );
+        expect(failedSettle._tag).toBe("Failure");
+        expect((yield* before.store.update((e) => e)).map((e) => e.action.type)).toEqual([
+          "unsettle",
+        ]);
+
+        // Once storage accepts the pre-send removal, live settle succeeds and disk is already empty.
+        const liveSettle = before.commands.settle.run(before.registry, target);
+        const settleReq = yield* Queue.take(before.requests);
         expect(settleReq.command.type).toBe("thread.settle");
         yield* Deferred.succeed(settleReq.reply, { sequence: 3 });
-        const settleOutcome = yield* Effect.promise(() => liveSettle);
-        expect(settleOutcome._tag).toBe("Failure");
+        expect((yield* Effect.promise(() => liveSettle))._tag).toBe("Success");
 
-        // Next replay retry must NOT resend the superseded unsettle; it clears storage instead.
-        yield* TestClock.adjust("2 seconds");
-        const pin = h.commands.pin.run(h.registry, {
+        // Recreate a fresh runtime with the same stored outbox (simulating an app restart).
+        const afterRestart = yield* makeHarness({ connected: false, storage });
+        afterRestart.registry.set(afterRestart.snapshotAtom(ENVIRONMENT_ID), {
+          ...SNAPSHOT,
+          snapshotSequence: 3,
+          threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+        });
+        yield* afterRestart.reconnect();
+        const pin = afterRestart.commands.pin.run(afterRestart.registry, {
           environmentId: ENVIRONMENT_ID,
           input: { threadId: THREAD_ID, orderKey: "a" },
         });
-        const nextReq = yield* Queue.take(h.requests);
+        const nextReq = yield* Queue.take(afterRestart.requests);
         expect(nextReq.command.type).toBe("thread.pin");
         yield* Deferred.succeed(nextReq.reply, { sequence: 4 });
         yield* Effect.promise(() => pin);
-        expect(yield* h.store.update((entries) => entries)).toEqual([]);
+        expect(yield* afterRestart.store.update((entries) => entries)).toEqual([]);
       }),
   );
 });

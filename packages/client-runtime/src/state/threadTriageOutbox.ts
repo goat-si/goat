@@ -412,6 +412,25 @@ export function createThreadTriageOutbox<R, E>(input: {
     return stored.some((entry) => entry.commandId === commandId);
   });
 
+  const forgetSupersededCompensationsEffect = Effect.fn(
+    "ThreadTriageOutbox.forgetSupersededCompensations",
+  )(function* (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    nextAction: PendingThreadTriage["action"]["type"],
+  ) {
+    const isSupersededCompensation = (entry: PendingThreadTriage) =>
+      entry.environmentId === environmentId &&
+      entry.threadId === threadId &&
+      isCompensatingAction(entry.action) &&
+      supersedesAction(nextAction, entry.action.type);
+    yield* update(registry, (stored) => {
+      const kept = stored.filter((entry) => !isSupersededCompensation(entry));
+      return kept.length === stored.length ? stored : kept;
+    });
+  });
+
   /** Queues the action on the device when its environment is not connected. */
   function queueWhenOffline<I extends { readonly threadId: ThreadId }, CE>(
     command: AtomCommand<Target<I>, { readonly sequence: number }, CE>,
@@ -436,6 +455,14 @@ export function createThreadTriageOutbox<R, E>(input: {
               // Read before sending: the change is judged against what the user saw when acting.
               const snapshot = registry.get(input.sourceSnapshotAtom(environmentId));
               const thread = snapshot?.threads.find((candidate) => candidate.id === threadId);
+              // Persist removal of any superseded compensating undo BEFORE sending the live command
+              // so a crash or post-send storage failure cannot replay it after restart.
+              yield* forgetSupersededCompensationsEffect(
+                registry,
+                environmentId,
+                threadId,
+                action.type,
+              );
               const result = yield* Effect.promise(() => command.run(registry, target));
               if (result._tag === "Success") {
                 // Only clear entries this action actually supersedes; unrelated compensations stay.
