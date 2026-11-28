@@ -1,4 +1,4 @@
-import type { InteractionUpdate, Run, SDKAgent } from "@cursor/sdk";
+import type { InteractionUpdate, Run, SDKAgent, CursorAgentPlatform } from "@cursor/sdk";
 import type { EngineHost, EngineModule, EngineSession } from "../../engine.ts";
 import { HelperError, type EngineInput, type InitializeParams, type RequestAnswer, type TurnSettings } from "../../protocol.ts";
 import { containRejections } from "../../rejections.ts";
@@ -22,7 +22,37 @@ function safeHost(host: EngineHost, secrets: ReadonlyArray<string>): EngineHost 
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, /^(authorization|password|secret|api[_-]?key|access[_-]?token|bearer[_-]?token)$/i.test(k) ? "[redacted]" : redact(v)]));
     return value;
   };
-  return { now: host.now, emit: event => host.emit(redact(event) as typeof event), log: (level, message) => host.log(level, redact(message) as string), fail: reason => host.fail(redact(reason) as string) };
+  const tails = new Map<string, string>();
+  const keep = Math.max(0, ...secrets.map(secret => secret.length - 1));
+  const emitTail = (turnId: string, itemId: string) => {
+    const tail = tails.get(itemId);
+    if (tail) host.emit({ type: "text_delta", turnId, itemId, text: redact(tail) as string });
+    tails.delete(itemId);
+  };
+  return {
+    now: host.now,
+    emit: event => {
+      if (event.type === "text_delta") {
+        const text = (tails.get(event.itemId) ?? "") + event.text;
+        let cutoff = Math.max(0, text.length - keep);
+        for (const secret of secrets) {
+          if (!secret) continue;
+          const start = text.indexOf(secret, Math.max(0, cutoff - secret.length + 1));
+          if (start >= 0 && start < cutoff && start + secret.length > cutoff) cutoff = start;
+        }
+        tails.set(event.itemId, text.slice(cutoff));
+        if (cutoff) host.emit({ ...event, text: redact(text.slice(0, cutoff)) as string });
+        return;
+      }
+      if (event.type === "item_completed") emitTail(event.turnId, event.item.id);
+      if (event.type === "turn_finished") {
+        for (const itemId of tails.keys()) emitTail(event.turnId, itemId);
+      }
+      host.emit(redact(event) as typeof event);
+    },
+    log: (level, message) => host.log(level, redact(message) as string),
+    fail: reason => host.fail(redact(reason) as string),
+  };
 }
 
 type Sdk = typeof import("@cursor/sdk");
@@ -53,8 +83,11 @@ class CursorSession implements EngineSession {
   private readonly agent: SDKAgent;
   private readonly params: InitializeParams;
   private readonly host: EngineHost;
-  constructor(agent: SDKAgent, params: InitializeParams, host: EngineHost) {
-    this.agent = agent; this.params = params; this.host = host;
+  private readonly platform: CursorAgentPlatform;
+  private recoverAbandoned: boolean;
+  constructor(agent: SDKAgent, platform: CursorAgentPlatform, params: InitializeParams, host: EngineHost) {
+    this.agent = agent; this.platform = platform; this.params = params; this.host = host;
+    this.recoverAbandoned = params.resume !== null;
     this.engineRef = agent.agentId;
     this.preamble = params.resume ? "" : [params.instructions?.appendSystemPrompt, params.instructions?.firstMessagePreamble].filter(Boolean).join("\n\n");
   }
@@ -72,11 +105,29 @@ class CursorSession implements EngineSession {
     let activeRef: NonNullable<CursorSession["active"]> | undefined;
     const pending: InteractionUpdate[] = [];
     try {
-      const run = await this.agent.send(message, {
+      const send = () => this.agent.send(message, {
         model: cursorSdkModelSelection(settings.modelSelection), mode: "agent",
         ...(this.params.mcp === null ? {} : { mcpServers: cursorMcpServers(this.params)! }),
         onDelta: ({ update }) => { if (activeRef?.finalized) return; if (projection) projection.update(update); else pending.push(update); },
       });
+      let run: Run;
+      try { run = await send(); } catch (error) {
+        if (!this.recoverAbandoned || !(error instanceof Error) || !/already has active run/i.test(error.message)) throw error;
+        this.recoverAbandoned = false;
+        // v1 CursorAgentSdk.ts:633-685: find the newest abandoned local run across pages.
+        let cursor: string | undefined;
+        let abandoned: Run | undefined;
+        do {
+          const page = await this.platform.listRuns(this.engineRef, cursor === undefined ? {} : { cursor });
+          abandoned = page.items.findLast(candidate => candidate.status === "running") ?? abandoned;
+          cursor = page.nextCursor;
+        } while (cursor !== undefined);
+        if (!abandoned) throw error;
+        await this.platform.cancelRun(abandoned.id);
+        pending.length = 0;
+        run = await send();
+      }
+      this.recoverAbandoned = false;
       projection = new CursorProjection(run.id, this.engineRef, settings.modelSelection.instanceId, this.host);
       const active = { run, projection, interrupted: false, prompt: message, finalized: false };
       activeRef = active;
@@ -97,11 +148,11 @@ class CursorSession implements EngineSession {
     try {
       const result = await active.run.wait();
       if (active.finalized) return;
+      if (result.status === "finished") active.projection.fallback(result.result);
       if (active.interrupted || result.status === "cancelled") {
         this.interruptedPrompt = active.prompt;
         outcome = { type: "interrupted" };
       } else if ((result.status === "finished" || (active.projection.turnEnded && result.status === "error" && ["Agent turn stopped after repeated resume attempts made no progress", "Connection failed repeatedly"].includes(result.error?.message ?? ""))) && active.projection.transportFailure === undefined) {
-        if (result.status === "finished") active.projection.fallback(result.result);
         outcome = { type: "done" };
       } else {
         const failure = active.projection.transportFailure === undefined ? cursorFailure(result.error) : { message: "Cursor transport failed.", kind: "transport_error" as const, auth: false };
@@ -110,9 +161,11 @@ class CursorSession implements EngineSession {
         this.host.emit({ type: "item_completed", turnId: active.run.id, item: errorItem({ id, turnId: active.run.id, driver: "cursor", now: this.host.now(), status: "failed" }, failure.message, failure.kind), locator: null });
         outcome = { type: "failed", reason: failure.message };
       }
-    } catch {
+    } catch (cause) {
       if (active.finalized) return;
-      outcome = active.interrupted ? { type: "interrupted" } : { type: "failed", reason: "Cursor SDK run failed." };
+      const failure = cursorFailure(cause);
+      if (failure.auth && !active.interrupted) this.host.emit({ type: "auth_required", turnId: active.run.id, url: null, message: failure.message });
+      outcome = active.interrupted ? { type: "interrupted" } : { type: "failed", reason: failure.message };
       if (active.interrupted) this.interruptedPrompt = active.prompt;
     }
     this.finalize(active, outcome);
@@ -136,12 +189,15 @@ class CursorSession implements EngineSession {
     const active = this.active;
     if (!active || active.run.id !== turnId) return;
     active.interrupted = true;
-    await active.run.cancel();
+    try { await active.run.cancel(); } catch { throw new HelperError("transport", "Cursor could not interrupt the run."); }
     // v1 adapter.ts:1750-1772: settle even if the SDK never resolves wait after cancel.
     setTimeout(() => { if (!active.finalized) { this.interruptedPrompt = active.prompt; this.finalize(active, { type: "interrupted" }); } }, 10_000).unref();
   }
   async answerRequest(_key: string, _answer: RequestAnswer) { throw new HelperError("bad_request", "Cursor SDK has no live approval or question callbacks"); }
-  async shutdown() { if (this.active) { this.active.interrupted = true; await this.active.run.cancel(); } this.agent.close(); }
+  async shutdown() {
+    try { if (this.active) { this.active.interrupted = true; await this.active.run.cancel(); } this.agent.close(); }
+    catch { throw new HelperError("transport", "Cursor could not close the agent."); }
+  }
 }
 
 export const cursorEngine: EngineModule = {
@@ -162,8 +218,8 @@ export const cursorEngine: EngineModule = {
       const shared = await library.createAgentPlatform({ workspaceRef: params.cwd });
       const platform = new library.CursorAgentPlatform(shared.store, shared.checkpointStore, shared.eventStore, shared.eventNotifier, params.cwd);
       const agent = params.resume === null ? await platform.createAgent(options) : await platform.resumeAgent(params.resume, options);
-      const secrets = [key ?? "", params.mcp?.bearerToken ?? "", ...Object.entries(params.launch?.env ?? {}).filter(([name]) => /token|secret|password|api.?key/i.test(name)).map(([, value]) => value)];
-      return new CursorSession(agent, params, safeHost(host, secrets));
+      const secrets = [key ?? "", params.mcp?.bearerToken ?? "", ...Object.entries(process.env).filter(([name]) => /CURSOR.*(token|secret|password|api.?key)/i.test(name)).map(([, value]) => value ?? ""), ...Object.entries(params.launch?.env ?? {}).filter(([name]) => /token|secret|password|api.?key/i.test(name)).map(([, value]) => value)];
+      return new CursorSession(agent, platform, params, safeHost(host, secrets));
     } catch (error) {
       if (error instanceof HelperError) throw error;
       throw new HelperError("start_failed", "Cursor SDK could not open the agent.");
@@ -180,7 +236,7 @@ export const cursorEngine: EngineModule = {
       // v1 status.ts:255-411 / CursorSdkCatalog.ts:115-182: catalog queries do not start a turn.
       const [user, models] = await Promise.all([library.Cursor.me({ apiKey: key }), library.Cursor.models.list({ apiKey: key })]);
       const discovered = cursorCatalog(models);
-      return { installed: true, version: "1.2.0", status: discovered.length ? "ready" : "warning", auth: { status: "authenticated", type: "api-key", label: user.apiKeyName ? `Cursor API key (${user.apiKeyName})` : "Cursor API key" }, models: discovered, checkedAt };
+      return { installed: true, version: "1.2.0", status: discovered.length ? "ready" : "warning", auth: { status: "authenticated", type: "api-key", label: user.apiKeyName && !user.apiKeyName.includes(key) ? `Cursor API key (${user.apiKeyName})` : "Cursor API key" }, models: discovered, checkedAt };
     } catch (error) {
       const unauthenticated = error instanceof Error && /auth/i.test(error.name);
       return { installed: true, version: "1.2.0", status: "error", auth: { status: unauthenticated ? "unauthenticated" : "unknown" }, models: [], checkedAt, message: unauthenticated ? "Cursor SDK authentication failed." : "Cursor SDK catalog request failed." };
