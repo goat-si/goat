@@ -162,6 +162,8 @@ export interface DerivedThread {
   /** clientRequestIds seen in input.accepted (settles outbox entries). */
   acceptedClientRequestIds: Set<string>;
   lastRun: { startedAt: string; finishedAt: string | null; outcome: string | null } | null;
+  /** Waiting approval_request / user_input_request items by requestId (the choices to render). */
+  requestItems: Record<string, TurnItem>;
 }
 
 function toolStep(item: TurnItem): WorkStep | null {
@@ -190,7 +192,7 @@ function toolStep(item: TurnItem): WorkStep | null {
 export function deriveThread(view: ThreadView | undefined): DerivedThread {
   const out: DerivedThread = {
     entries: [], openRequests: [], queued: [], activeRunId: null, activeRunStartedAt: null,
-    acceptedClientRequestIds: new Set(), lastRun: null,
+    acceptedClientRequestIds: new Set(), lastRun: null, requestItems: {},
   };
   if (!view) return out;
   const requests = new Map<string, RequestOpened>();
@@ -251,6 +253,10 @@ export function deriveThread(view: ThreadView | undefined): DerivedThread {
       }
       case "item.completed": {
         const item = line.item;
+        if (item.type === "approval_request" || item.type === "user_input_request") {
+          out.requestItems[item.requestId] = item;
+          break;
+        }
         if (item.type === "assistant_message") {
           out.entries.push({ kind: "bot", key: item.id, text: item.text, at: line.at, streaming: false });
         } else {

@@ -5,13 +5,15 @@ import { ProviderGlyph } from "@goat2/provider-icons";
 import * as P from "./paper/parts.tsx";
 import { useClient, useHost, useHostContext, useThread } from "./host/HostProvider.tsx";
 import { botRows, workerThreads, type BotRowData } from "./host/store.ts";
-import type { CommandResult, RequestOpened } from "./host/wire.ts";
+import type { CommandResult, RequestOpened, RequestOutcome, TurnItem } from "./host/wire.ts";
 import { Planned, plannedProps } from "./planned/Planned.tsx";
 import { useUi, type UiStore } from "./ui-state/uiState.ts";
 import { clock, duration, shortTime } from "./lib/format.ts";
 import { Face } from "./bot-home/Face.tsx";
 import { BotFace, FaceGallery, faceFromId } from "@goat2/bot-face";
 import { NewBotDialog } from "./bot-home/NewBot.tsx";
+import { ThreadMode } from "./threads/ThreadMode.tsx";
+import { WorkerPanel } from "./bot-home/WorkerPanel.tsx";
 
 const btn = (label: string, onClick: () => void, extra: P.El = {}): P.El => ({
   role: "button", tabIndex: 0, "aria-label": label, onClick, onKeyDown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }, ...extra,
@@ -78,7 +80,7 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
       main={main ? <P.RailMainBot face={<Face bot={main} size={17} />} badge={needsCount > 0 ? <P.RailBadge count={needsCount} /> : null}
         button={btn(main.name, () => setUi({ mode: "bots", botId: main.botId, panelThreadId: null }), { "data-active": ui.mode === "bots" && ui.botId === main.botId, title: main.name })} /> : null}
       extra={railExtra}
-      home={<P.RailHome button={{ ...plannedProps("thread-list-slice"), "data-active": false }} />}
+      home={<P.RailHome button={btn("Threads", () => setUi({ mode: "threads" }), { "data-active": ui.mode === "threads", title: "Threads" })} />}
       more={<div style={{ position: "relative" }}>
         <P.RailMore button={btn("Add a bot to the rail", () => setRailSearch((v) => !v), { "data-active": railSearch, title: "Add a bot to the rail" })} />
         {railSearch && <RailSearchPopover rows={rows} railBots={ui.railBots} onAdd={(id) => setUi((s) => ({ railBots: s.railBots.includes(id) ? s.railBots : [...s.railBots, id] }))} onClose={() => setRailSearch(false)} />}
@@ -98,8 +100,15 @@ function Workspace({ ui: store, scene }: { ui: UiStore; scene: string | null }) 
 
   const sidebar = ui.sidebarOpen ? <BotSidebar rows={rows} ui={ui} setUi={setUi} onNewBot={() => setNewBot(true)} /> : null;
   const mainArea = bot
-    ? <P.Main chat={<BotChat bot={bot} />} panel={ui.panelOpen ? <Overview bot={bot} scene={scene} /> : null} />
+    ? <P.Main chat={<BotChat bot={bot} onOpenTask={(id) => setUi({ panelThreadId: id, panelOpen: true })} />} panel={!ui.panelOpen ? null : ui.panelThreadId ? <WorkerPanel threadId={ui.panelThreadId} onBack={() => setUi({ panelThreadId: null })} onOpen={() => setUi((s) => ({ mode: "threads", threadId: s.panelThreadId, panelThreadId: null }))} /> : <Overview bot={bot} scene={scene} onOpenTask={(id) => setUi({ panelThreadId: id })} />} />
     : <P.Main chat={<Disconnected />} panel={null} />;
+  if (ui.mode === "threads") {
+    return (
+      <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
+        <ThreadMode ui={ui} setUi={setUi} rail={rail} lights={desktop ? null : <P.ThreadTrafficLights />} stamp={stamp} toggleSidebar={toggleSidebar} />
+      </div>
+    );
+  }
   return (
     <div data-desktop={desktop ? "" : undefined} style={{ height: "100%" }}>
       <P.Frame top={<P.TopBar>{topLeft}{topRight}</P.TopBar>} rail={rail} sidebar={sidebar} main={mainArea} />
@@ -226,7 +235,7 @@ function RailSearchPopover({ rows, railBots, onAdd, onClose }: { rows: BotRowDat
 
 // ---------------------------------------------------------------- chat
 
-function BotChat({ bot }: { bot: BotRowData }) {
+function BotChat({ bot, onOpenTask }: { bot: BotRowData; onOpenTask: (id: string) => void }) {
   const client = useClient();
   const snap = useHost();
   const thread = useThread(bot.threadId);
@@ -246,10 +255,10 @@ function BotChat({ bot }: { bot: BotRowData }) {
     else if (e.kind === "bot") items.push(<P.BotMessage key={e.key} text={e.text} />);
     else if (e.kind === "child") {
       const worked = e.reported ? ` · worked for ${duration(e.at, e.reported.at)}` : " · working";
-      items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={{ "data-child-row": e.childThreadId }} />);
+      items.push(<P.ChildRow key={e.key} text={`${e.task}${worked}`} root={btn(e.task, () => onOpenTask(e.childThreadId), { "data-child-row": e.childThreadId })} />);
     }
   }
-  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
+  for (const r of thread.openRequests) if (!hidden.has(r.requestId)) items.push(<RequestCard key={r.requestId} threadId={bot.threadId!} request={r} item={thread.requestItems[r.requestId]} onLoadDetails={thread.hasOlder ? () => client.readOlder(bot.threadId!) : undefined} onHide={() => setHidden((s) => new Set(s).add(r.requestId))} />);
   for (const o of outbox) {
     const status = o.status === "unconfirmed" ? "Not confirmed" : o.status === "failed" ? `Not sent · ${o.error ?? ""}` : snap.connection === "open" ? "Sent" : `Sent · ${bot.name} starts when the host connects`;
     items.push(
@@ -269,6 +278,7 @@ function BotChat({ bot }: { bot: BotRowData }) {
           onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
           style={{ color: "#0D0D0D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 14, lineHeight: "20px" }} />}
         plus={plannedProps("attachments")}
+        send={btn("Send", send, { "aria-disabled": draft.trim() === "", "data-send": "" })}
         picker={<P.ModelChip glyph={<ProviderGlyph driver="codex" size={16} />} model={bot.card?.engine.modelSelection.model ?? "gpt-6.1-sol"} button={plannedProps("runtime-picker-change")} />} />}
     />
   );
@@ -282,27 +292,92 @@ function UserBubble({ text }: { text: string }) {
   return <P.SentMessage text={text} face={null} status={null} actions={null} />;
 }
 
-function RequestCard({ threadId, request, onHide }: { threadId: string; request: RequestOpened; onHide: () => void }) {
+export function RequestCard({ threadId, request, item, onHide, onLoadDetails }: { threadId: string; request: RequestOpened; item?: TurnItem | undefined; onHide: () => void; onLoadDetails?: (() => void) | undefined }) {
   const client = useClient();
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string[]>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
   const [title, ...rest] = request.summary.split("\n");
-  const answer = async (optionId: string) => {
-    setPending(optionId); setError(null);
-    const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, outcome: "answered", optionId });
+  const inFlight = useRef(false);
+  const resolve = async (key: string, body: { outcome: RequestOutcome; optionId?: string; text?: string; answers?: Record<string, string | string[]> }) => {
+    // One answer at a time: conflicting outcomes cannot be sent while the first is pending.
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(key); setError(null);
+    const r: CommandResult = await client.command({ type: "resolve_request", threadId, requestId: request.requestId, ...body });
+    inFlight.current = false;
     setPending(null);
     if (!r.ok) setError(r.error?.message ?? "The host did not take this answer.");
   };
-  const options = request.kind === "decision" ? request.options ?? [] : [];
-  const buttons = options.length > 0
-    ? options.map((o, i) => {
-      const props = btn(o.label, () => void answer(o.id), { "aria-busy": pending === o.id, title: o.consequence ?? o.label, "data-option": o.id });
-      return i === 0 ? <P.DecisionPrimary key={o.id} label={o.label} button={props} /> : <P.DecisionSecondary key={o.id} label={o.label} button={props} />;
-    })
-    : [<P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />, <Planned key="p" id="inbox" style={{ alignSelf: "center" }} />];
+  const action = (key: string, label: string, primary: boolean, body: Parameters<typeof resolve>[1], hint?: string, disabledIn = false) => {
+    const disabled = disabledIn || pending !== null;
+    const props = disabled ? { role: "button", "aria-disabled": true, "aria-label": label, title: hint ?? label, "data-option": key } as P.El
+      : btn(label, () => void resolve(key, body), { "aria-busy": pending === key, title: hint ?? label, "data-option": key });
+    return primary ? <P.DecisionPrimary key={key} label={label} button={props} /> : <P.DecisionSecondary key={key} label={label} button={props} />;
+  };
+  const notNow = <P.DecisionSecondary key="later" label="Not now" button={btn("Not now (hides it here; it still waits)", onHide)} />;
+  const text = (t: ReactNode) => <div style={{ color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px" }}>{t}</div>;
+  let buttons: ReactNode[];
+  let body: ReactNode = rest.join(" ") || null;
+  if (request.kind === "decision" && (request.options?.length ?? 0) > 0) {
+    buttons = request.options!.map((o, i) => action(o.id, o.label, o.id === (request.recommended ?? request.options![0]!.id) || (request.recommended === undefined && i === 0), { outcome: "decided", optionId: o.id }, o.consequence));
+  } else if (request.kind === "approval" && item?.type === "approval_request") {
+    // v1 CodexAdapterV2: the waiting item carries the prompt, the reason and the offered decisions.
+    body = <>{item.prompt && text(<code style={{ fontFamily: '"Geist Mono", ui-monospace, monospace', fontSize: 12 }}>{item.prompt}</code>)}{item.reason && text(item.reason)}{!item.prompt && !item.reason && body}</>;
+    const offered = item.options?.length ? item.options : [{ decision: "accept" as const, label: "Approve" }, { decision: "decline" as const, label: "Decline" }];
+    buttons = offered.map((o, i) => action(o.decision, o.label, i === 0, { outcome: o.decision }, o.warning));
+  } else if (request.kind === "question" && item?.type === "user_input_request") {
+    // The text box shows custom ?? initialAnswer; the same value is validated and sent, unchanged.
+    // v1: custom text is allowed unless allowCustomAnswer is false. Only a visible box counts.
+    const canType = (q: (typeof item.questions)[number]) => q.allowCustomAnswer !== false;
+    const typedOf = (q: (typeof item.questions)[number]) => (canType(q) ? custom[q.id] ?? q.initialAnswer ?? "" : "");
+    const missing = item.questions.filter((q) => q.required !== false && !(answers[q.id]?.length) && typedOf(q).trim() === "");
+    body = <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {item.questions.map((q) => (
+        <div key={q.id} data-question={q.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {text(<><b style={{ color: "#0D0D0D", fontWeight: 500 }}>{q.header}</b> {q.question}</>)}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {q.options.map((o) => {
+              const value = o.value ?? o.label;
+              const on = answers[q.id]?.includes(value) ?? false;
+              return <span key={value} {...(btn(o.label, () => {
+                setAnswers((a) => {
+                  const cur = a[q.id] ?? [];
+                  return { ...a, [q.id]: q.multiSelect ? (on ? cur.filter((x) => x !== value) : [...cur, value]) : (on ? [] : [value]) };
+                });
+                // Single choice: picking an option replaces a typed answer, so what is sent is what is shown.
+                if (!q.multiSelect && !on) setCustom((c) => ({ ...c, [q.id]: "" }));
+              }, { "aria-pressed": on, title: o.description }) as object)}
+                style={{ padding: "4px 10px", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: on ? "#FFFFFF" : "#0D0D0D", background: on ? "#0D0D0D" : "#FFFFFF", boxShadow: "#DFDFDF 0px 0px 0px 1px inset" }}>{o.label}</span>;
+            })}
+          </div>
+          {canType(q) && <input aria-label={`Answer: ${q.header}`} value={typedOf(q)} onChange={(e) => { const v = e.target.value; setCustom((c) => ({ ...c, [q.id]: v })); if (!q.multiSelect && v !== "") setAnswers((a) => ({ ...a, [q.id]: [] })); }}
+            style={{ all: "unset", padding: "6px 10px", border: "1px solid #ECECEC", borderRadius: 8, fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 13, lineHeight: "18px", color: "#0D0D0D" }} />}
+        </div>
+      ))}
+    </div>;
+    const payload: Record<string, string | string[]> = {};
+    for (const q of item.questions) {
+      const picked = answers[q.id] ?? [];
+      const typed = typedOf(q);
+      const all = typed.trim() !== "" ? [...picked, typed] : picked;
+      if (all.length) payload[q.id] = q.multiSelect ? all : all[0]!;
+    }
+    buttons = [action("answered", "Answer", true, { outcome: "answered", answers: payload }, missing.length ? "Answer the required questions first" : undefined, missing.length > 0), notNow];
+  } else if (request.kind === "resend") {
+    buttons = [action("resend", "Resend", true, { outcome: "resend" }, "Send the message again"), action("dropped", "Drop", false, { outcome: "dropped" })];
+  } else if (request.kind === "approval" || request.kind === "question") {
+    // Fail closed: without the engine's waiting item we do not know the offered choices.
+    body = <>{body}{text(onLoadDetails ? "The details are in an earlier part of this thread." : "Waiting for the details of this request from the host.")}</>;
+    buttons = onLoadDetails ? [<P.DecisionSecondary key="load" label="Load details" button={btn("Load details", onLoadDetails, { "data-option": "load" })} />, notNow] : [notNow];
+  } else {
+    body = body ?? "Signing in from here is not built yet.";
+    buttons = [notNow, <Planned key="p" id="settings-accounts" style={{ alignSelf: "center" }} />];
+  }
   return (
     <div data-request={request.requestId}>
-      <P.DecisionCard title={title} body={rest.join(" ") || (options.length === 0 ? "Answering this here is not built yet." : null)} buttons={<P.DecisionButtons>{buttons}</P.DecisionButtons>} />
+      <P.DecisionCard title={title} body={body} buttons={<P.DecisionButtons>{buttons}</P.DecisionButtons>} />
       {error && <div role="alert" style={{ color: "#5D5D5D", fontFamily: '"SF Pro", system-ui, sans-serif', fontSize: 12, padding: "6px 4px" }}>{error}</div>}
     </div>
   );
@@ -310,7 +385,7 @@ function RequestCard({ threadId, request, onHide }: { threadId: string; request:
 
 // ---------------------------------------------------------------- right panel
 
-function Overview({ bot, scene }: { bot: BotRowData; scene: string | null }) {
+function Overview({ bot, scene, onOpenTask }: { bot: BotRowData; scene: string | null; onOpenTask: (id: string) => void }) {
   const snap = useHost();
   const { now } = useHostContext();
   const parent = useThread(bot.threadId);
@@ -328,7 +403,7 @@ function Overview({ bot, scene }: { bot: BotRowData; scene: string | null }) {
           {workers.map((c) => (
             <P.TaskRow key={c.id} icon={c.status === "running" ? <span data-spin="" style={{ display: "inline-flex" }}><P.TaskRunningIcon /></span> : <P.TaskDoneIcon />}
               title={c.title} meta={c.status === "running" ? "Working" : childTimes.get(c.id) ?? shortTime(c.updatedAt, now()).toLowerCase()}
-              root={{ "data-task": c.id }} />
+              root={btn(c.title, () => onOpenTask(c.id), { "data-task": c.id })} />
           ))}
         </P.PanelSectionCount>
       )}

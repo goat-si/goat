@@ -135,8 +135,8 @@ export class FakeHost implements Transport {
   }
 
   private ok(value: CommandValue = {}): Omit<CommandResult, "reqId"> { return { type: "command_result", ok: true, value }; }
-  private fail(reason: "thread_not_found" | "request_not_found" | "not_queued", message: string): Omit<CommandResult, "reqId"> {
-    const code = reason === "not_queued" ? "failed_precondition" as const : "not_found" as const;
+  private fail(reason: "thread_not_found" | "request_not_found" | "not_queued" | "invalid_request", message: string): Omit<CommandResult, "reqId"> {
+    const code = reason === "not_queued" ? "failed_precondition" as const : reason === "invalid_request" ? "invalid_request" as const : "not_found" as const;
     return { type: "command_result", ok: false, error: { code, reason, message, retryable: false } };
   }
 
@@ -157,7 +157,18 @@ export class FakeHost implements Transport {
         if (!t) return this.fail("thread_not_found", "No such thread.");
         const open = this.openRequestIds(t);
         if (!open.has(frame.requestId)) return this.fail("request_not_found", "That request is no longer open.");
-        this.append(t, { type: "request.resolved", requestId: frame.requestId, outcome: frame.outcome, ...(frame.optionId ? { optionId: frame.optionId } : {}), ...(frame.text ? { text: frame.text } : {}) });
+        // Check the answer against the waiting item's choices, as the engine would.
+        const waiting = t.lines.flatMap((l) => (l.type === "item.completed" && (l.item.type === "approval_request" || l.item.type === "user_input_request") && l.item.requestId === frame.requestId ? [l.item] : []))[0];
+        if (waiting?.type === "approval_request") {
+          const offered = waiting.options?.map((o) => o.decision) ?? ["accept", "decline"];
+          if (!offered.includes(frame.outcome as never)) return this.fail("invalid_request", "That choice was not offered.");
+        }
+        if (waiting?.type === "user_input_request") {
+          const missing = waiting.questions.filter((q) => q.required !== false && frame.answers?.[q.id] === undefined);
+          if (frame.outcome !== "answered" || missing.length) return this.fail("invalid_request", "Answer the required questions.");
+        }
+        this.append(t, { type: "request.resolved", requestId: frame.requestId, outcome: frame.outcome, ...(frame.optionId ? { optionId: frame.optionId } : {}), ...(frame.text ? { text: frame.text } : {}), ...(frame.answers ? { answers: frame.answers } : {}) });
+        if (frame.answers && typeof window !== "undefined") (window as unknown as { __goat2FakeAnswers?: unknown }).__goat2FakeAnswers = frame.answers; // tests read it
         const stillOpen = this.openRequestIds(t).size > 0;
         this.touch(t, { status: stillOpen ? "needs_you" : this.activeRun(t) ? "running" : "idle", needsYou: stillOpen ? t.card.needsYou : null });
         return this.ok({ threadId: t.card.id, requestId: frame.requestId });

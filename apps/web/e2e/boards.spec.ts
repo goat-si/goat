@@ -29,6 +29,7 @@ export async function sideBySide(page: Page, id: string) {
   await sbs.setContent(`<body style="margin:0;background:#f0f;display:flex;gap:8px"><img src="data:image/jpeg;base64,${board}" width="${w}" height="${h}"><img src="data:image/png;base64,${shot.toString("base64")}" width="${w}" height="${h}"></body>`);
   await sbs.screenshot({ path: join(out, `${id}-sbs.png`) });
   await sbs.close();
+  await page.bringToFront();
 }
 
 test("2R-1 bot home", async ({ page }) => {
@@ -111,4 +112,131 @@ test("1FKW-0 drag a row onto the tiles pins it; right-click unpins", async ({ pa
   await sideBySide(page, "1FKW-0");
   await page.locator("[data-tile=standup]").click({ button: "right" });
   await expect(page.locator("[data-bot-row=standup]")).toBeVisible();
+});
+
+test("1NEM-1 thread view", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await expect(page.getByText("Worked for 4m 12s")).toBeVisible();
+  await expect(page.getByText(/Working for/)).toBeVisible();
+  await sideBySide(page, "1NEM-1");
+});
+
+test("1N65-1 thread mode first entry", async ({ page }) => {
+  await open(page, "1N65-1");
+  await expect(page.getByText("Priority (2)")).toBeVisible();
+  await sideBySide(page, "1N65-1");
+});
+
+test("1OXX-1 queued message: edit, reorder via arrows, delete", async ({ page }) => {
+  await open(page, "1OXX-1");
+  await expect(page.getByText("Also add a regression test for the sidebar key change")).toBeVisible();
+  await sideBySide(page, "1OXX-1");
+  await page.getByLabel("Edit queued message").click();
+  await page.getByLabel("Message", { exact: true }).fill("Also add a regression test (edited)");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.getByText("Also add a regression test (edited)")).toBeVisible();
+  await page.getByLabel("Delete queued message").click();
+  await expect(page.getByText("Also add a regression test (edited)")).toHaveCount(0);
+});
+
+test("thread mode: open a thread from the rail and back to bots", async ({ page }) => {
+  await open(page, "2R-1");
+  await page.getByRole("button", { name: "Threads", exact: true }).click();
+  await page.locator("[data-thread-row=t-billing]").click();
+  await expect(page.locator("[data-timeline=t-billing]")).toBeVisible();
+  await page.getByRole("button", { name: "GOAT", exact: true }).first().click();
+  await expect(page.getByLabel("Message GOAT")).toBeVisible();
+});
+
+test("25D-0 worker thread in the right panel: open, go to thread, back", async ({ page }) => {
+  await open(page, "25D-0");
+  await expect(page.locator("[data-worker-panel=t-review-7712]")).toContainText("81 passed");
+  await sideBySide(page, "25D-0");
+  await page.getByLabel("Back to Overview").click();
+  await expect(page.getByText("Tasks")).toBeVisible();
+  await page.locator("[data-task=t-review-7712]").click();
+  await page.getByLabel("Go to thread").click();
+  await expect(page.locator("[data-timeline=t-review-7712]")).toBeVisible();
+});
+
+test("thread view: reorder queued with arrow keys; edit state resets when switching threads; requests show", async ({ page }) => {
+  await open(page, "1OXX-1");
+  await page.getByLabel("Message", { exact: true }).fill("second queued");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.getByText("second queued")).toBeVisible();
+  const rows = page.getByLabel("Reorder queued message (arrow keys)");
+  await rows.first().focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.locator("[data-timeline] ~ * , body").getByText(/regression test|second queued/).first()).toHaveText("second queued");
+  await page.getByLabel("Edit queued message").first().click();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("second queued");
+  await page.locator("[data-thread-row=t-auth]").click();
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
+  await expect(page.getByText("Run the e2e suite?")).toBeVisible();
+});
+
+test("thread mode: start a thread, approve a request, workspace follows the window height", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.getByLabel("New thread").click();
+  await page.getByLabel("Message", { exact: true }).fill("Count the TODOs in api-server");
+  await page.getByLabel("Message", { exact: true }).press("Enter");
+  await expect(page.locator("[data-timeline]")).toContainText("Count the TODOs in api-server");
+  await expect(page.getByLabel("Message", { exact: true })).toHaveValue("");
+  await page.locator("[data-thread-row=t-auth]").click();
+  await page.locator("[data-option=accept]").click();
+  await expect(page.getByText("Run the e2e suite?")).toHaveCount(0);
+  for (const height of [760, 1100]) {
+    await page.setViewportSize({ width: 1440, height });
+    const bg = await page.locator("[data-workspace-bg]").boundingBox();
+    expect(Math.round(bg!.y + bg!.height)).toBe(height);
+  }
+});
+
+test("thread view: structured question answers", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.locator("[data-thread-row=t-csv]").click();
+  await expect(page.locator("[data-option=answered]")).toHaveAttribute("aria-disabled", "true");
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Date", exact: true }).click();
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Amount", exact: true }).click();
+  await expect(page.locator("[data-option=answered]")).toHaveAttribute("aria-disabled", "true");
+  await page.locator("[data-question=format]").getByRole("button", { name: "Comma", exact: true }).click();
+  await page.locator("[data-option=answered]").click();
+  await expect(page.getByText("Which columns go into the export?")).toHaveCount(0);
+});
+
+test("question answers survive resolution exactly (single-select vs custom text)", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.locator("[data-thread-row=t-csv]").click();
+  await page.locator("[data-question=columns]").getByRole("button", { name: "Customer", exact: true }).click();
+  await expect(page.getByLabel("Answer: Format")).toHaveCount(0);
+  await page.locator("[data-question=format]").getByRole("button", { name: "Semicolon", exact: true }).click();
+  await page.locator("[data-question=name]").getByRole("button", { name: "report.csv", exact: true }).click();
+  await page.getByLabel("Answer: File name").fill("  report q4.csv");
+  await expect(page.locator("[data-question=name]").getByRole("button", { name: "report.csv", exact: true })).toHaveAttribute("aria-pressed", "false");
+  await page.locator("[data-option=answered]").click();
+  await expect(page.getByText("Which columns go into the export?")).toHaveCount(0);
+  const answers = await page.evaluate(() => (window as unknown as { __goat2FakeAnswers?: unknown }).__goat2FakeAnswers);
+  expect(answers).toEqual({ columns: ["Customer"], format: "Semicolon", name: "  report q4.csv" });
+});
+
+test("thread mode guards: one thread per submit, send while running, one answer at a time", async ({ page }) => {
+  await open(page, "1NEM-1");
+  await page.getByLabel("New thread").click();
+  const box = page.getByLabel("Message", { exact: true });
+  await box.fill("Only once please");
+  await box.press("Enter");
+  await box.press("Enter");
+  await page.locator("[data-send]").click({ force: true });
+  await expect(page.locator("[data-timeline]")).toContainText("Only once please");
+  await expect(page.locator("[data-thread-row]").filter({ hasText: "Only once please" })).toHaveCount(1);
+  await page.locator("[data-thread-row=t-billing]").click();
+  await box.fill("queue this");
+  await expect(page.locator("[data-send]")).toBeVisible();
+  await expect(page.getByLabel("Stop")).toBeVisible();
+  await page.locator("[data-send]").click();
+  await expect(page.getByText("queue this")).toBeVisible();
+  await page.locator("[data-thread-row=t-auth]").click();
+  await page.locator("[data-option=accept]").dblclick();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByText("Run the e2e suite?")).toHaveCount(0);
 });
