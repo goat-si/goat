@@ -641,8 +641,14 @@ impl<F: RegistryFetch> AcpRegistryCatalog<F> {
                     RegistryError::new(
                         Reason::RunnerUnavailable,
                         format!(
-                            "ACP Registry agent {} requires '{command_override}', but it is not available on this provider instance's PATH.",
-                            agent.id
+                            "ACP Registry agent {} requires '{}', but it is not available on this provider instance's PATH.",
+                            agent.id,
+                            // v1 prints the override whole (AcpRegistrySupport.ts:1769); a home
+                            // directory is written as ~ (round 7 part 6b.2).
+                            crate::probe::support::redact_home(
+                                command_override,
+                                &crate::probe::support::probe_homes(effective)
+                            )
                         ),
                     )
                 })?
@@ -778,14 +784,16 @@ impl<F: RegistryFetch> AcpRegistryCatalog<F> {
         input: &AcpRegistryManagedBinaryUninstallInput,
         configured: &[RegistrySettings],
     ) -> Result<AcpRegistryManagedBinaryUninstallResult, RegistryError> {
-        let permit = self.permit(&input.agent_id);
-        let _held = permit.lock().await;
         if !bounded_agent_id(&input.agent_id) {
             return Err(RegistryError::new(
                 Reason::InstallFailed,
                 "ACP Registry managed binary uninstall received an invalid agent ID.",
             ));
         }
+        // Validated first, so a client string never becomes a permit key (round 7 part 6b.6; v1
+        // AcpRegistrySupport.ts:1876-1879 locks first).
+        let permit = self.permit(&input.agent_id);
+        let _held = permit.lock().await;
         let agent_id = input.agent_id.clone();
         let kept = || AcpRegistryManagedBinaryUninstallResult {
             agent_id: agent_id.clone(),
@@ -828,10 +836,14 @@ impl<F: RegistryFetch> AcpRegistryCatalog<F> {
         let resolved = self.resolve(settings, cwd, Some(base), &options).await?;
         let (spawn, runtime_temp) = self.prepare_runtime_spawn(&resolved)?;
         let local = settings.source == Source::Local;
-        // v1 adapter.ts:183-349: the agent's configured sign-in method and custom models.
+        // v1 adapter.ts:183-349: the agent's configured sign-in method and custom models. A local
+        // agent is named by its executable's file name: the id becomes the session's engine ref
+        // in the thread log, and the configured path can sit under the home directory (v1
+        // adapter.ts:213-215 uses "" and `local:${instanceId}`; round 7 part 6b.1). The agent
+        // kind reads the command itself (agents::agent_kind), so detection is unchanged.
         let flavor = RegistryAgentFlavor::new(
             if local {
-                settings.command_path.trim().to_owned()
+                super::agents::executable_name(settings.command_path.trim()).to_owned()
             } else {
                 settings.agent_id.trim().to_owned()
             },

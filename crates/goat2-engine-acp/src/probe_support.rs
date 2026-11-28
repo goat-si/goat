@@ -195,8 +195,8 @@ pub async fn spawn_and_collect(
 
 /// Kills the probe's process group when dropped before the child was reaped (a timeout drops the
 /// collecting future; `kill_on_drop` alone would leave the child's own children running).
-struct GroupGuard {
-    pgid: Option<u32>,
+pub(crate) struct GroupGuard {
+    pub(crate) pgid: Option<u32>,
 }
 
 impl GroupGuard {

@@ -227,6 +227,34 @@ impl Default for RunOptions<'_> {
     }
 }
 
+/// v1's lock timeout (AcpRegistrySupport.ts:1173-1176) names the lock path, which lives under the
+/// tools directory in the home directory: here a leading home directory is written as ~ (round 7
+/// part 6a.1).
+fn lock_timeout_message(lock: &Path, homes: &[String]) -> String {
+    format!(
+        "Timed out waiting for ACP Registry install lock {}.",
+        crate::probe::support::redact_home(&lock.display().to_string(), homes)
+    )
+}
+
+/// An extraction error as tar's own stderr would name it in v1 (AcpRegistrySupport.ts:1411-1416):
+/// entries relative to the destination. The tar crate wraps errors as ``failed to unpack `<absolute
+/// path>` ``; the destination lives under the tools directory, in the home directory, so it is cut
+/// and any other home path becomes ~ (round 7 part 6a.1).
+fn extraction_error_text(error: &io::Error, extraction: &Path) -> String {
+    let mut text = error.to_string();
+    let mut destinations = vec![extraction.display().to_string()];
+    if let Ok(real) = std::fs::canonicalize(extraction) {
+        destinations.push(real.display().to_string());
+    }
+    for destination in destinations {
+        text = text
+            .replace(&format!("{destination}{}", std::path::MAIN_SEPARATOR), "")
+            .replace(&destination, ".");
+    }
+    crate::stderr::sanitize_stderr_excerpt(&text, &crate::stderr::home_directories())
+}
+
 /// The home directories install messages hide: the host's and the install environment's.
 fn install_homes(env: Option<&Environment>) -> Vec<String> {
     match env {
@@ -267,10 +295,18 @@ pub(crate) async fn run_command(
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        // Its own process group, killed whole when this ends: on a timeout or a caller cancel
+        // (the future is dropped) and after it exited, so nothing npm or uv started keeps running
+        // or writing into the prefix (round 7 part 6a.2; v1 starts it detached and kills the group
+        // on release, @effect/platform-node-shared NodeChildProcessSpawner.js:372,384,497).
+        // Windows: the direct child only, as kill_on_drop.
+        #[cfg(unix)]
+        cmd.process_group(0);
         if let Some(env) = options.env {
             cmd.env_clear().envs(env);
         }
         let mut child = cmd.spawn().map_err(|_| could_not_run())?;
+        let _group = crate::probe::support::GroupGuard { pgid: child.id() };
         let mut stdout = child.stdout.take().ok_or_else(could_not_run)?;
         let mut stderr = child.stderr.take().ok_or_else(could_not_run)?;
         let max = options.max_stdout;
@@ -940,10 +976,7 @@ impl Installer {
         }
         Err(RegistryError::new(
             Reason::InstallFailed,
-            format!(
-                "Timed out waiting for ACP Registry install lock {}.",
-                lock.display()
-            ),
+            lock_timeout_message(lock, &crate::stderr::home_directories()),
         )
         .into())
     }
@@ -1165,7 +1198,10 @@ impl Installer {
                     } else {
                         RegistryError::new(
                             Reason::InstallFailed,
-                            format!("ACP Registry install command '{tool}' exited with code 1: {e}"),
+                            format!(
+                                "ACP Registry install command '{tool}' exited with code 1: {}",
+                                extraction_error_text(&e, &extraction)
+                            ),
                         )
                     }
                     .into()
@@ -1581,12 +1617,83 @@ mod tests {
         );
     }
 
+    /// Round 7 part 6a.1: the lock timeout writes the home directory as ~.
+    #[test]
+    fn the_lock_timeout_hides_the_home_directory() {
+        assert_eq!(
+            lock_timeout_message(
+                Path::new("/Users/alice/.goat2/acp/tools/a/1/darwin.lock"),
+                &["/Users/alice".to_owned()]
+            ),
+            "Timed out waiting for ACP Registry install lock ~/.goat2/acp/tools/a/1/darwin.lock."
+        );
+    }
+
+    /// Round 7 part 6a.2: when the install command is dropped (a timeout or a caller cancel), its
+    /// whole process group ends, the children npm or uv started included (v1 kills the detached
+    /// group on release, @effect/platform-node-shared NodeChildProcessSpawner.js:372,384,497).
+    /// The grandchild holds the write end of FIFO `held` and reports through FIFO `ready` once it
+    /// does; `held` reads to end of file only when it has died. The 10 s limit only bounds a hang.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dropping_a_command_kills_its_process_group() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ready, held) = (dir.path().join("ready"), dir.path().join("held"));
+        for fifo in [&ready, &held] {
+            let path = std::ffi::CString::new(fifo.display().to_string()).unwrap();
+            // SAFETY: a valid NUL-terminated path.
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        }
+        // The grandchild opens `held` for writing, then reports its pid on `ready` and sleeps.
+        let script = format!(
+            "sh -c 'exec 3>\"$1\"; echo $$ > \"$2\"; exec sleep 1000' sh '{}' '{}' & wait",
+            held.display(),
+            ready.display()
+        );
+        let run = tokio::spawn(async move {
+            run_command(
+                "/bin/sh",
+                &["-c".to_string(), script],
+                RunOptions {
+                    timeout: Some(Duration::from_secs(600)),
+                    ..RunOptions::default()
+                },
+            )
+            .await
+        });
+        let reader = {
+            let held = held.clone();
+            tokio::task::spawn_blocking(move || std::fs::File::open(held).unwrap())
+        };
+        let said = tokio::task::spawn_blocking(move || std::fs::read_to_string(ready).unwrap())
+            .await
+            .unwrap();
+        let pid: i32 = said.trim().parse().unwrap();
+        let mut reader = reader.await.unwrap();
+        run.abort();
+        assert!(run.await.unwrap_err().is_cancelled());
+        let gone = tokio::task::spawn_blocking(move || {
+            let mut rest = Vec::new();
+            std::io::Read::read_to_end(&mut reader, &mut rest).unwrap();
+        });
+        if tokio::time::timeout(Duration::from_secs(10), gone)
+            .await
+            .is_err()
+        {
+            // SAFETY: plain syscall; ends the grandchild so the blocked reader returns.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            panic!("the grandchild {pid} kept running after the command was dropped");
+        }
+    }
+
+    /// Round 7 part 6a.3: a command that keeps running past its timeout fails with the timeout
+    /// (`exec sleep` keeps it running; `read never` exited at once on the null stdin).
     #[cfg(unix)]
     #[tokio::test(start_paused = true)]
-    async fn run_command_timeout_kills_the_child() {
+    async fn run_command_timeout_reports_the_timeout() {
         let timed_out = run_command(
             "/bin/sh",
-            &["-c".to_string(), "read never".to_string()],
+            &["-c".to_string(), "exec sleep 1000".to_string()],
             RunOptions {
                 timeout: Some(PACKAGE_QUERY_TIMEOUT),
                 ..RunOptions::default()

@@ -423,6 +423,37 @@ async fn rejects_an_archive_with_a_traversal_entry() {
     assert!(leftovers(dir.path()).is_empty());
 }
 
+/// Round 7 part 6a.1: an extraction error names the entry relative to the destination, as tar's
+/// own stderr does in v1 (AcpRegistrySupport.ts:1411-1416); the tools directory, which lives under
+/// the home directory, stays out of the detail.
+#[tokio::test]
+async fn an_extraction_error_does_not_name_the_destination() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start().await;
+    server.route(
+        "/agent.tar.gz",
+        200,
+        tar_gz(&[("bin", b"x", 0o644), ("bin/agent", b"#!/bin/sh\n", 0o755)]),
+    );
+    server.registry(&example(json!({"binary": {"linux-x86_64": {
+        "archive": "https://registry.test/agent.tar.gz", "cmd": "bin/agent"}}})));
+    let c = catalog(dir.path(), &server, base_env());
+    let error = c.prepare(&prepare_input()).await.unwrap_err();
+    assert_eq!(error.reason, Reason::InstallFailed, "{}", error.detail);
+    let root = dir.path().display().to_string();
+    let real = std::fs::canonicalize(dir.path())
+        .unwrap()
+        .display()
+        .to_string();
+    assert!(
+        !error.detail.contains(&root) && !error.detail.contains(&real),
+        "{}",
+        error.detail
+    );
+    assert!(error.detail.contains("bin/agent"), "{}", error.detail);
+    assert!(leftovers(dir.path()).is_empty());
+}
+
 /// Final review 6 finding C1: an archive that would expand past the extraction limit is refused
 /// as invalid and leaves nothing behind (v1 extracts it whole, AcpRegistrySupport.ts:1402-1416).
 #[tokio::test]
@@ -1334,6 +1365,25 @@ async fn command_overrides_keep_registry_arguments_and_environment() {
         .detail,
         "ACP Registry agent example-agent requires 'nope', but it is not available on this provider instance's PATH."
     );
+    // Round 7 part 6b.2: a home directory in the override is written as ~.
+    let mut home_env = env.clone();
+    home_env.insert("HOME".into(), "/Users/alice".into());
+    let under_home = RegistrySettings {
+        command_path: "/Users/alice/bin/nope".into(),
+        ..settings()
+    };
+    assert_eq!(
+        c.resolve(
+            &under_home,
+            Path::new("/w"),
+            Some(&home_env),
+            &ResolveOptions::default()
+        )
+        .await
+        .unwrap_err()
+        .detail,
+        "ACP Registry agent example-agent requires '~/bin/nope', but it is not available on this provider instance's PATH."
+    );
 }
 
 #[tokio::test]
@@ -1574,6 +1624,31 @@ async fn launch_gives_antigravity_a_run_temp_directory_and_claude_its_v2_flag() 
         "1".to_owned()
     )));
     assert!(launch.flavor.command.env.iter().any(|(k, _)| k == "PATH"));
+}
+
+/// Round 7 part 6b.1: a local agent's engine ref (written to the thread log as
+/// `RunStarted.engine_ref`) names the executable, never its absolute path (v1 adapter.ts:213-215
+/// keeps the command out of the session identity).
+#[tokio::test]
+async fn a_local_agent_id_has_no_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = Server::start().await;
+    let agent = dir.path().join("my-agent");
+    executable(&agent, "#!/bin/sh\n");
+    let c = catalog(dir.path(), &server, base_env());
+    let settings = RegistrySettings {
+        source: Source::Local,
+        command_path: agent.display().to_string(),
+        ..RegistrySettings::default()
+    };
+    let launch = c.launch(&settings, dir.path(), None, true).await.unwrap();
+    let goat2_contracts::EngineDriver::AcpRegistry { agent_id } =
+        crate::flavor::AcpFlavor::engine_driver(&launch.flavor)
+    else {
+        panic!("a registry driver");
+    };
+    assert_eq!(agent_id, "my-agent");
+    assert!(!agent_id.contains('/') && !agent_id.contains(&dir.path().display().to_string()));
 }
 
 /// The host's UI bearer token (GOAT2_HOST_TOKEN) carried over from the host snapshot does not reach

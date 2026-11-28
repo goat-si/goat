@@ -18,15 +18,16 @@ use tokio::sync::Mutex;
 pub trait RegistryFetch: Send + Sync {
     async fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
 }
-/// Real HTTPS transport with v1's 30-second timeout and 1 MiB streamed limit.
+/// Real HTTPS transport with v1's 1 MiB streamed limit and its two 30-second timeouts: one for
+/// the request, one more for reading the body (AcpRegistrySupport.ts:653-690, round 7 part 6b.5).
 pub struct HttpsFetch {
     client: reqwest::Client,
 }
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 impl HttpsFetch {
     pub fn new() -> Result<Self, String> {
         Ok(Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
                 .redirect(reqwest::redirect::Policy::custom(|a| {
                     if a.url().scheme() == "https"
                         && a.url().username().is_empty()
@@ -57,28 +58,36 @@ impl RegistryFetch for HttpsFetch {
                 format!("Could not fetch ACP Registry index from {url}.")
             }
         };
-        let response = self.client.get(url).send().await.map_err(fetch_failed)?;
+        let response = tokio::time::timeout(FETCH_TIMEOUT, self.client.get(url).send())
+            .await
+            .map_err(|_| "Timed out fetching ACP Registry index.".to_owned())?
+            .map_err(fetch_failed)?;
         // Only a 2xx final response is the index; a redirect the policy stopped is not
         // (v1 `filterStatusOk`, AcpRegistrySupport.ts:647-708).
         if !response.status().is_success() {
             return Err(format!("Could not fetch ACP Registry index from {url}."));
         }
-        let mut body = Vec::new();
-        let mut stream = response.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                if e.is_timeout() {
-                    "Timed out reading ACP Registry response body.".to_owned()
-                } else {
-                    "Could not read ACP Registry response body.".to_owned()
+        let read = async {
+            let mut body = Vec::new();
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|e| {
+                    if e.is_timeout() {
+                        "Timed out reading ACP Registry response body.".to_owned()
+                    } else {
+                        "Could not read ACP Registry response body.".to_owned()
+                    }
+                })?;
+                if body.len() + chunk.len() > MAX_REGISTRY_BYTES {
+                    return Err(index_too_large());
                 }
-            })?;
-            if body.len() + chunk.len() > MAX_REGISTRY_BYTES {
-                return Err(index_too_large());
+                body.extend_from_slice(&chunk);
             }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(body)
+            Ok(body)
+        };
+        tokio::time::timeout(FETCH_TIMEOUT, read)
+            .await
+            .map_err(|_| "Timed out reading ACP Registry response body.".to_owned())?
     }
 }
 #[derive(Default)]
@@ -132,21 +141,11 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
             .ok()?;
         decode(&bytes).ok()
     }
-    fn write(&self, bytes: &[u8]) {
-        if let Some(parent) = self.path.parent() {
-            if std::fs::create_dir_all(parent).is_err() {
-                return;
-            }
-            let tmp = parent.join(format!(
-                "registry.json.{}-{}.tmp",
-                std::process::id(),
-                NEXT_TMP.fetch_add(1, Ordering::Relaxed)
-            ));
-            if std::fs::write(&tmp, bytes).is_ok() {
-                let _ = std::fs::rename(&tmp, &self.path);
-            }
-            let _ = std::fs::remove_file(tmp);
-        }
+    /// Write the cache file atomically, on the blocking pool and outside the state lock (round 7
+    /// part 6b.3; v1 registryIndexCache.ts:116-128 never holds its Ref across file I/O).
+    async fn write(&self, bytes: Vec<u8>) {
+        let path = self.path.clone();
+        let _ = tokio::task::spawn_blocking(move || write_file(&path, &bytes)).await;
     }
     /// Load a cold disk cache without claiming it is fresh.
     pub async fn load(&self) -> Result<Index, String> {
@@ -172,6 +171,23 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
         max_age_ms: Option<u64>,
         backoff_ms: Option<u64>,
     ) -> Result<(Index, bool), String> {
+        // v1 `recentRegistry` (registryIndexCache.ts:176-205) answers a fresh index, or a failure
+        // still backing off, before waiting for a fetch in progress (round 7 part 6b.4).
+        {
+            let s = self.state.lock().await;
+            let t = now();
+            if let Some(i) = &s.index {
+                if max_age_ms.is_some_and(|age| recent(s.fetched, age, t))
+                    || backoff_ms.is_some_and(|age| recent(s.failed, age, t))
+                {
+                    return Ok((i.clone(), false));
+                }
+            } else if backoff_ms.is_some_and(|age| recent(s.failed, age, t))
+                && let Some(e) = &s.error
+            {
+                return Err(e.clone());
+            }
+        }
         let (fetch_rev, attempt_rev) = {
             let s = self.state.lock().await;
             (s.fetch_rev, s.attempt_rev)
@@ -205,11 +221,19 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
                 Err(e) => Err(e),
             }
         };
+        // File I/O happens before the state lock is taken (round 7 part 6b.3).
+        let disk_fallback = match &result {
+            Ok((_, bytes)) => {
+                self.write(bytes.clone()).await;
+                None
+            }
+            Err(_) if self.state.lock().await.index.is_none() => self.disk().await,
+            Err(_) => None,
+        };
         let mut s = self.state.lock().await;
         let t = now();
         match result {
-            Ok((i, bytes)) => {
-                self.write(&bytes);
+            Ok((i, _)) => {
                 let changed = s.index.as_ref().is_some_and(|old| old != &i);
                 s.index = Some(i.clone());
                 if s.generation == generation {
@@ -222,10 +246,7 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
                 Ok((i, changed))
             }
             Err(e) => {
-                let fallback = match s.index.clone() {
-                    Some(index) => Some(index),
-                    None => self.disk().await,
-                };
+                let fallback = s.index.clone().or(disk_fallback);
                 if s.index.is_none() {
                     s.index = fallback.clone()
                 }
@@ -242,6 +263,24 @@ impl<F: RegistryFetch> RegistryIndexCache<F> {
 }
 /// Default search freshness from v1 `AcpRegistrySupport.ts:82-85`.
 pub const SEARCH_MAX_AGE_MS: u64 = 300_000;
+
+fn write_file(path: &std::path::Path, bytes: &[u8]) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let tmp = parent.join(format!(
+        "registry.json.{}-{}.tmp",
+        std::process::id(),
+        NEXT_TMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+    let _ = std::fs::remove_file(tmp);
+}
 pub type SharedRegistryCache<F> = Arc<RegistryIndexCache<F>>;
 #[cfg(test)]
 mod tests {
@@ -275,6 +314,55 @@ mod tests {
         let cold = RegistryIndexCache::new(Fake(AtomicUsize::new(1)), dir.path().into(), None);
         assert!(cold.load().await.is_ok());
         assert!(cold.refresh(None, None).await.is_ok());
+    }
+
+    /// A fetcher whose second fetch waits for `release` after announcing `started`.
+    struct Gated {
+        calls: AtomicUsize,
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+    #[async_trait]
+    impl RegistryFetch for Gated {
+        async fn fetch(&self, _: &str) -> Result<Vec<u8>, String> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) > 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+            }
+            Ok(br#"{"version":"1","agents":[]}"#.to_vec())
+        }
+    }
+
+    /// v1 `recentRegistry` (registryIndexCache.ts:176-205) checks freshness before the fetch
+    /// semaphore: a search with a fresh index does not wait behind a running fetch (round 7 part
+    /// 6b.4). The 5 s limit only bounds a hang.
+    #[tokio::test]
+    async fn a_fresh_search_does_not_wait_for_a_running_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Arc::new(RegistryIndexCache::new(
+            Gated {
+                calls: AtomicUsize::new(0),
+                started: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+            },
+            dir.path().into(),
+            None,
+        ));
+        c.refresh(None, None).await.unwrap();
+        let running = {
+            let c = Arc::clone(&c);
+            tokio::spawn(async move { c.refresh(None, None).await })
+        };
+        c.fetcher.started.notified().await;
+        let fresh = tokio::time::timeout(
+            Duration::from_secs(5),
+            c.refresh(Some(SEARCH_MAX_AGE_MS), None),
+        )
+        .await
+        .expect("the fresh search waited for the running fetch");
+        assert!(fresh.is_ok());
+        c.fetcher.release.notify_one();
+        assert!(running.await.unwrap().is_ok());
     }
 
     /// The cached index is read with the 1 MiB limit applied while reading: a cache file that
