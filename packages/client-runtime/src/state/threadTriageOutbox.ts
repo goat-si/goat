@@ -14,6 +14,7 @@ import * as Semaphore from "effect/Semaphore";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/reactivity";
 
 import {
+  type DisplacedPendingThreadTriage,
   type PendingThreadTriage,
   type PendingThreadTriages,
   type ThreadTriageOutboxStorageError,
@@ -103,6 +104,18 @@ export function createThreadTriageOutbox<R, E>(input: {
   const entriesAtom = Atom.make<PendingThreadTriages>([]).pipe(Atom.keepAlive);
   // Command IDs already superseded by a live server write whose storage cleanup has not finished.
   const supersededCommandIds = new Set<CommandId>();
+  // Write-ahead replacement IDs already definitively rejected whose restore write has not finished.
+  const rejectedReplacementIds = new Set<CommandId>();
+  const flattenDisplaced = (
+    entries: ReadonlyArray<PendingThreadTriage>,
+  ): ReadonlyArray<DisplacedPendingThreadTriage> =>
+    entries.flatMap((entry) => {
+      if (entry.displaced !== undefined && entry.displaced.length > 0) {
+        return entry.displaced;
+      }
+      const { displaced: _displaced, ...rest } = entry;
+      return [rest];
+    });
   // Storage is shared with other tabs, so memory takes each result in the order storage gave it.
   const order = Semaphore.makeUnsafe(1);
   // Per-thread lock serializing replay check+send against queue persistence and cancel/undo.
@@ -227,7 +240,27 @@ export function createThreadTriageOutbox<R, E>(input: {
       }
       return changed ? kept : stored;
     });
-    for (const id of markedIds) supersededCommandIds.delete(id);
+    for (const id of markedIds) {
+      supersededCommandIds.delete(id);
+      rejectedReplacementIds.delete(id);
+    }
+  });
+
+  const restoreDisplacedEffect = Effect.fn("ThreadTriageOutbox.restoreDisplaced")(function* (
+    registry: AtomRegistry.AtomRegistry,
+    commandId: CommandId,
+  ) {
+    let restored = false;
+    yield* update(registry, (stored) => {
+      const index = stored.findIndex((entry) => entry.commandId === commandId);
+      const target = stored[index];
+      if (target === undefined) return stored;
+      const displaced = target.displaced ?? [];
+      restored = displaced.length > 0;
+      return [...stored.slice(0, index), ...displaced, ...stored.slice(index + 1)];
+    });
+    rejectedReplacementIds.delete(commandId);
+    return restored;
   });
 
   const isCompensatingAction = (action: PendingThreadTriage["action"]) =>
@@ -240,9 +273,10 @@ export function createThreadTriageOutbox<R, E>(input: {
   ) {
     while (registry.get(input.shellStatusAtom(environmentId)) === "live") {
       let hadTransientFailure = false;
+      let restoredDisplaced = false;
       for (const entry of yield* read(registry)) {
         if (entry.environmentId !== environmentId) continue;
-        const transient = yield* threadLock(environmentId, entry.threadId).withPermit(
+        const step = yield* threadLock(environmentId, entry.threadId).withPermit(
           Effect.gen(function* () {
             // Read again under the per-thread lock: undo or another tab may have cancelled or
             // replaced this entry while an earlier change was being sent.
@@ -251,10 +285,17 @@ export function createThreadTriageOutbox<R, E>(input: {
               (candidate) => candidate.commandId === entry.commandId,
             );
             const current = currentIndex === -1 ? undefined : stored[currentIndex];
-            if (current === undefined) return false;
+            if (current === undefined) return "done" as const;
             if (supersededCommandIds.has(current.commandId)) {
               yield* forgetEffect(registry, current.commandId);
-              return false;
+              return "done" as const;
+            }
+            if (rejectedReplacementIds.has(current.commandId)) {
+              const restored = yield* restoreDisplacedEffect(registry, current.commandId).pipe(
+                Effect.exit,
+              );
+              if (restored._tag === "Failure") return "transient" as const;
+              return restored.value ? ("restored" as const) : ("done" as const);
             }
             // A follow-up action queued behind a compensating undo waits until that undo finishes.
             const blockedByCompensation = stored.some(
@@ -264,7 +305,7 @@ export function createThreadTriageOutbox<R, E>(input: {
                 candidate.threadId === current.threadId &&
                 isCompensatingAction(candidate.action),
             );
-            if (blockedByCompensation) return true;
+            if (blockedByCompensation) return "transient" as const;
             const thread = registry
               .get(input.sourceSnapshotAtom(environmentId))
               ?.threads.find((candidate) => candidate.id === current.threadId);
@@ -290,13 +331,38 @@ export function createThreadTriageOutbox<R, E>(input: {
                 );
               }
               const sent = yield* Effect.promise(() => input.send(registry, current));
-              if (sent._tag === "Failure" && isTransient(sent.cause)) return true;
+              if (sent._tag === "Failure") {
+                if (isTransient(sent.cause)) return "transient" as const;
+                if (current.displaced !== undefined && current.displaced.length > 0) {
+                  rejectedReplacementIds.add(current.commandId);
+                  const restored = yield* restoreDisplacedEffect(registry, current.commandId).pipe(
+                    Effect.exit,
+                  );
+                  if (restored._tag === "Failure") return "transient" as const;
+                  return restored.value ? ("restored" as const) : ("done" as const);
+                }
+              }
+            } else if (
+              seenMatches &&
+              current.displaced !== undefined &&
+              current.displaced.length > 0
+            ) {
+              rejectedReplacementIds.add(current.commandId);
+              const restored = yield* restoreDisplacedEffect(registry, current.commandId).pipe(
+                Effect.exit,
+              );
+              if (restored._tag === "Failure") return "transient" as const;
+              return restored.value ? ("restored" as const) : ("done" as const);
             }
             yield* forgetEffect(registry, current.commandId);
-            return false;
+            return "done" as const;
           }),
         );
-        if (transient) hadTransientFailure = true;
+        if (step === "transient") hadTransientFailure = true;
+        if (step === "restored") restoredDisplaced = true;
+      }
+      if (restoredDisplaced && registry.get(input.shellStatusAtom(environmentId)) === "live") {
+        continue;
       }
       if (!hadTransientFailure || registry.get(input.shellStatusAtom(environmentId)) !== "live") {
         break;
@@ -444,44 +510,42 @@ export function createThreadTriageOutbox<R, E>(input: {
                 snapshot != null &&
                 thread !== undefined &&
                 input.apply(thread, action, queuedAt) !== thread;
-              const isSupersededCompensation = (entry: PendingThreadTriage) =>
+              const isSupersededEntry = (entry: PendingThreadTriage) =>
                 entry.environmentId === environmentId &&
                 entry.threadId === threadId &&
-                isCompensatingAction(entry.action) &&
                 supersedesAction(action.type, entry.action.type);
-              // Atomically replace any superseded compensating undo with the new intent BEFORE
-              // sending so neither a crash nor an offline fallback write can lose intent or replay
-              // the superseded undo after restart.
-              let replacedCompensations: PendingThreadTriage[] = [];
+              const needsWriteAheadSwap = (entry: PendingThreadTriage) =>
+                isSupersededEntry(entry) &&
+                (isCompensatingAction(entry.action) || (entry.displaced?.length ?? 0) > 0);
+              // Atomically replace any superseded compensating undo (and every other superseded
+              // entry in its thread queue) with the new write-ahead intent BEFORE sending,
+              // persisting the displaced entries alongside it so definitive rejection—live, during
+              // replay, or after a crash/restart—restores the full displaced queue in order.
               let writeAheadEntry: PendingThreadTriage | undefined;
+              const replacedIds: CommandId[] = [];
               if (applicable) {
                 const random = yield* SecureRandom.SecureRandom;
                 const replacementId =
                   target.input.commandId ?? CommandId.make(yield* random.uuidV4());
                 yield* update(registry, (stored) => {
-                  const matching = stored.filter(isSupersededCompensation);
-                  if (matching.length === 0) return stored;
-                  replacedCompensations = matching;
+                  if (!stored.some(needsWriteAheadSwap)) return stored;
+                  const displacedEntries = stored.filter(isSupersededEntry);
+                  const displaced = flattenDisplaced(displacedEntries);
+                  replacedIds.push(...displacedEntries.map((entry) => entry.commandId));
                   writeAheadEntry = {
                     environmentId,
                     threadId,
                     commandId: replacementId,
                     action,
                     queuedAt,
-                    seen: seenState(thread),
+                    seen: workSeenState(thread),
                     attempted: true,
+                    afterCompensation: true,
+                    displaced,
                   };
-                  return [
-                    ...stored.filter(
-                      (entry) =>
-                        entry.environmentId !== environmentId ||
-                        entry.threadId !== threadId ||
-                        (!isSupersededCompensation(entry) &&
-                          !supersedesAction(action.type, entry.action.type)),
-                    ),
-                    writeAheadEntry,
-                  ];
+                  return [...stored.filter((entry) => !isSupersededEntry(entry)), writeAheadEntry];
                 });
+                for (const id of replacedIds) rejectedReplacementIds.delete(id);
               }
               const sendTarget: Target<I> =
                 writeAheadEntry === undefined
@@ -499,20 +563,25 @@ export function createThreadTriageOutbox<R, E>(input: {
               if (writeAheadEntry !== undefined) {
                 const persistedId = writeAheadEntry.commandId;
                 if (hasUnavailableReason(result.cause) || isTransient(result.cause)) {
-                  // Replacement intent is already durably persisted from the atomic pre-send swap.
+                  // Replacement intent (with its displaced entries) is already durably persisted.
                   triggerReplayIfLive(registry, environmentId);
                   return AsyncResult.success({ sequence: snapshot?.snapshotSequence ?? 0 });
                 }
-                // Definitive server rejection: atomically restore the displaced compensating undo.
-                yield* update(registry, (stored) =>
-                  stored.some((entry) => entry.commandId === persistedId)
-                    ? [
-                        ...stored.filter((entry) => entry.commandId !== persistedId),
-                        ...replacedCompensations,
-                      ]
-                    : stored,
+                // Definitive server rejection: atomically restore all displaced entries in order.
+                rejectedReplacementIds.add(persistedId);
+                const restored = yield* restoreDisplacedEffect(registry, persistedId).pipe(
+                  Effect.exit,
                 );
-                return result;
+                if (restored._tag === "Success") {
+                  if (restored.value) {
+                    triggerReplayIfLive(registry, environmentId);
+                  }
+                  return result;
+                }
+                // Restore write failed transiently; keep writeAheadEntry (with displaced) on disk
+                // and let replay retry the restore without re-sending the rejected replacement.
+                triggerReplayIfLive(registry, environmentId);
+                return AsyncResult.failure(restored.cause);
               }
               if (!hasUnavailableReason(result.cause) || !applicable) {
                 return result;

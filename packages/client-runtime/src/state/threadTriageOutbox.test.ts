@@ -498,12 +498,134 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
       }),
   );
 
+  it.effect("restores all displaced entries in order on live rejection and replays them", () =>
+    Effect.gen(function* () {
+      const storage = { value: null as string | null };
+      const h = yield* makeHarness({ connected: false, storage });
+      yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
+      yield* h.reconnect();
+      const sent = yield* Queue.take(h.requests);
+      yield* Deferred.fail(
+        sent.reply,
+        new RpcClientError.RpcClientError({
+          reason: new Socket.SocketCloseError({ code: 1006 }),
+        }),
+      );
+      yield* h.disconnect();
+
+      // Offline undo + offline snooze leaves ["unsettle", "snooze"] queued.
+      yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
+      yield* Effect.promise(() => h.commands.snooze.run(h.registry, snooze));
+      h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
+        ...SNAPSHOT,
+        snapshotSequence: 2,
+        threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+      });
+      yield* h.reconnect();
+      const failedUndo = yield* Queue.take(h.requests);
+      yield* Deferred.fail(
+        failedUndo.reply,
+        new RpcClientError.RpcClientError({
+          reason: new Socket.SocketCloseError({ code: 1006 }),
+        }),
+      );
+
+      // Definitive server rejection of live settle restores BOTH unsettle and snooze in order.
+      const rejectedSettle = h.commands.settle.run(h.registry, target);
+      const settleReq = yield* Queue.take(h.requests);
+      expect(settleReq.command.type).toBe("thread.settle");
+      yield* Deferred.fail(settleReq.reply, new Error("Thread cannot be settled"));
+      expect((yield* Effect.promise(() => rejectedSettle))._tag).toBe("Failure");
+      expect((yield* h.store.update((e) => e)).map((e) => e.action.type)).toEqual([
+        "unsettle",
+        "snooze",
+      ]);
+
+      // Triggered replay immediately replays unsettle followed by snooze.
+      const replayedUndo = yield* Queue.take(h.requests);
+      expect(replayedUndo.command.type).toBe("thread.unsettle");
+      yield* Deferred.succeed(replayedUndo.reply, { sequence: 3 });
+      const replayedSnooze = yield* Queue.take(h.requests);
+      expect(replayedSnooze.command.type).toBe("thread.snooze");
+      yield* Deferred.succeed(replayedSnooze.reply, { sequence: 4 });
+      yield* waitFor(h.registry, h.pendingSyncAtom, (s) => s.size === 0);
+      expect(yield* h.store.update((e) => e)).toEqual([]);
+    }),
+  );
+
   it.effect(
-    "restores the displaced compensating undo on definitive server rejection of replacement",
+    "restores persisted displaced entries in order when a replacement is rejected during replay after restart",
     () =>
       Effect.gen(function* () {
         const storage = { value: null as string | null };
-        const h = yield* makeHarness({ connected: false, storage });
+        const before = yield* makeHarness({ connected: false, storage });
+        yield* Effect.promise(() => before.commands.settle.run(before.registry, target));
+        yield* before.reconnect();
+        const sent = yield* Queue.take(before.requests);
+        yield* Deferred.fail(
+          sent.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        yield* before.disconnect();
+
+        // Queue ["unsettle", "snooze"] offline, then let live settle fail transiently.
+        yield* Effect.promise(() => before.commands.unsettle.run(before.registry, undo));
+        yield* Effect.promise(() => before.commands.snooze.run(before.registry, snooze));
+        const serverCommitted: OrchestrationV2ShellSnapshot = {
+          ...SNAPSHOT,
+          snapshotSequence: 2,
+          threads: [{ ...SNAPSHOT.threads[0]!, settledOverride: "settled", settledAt: CREATED_AT }],
+        };
+        before.registry.set(before.snapshotAtom(ENVIRONMENT_ID), serverCommitted);
+        yield* before.reconnect();
+        const failedUndo = yield* Queue.take(before.requests);
+        yield* Deferred.fail(
+          failedUndo.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+
+        const transientSettle = before.commands.settle.run(before.registry, target);
+        const settleReq = yield* Queue.take(before.requests);
+        yield* Deferred.fail(
+          settleReq.reply,
+          new RpcClientError.RpcClientError({
+            reason: new Socket.SocketCloseError({ code: 1006 }),
+          }),
+        );
+        expect((yield* Effect.promise(() => transientSettle))._tag).toBe("Success");
+        yield* before.disconnect();
+
+        // Restart into a fresh runtime with the same storage: replay sends settle, gets definitive
+        // rejection, restores ["unsettle", "snooze"] from disk, and replays both in order.
+        const afterRestart = yield* makeHarness({ connected: false, storage });
+        afterRestart.registry.set(afterRestart.snapshotAtom(ENVIRONMENT_ID), serverCommitted);
+        yield* afterRestart.reconnect();
+        const replayedSettle = yield* Queue.take(afterRestart.requests);
+        expect(replayedSettle.command.type).toBe("thread.settle");
+        yield* Deferred.fail(replayedSettle.reply, new Error("Thread cannot be settled"));
+
+        const replayedUndo = yield* Queue.take(afterRestart.requests);
+        expect(replayedUndo.command.type).toBe("thread.unsettle");
+        yield* Deferred.succeed(replayedUndo.reply, { sequence: 3 });
+        const replayedSnooze = yield* Queue.take(afterRestart.requests);
+        expect(replayedSnooze.command.type).toBe("thread.snooze");
+        yield* Deferred.succeed(replayedSnooze.reply, { sequence: 4 });
+        yield* waitFor(afterRestart.registry, afterRestart.pendingSyncAtom, (s) => s.size === 0);
+        expect(yield* afterRestart.store.update((e) => e)).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "retries restoring displaced entries without re-sending when live rejection restore write fails",
+    () =>
+      Effect.gen(function* () {
+        const storage = { value: null as string | null };
+        const failNextWrite = { value: false };
+        const h = yield* makeHarness({ connected: false, storage, failNextWrite });
         yield* Effect.promise(() => h.commands.settle.run(h.registry, target));
         yield* h.reconnect();
         const sent = yield* Queue.take(h.requests);
@@ -515,7 +637,6 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
         );
         yield* h.disconnect();
 
-        // Queue compensating unsettle offline, then let its first live replay fail transiently.
         yield* Effect.promise(() => h.commands.unsettle.run(h.registry, undo));
         h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), {
           ...SNAPSHOT,
@@ -531,12 +652,19 @@ describe("thread triage outbox compensating undo after uncertain replay", () => 
           }),
         );
 
-        // Definitive server rejection of live settle restores the compensating unsettle on disk.
+        // Live settle swaps cleanly, then server rejects it while the restore write fails transiently.
         const rejectedSettle = h.commands.settle.run(h.registry, target);
         const settleReq = yield* Queue.take(h.requests);
+        failNextWrite.value = true;
         yield* Deferred.fail(settleReq.reply, new Error("Thread cannot be settled"));
         expect((yield* Effect.promise(() => rejectedSettle))._tag).toBe("Failure");
-        expect((yield* h.store.update((e) => e)).map((e) => e.action.type)).toEqual(["unsettle"]);
+
+        // Replay must NOT re-send the already-rejected settle; it restores unsettle and replays it.
+        const replayedUndo = yield* Queue.take(h.requests);
+        expect(replayedUndo.command.type).toBe("thread.unsettle");
+        yield* Deferred.succeed(replayedUndo.reply, { sequence: 3 });
+        yield* waitFor(h.registry, h.pendingSyncAtom, (s) => s.size === 0);
+        expect(yield* h.store.update((e) => e)).toEqual([]);
       }),
   );
 

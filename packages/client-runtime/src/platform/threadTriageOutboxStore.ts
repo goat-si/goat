@@ -5,19 +5,21 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
-export const PendingThreadTriage = Schema.Struct({
+const PendingThreadTriageAction = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("settle") }),
+  Schema.Struct({ type: Schema.Literal("snooze"), snoozedUntil: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("unsettle"),
+    reason: Schema.Literals(["user", "automatic"]),
+  }),
+  Schema.Struct({ type: Schema.Literal("unsnooze") }),
+]);
+
+const PendingThreadTriageFields = {
   environmentId: EnvironmentId,
   threadId: ThreadId,
   commandId: CommandId,
-  action: Schema.Union([
-    Schema.Struct({ type: Schema.Literal("settle") }),
-    Schema.Struct({ type: Schema.Literal("snooze"), snoozedUntil: Schema.String }),
-    Schema.Struct({
-      type: Schema.Literal("unsettle"),
-      reason: Schema.Literals(["user", "automatic"]),
-    }),
-    Schema.Struct({ type: Schema.Literal("unsnooze") }),
-  ]),
+  action: PendingThreadTriageAction,
   queuedAt: Schema.DateTimeUtcFromString,
   /** The thread as the user saw it; if it shows otherwise on reconnect, the change is dropped. */
   seen: Schema.String,
@@ -25,6 +27,15 @@ export const PendingThreadTriage = Schema.Struct({
   attempted: Schema.optionalKey(Schema.Literal(true)),
   /** Set when queued behind a compensating undo whose replay mutates server triage timestamps. */
   afterCompensation: Schema.optionalKey(Schema.Literal(true)),
+};
+
+const DisplacedPendingThreadTriage = Schema.Struct(PendingThreadTriageFields);
+export type DisplacedPendingThreadTriage = typeof DisplacedPendingThreadTriage.Type;
+
+export const PendingThreadTriage = Schema.Struct({
+  ...PendingThreadTriageFields,
+  /** Displaced entries persisted with a write-ahead replacement so definitive rejection restores them in order. */
+  displaced: Schema.optionalKey(Schema.Array(DisplacedPendingThreadTriage)),
 });
 export type PendingThreadTriage = typeof PendingThreadTriage.Type;
 export type PendingThreadTriages = ReadonlyArray<PendingThreadTriage>;
