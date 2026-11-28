@@ -139,6 +139,65 @@ describe("thread links", () => {
     ).toBe("[Kept](t3-thread://v1/a%3A1)");
   });
 
+  it.each([
+    ["4 spaces", "    ```md\n    [old](goat-thread://v1/abc)\n    ```", ""],
+    ["tab", "\t```md\n\t[old](goat-thread://v1/abc)\n\t```", ""],
+    ["list + 5 spaces", "-     ```md\n      [old](goat-thread://v1/abc)\n      ```", ""],
+    ["nested list", "- a\n  -     ```md\n        [old](goat-thread://v1/abc)\n        ```", ""],
+    ["nested list with tab", "-\t-     ~~~\n          [old](goat-thread://v1/abc)", ""],
+    ["quote + 5 spaces", ">     ```md\n>     [old](goat-thread://v1/abc)\n>     ```", "> "],
+    [
+      "spaced nested quote + 5 spaces",
+      ">    >     ```md\n>    >     [old](goat-thread://v1/abc)",
+      ">    > ",
+    ],
+    [
+      "quote + list + 5 spaces",
+      "> -     ```md\n>       [old](goat-thread://v1/abc)\n>       ```",
+      "> ",
+    ],
+    ["quote + space + tab + list", "> \t-     ```md\n>         [old](goat-thread://v1/abc)", "> "],
+    [
+      "quote + list after para",
+      "> para\n> -     ```md\n>       [old](goat-thread://v1/abc)\n>       ```",
+      "> ",
+    ],
+    [
+      "1. after paragraph",
+      "Intro\n1.     ```md\n       [old](goat-thread://v1/abc)\n       ```",
+      "",
+    ],
+    [
+      "ordered list >= 2 after blank",
+      "Intro\n\n2.     ```md\n       [old](goat-thread://v1/abc)",
+      "",
+    ],
+    [
+      "quote after blank line past closer",
+      "Example\n\n>       ~~~\n>       ~~~\n>       [old](goat-thread://v1/abc)",
+      "> ",
+    ],
+    [
+      "quote after autolink",
+      "<https://example.com>\n>     ~~~\n>     [old](goat-thread://v1/abc)",
+      "> ",
+    ],
+    ["blank line inside indented code", "    ```md\n\n    [old](goat-thread://v1/abc)", ""],
+    ["quote after indented code", "    ```md\n>     ```\n>     [old](goat-thread://v1/abc)", "> "],
+    ["4 spaces after closer", "    ```md\n    a\n    ```\n    [old](goat-thread://v1/abc)", ""],
+    ["4 spaces with U+2028", "    ```\u2028[old](goat-thread://v1/t1)```", ""],
+    ["hosted link", "    ```\n    [old](goat-thread://v1/thr)\n    ```", ""],
+  ])(
+    "keeps links inside fence-looking indented code blocks literal (%s)",
+    (_name, block, prose) => {
+      expect(relabelThreadLinks(block, () => "linked")).toBe(block);
+      const after = `${block}\n${prose.trimEnd()}\n${prose}See `;
+      expect(relabelThreadLinks(`${after}[old](goat-thread://v1/t)`, () => "linked")).toBe(
+        `${after}[linked](goat-thread://v1/t)`,
+      );
+    },
+  );
+
   it("leaves links inside code spans and fences as written", () => {
     const markdown = [
       "Live [old](t3-thread://v1/t1), literal `[old](t3-thread://v1/t1)`.",
@@ -187,6 +246,30 @@ describe("thread links", () => {
       ["1. Run:", "", "    ```bash", '    echo "```"', `    ${hidden}`, "    ```", "", after],
       ["````md", "```", hidden, "````", after],
       ["Use ~~~ to mark it.", after],
+      ["> para", ">     ~~~", `>     ${after}`],
+      ["> para", `>     ~~~ ${after}`],
+      ["- > para", "  >     ```md", `  >     ${after}`],
+      [`Intro\u2028-     ~~~ ${after}`],
+      ["Intro", `2.     ~~~ ${after}`],
+      ["Intro", `2. -     ~~~ ${after}`],
+      [">\t-     ```md", `>       ${after}`],
+      ["> para", "lazy", ">     ~~~", `>     ${after}`],
+      ["> para", "> 2. >", `> 2.     ~~~ ${after}`],
+      ["> para\r", ">     ~~~\r", `>     ${after}`],
+      [`> para\r\r>     ~~~\r>     ${hidden}\r> ${after}`],
+      ["para", "    -     ```", `    ${after}`],
+      ["para", "    -     ```", `          ${after}`],
+      ["    ~~~", `-   ${after}`],
+      ["    ~~~md", "    ~~~", "    ~~~", after],
+      ["- item", "  >     ~~~", `  >     ${hidden}`, `    ${after}`],
+      ["10. >     ```md", `    >     ${hidden} \`\`\``, "", after],
+      ["  - >     ```md", `    >     ${hidden} \`\`\``, "", after],
+      ["> - Run this:", ">", ">     ```bash", ">   echo hi", ">", ">     ```", `>     ${after}`],
+      ["Example", "", ">     ~~~", ">\t\t~~~", `>     ${hidden}`, ">\t\t~~~", `> ${after}`],
+      [after, ">     ~~~", `>     ${hidden}`],
+      [`1.       \`\`\`md ${hidden}`, `   \t${after}`],
+      [">      ```md", `> \t${after}`],
+      [">     ```md", `>\t ${after}`],
       ["```" + hidden + "``` then", after],
       ["Use ```example", hidden, "end``` then", after],
       ["Stray ` tick", "", after, "and `code`"],
