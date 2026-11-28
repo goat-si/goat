@@ -965,6 +965,7 @@ dependencies = [
  "goat2-engine-api",
  "goat2-engine-claude",
  "goat2-engine-codex",
+ "goat2-engine-sdk",
  "goat2-thread-store",
  "libc",
  "rand 0.9.5",

@@ -365,6 +365,12 @@ fn built_in_factories(
             ) {
                 factories.insert(driver, Arc::new(factory));
             }
+            // SDK engines (lane P2-S): Pi and OmO always; Cursor, OpenCode and Muse when the
+            // engine helper is configured (GOAT2_ENGINE_HELPER_ENTRY, set by the Dev app).
+            factories.extend(crate::engine::sdk::sdk_factories(
+                data_dir,
+                goat2_engine_sdk::HelperLaunch::from_env(),
+            ));
         }
         EngineChoice::Fake => {
             factories.insert(
