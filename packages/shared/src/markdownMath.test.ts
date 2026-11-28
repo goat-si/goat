@@ -33,6 +33,12 @@ function text(markdown: string) {
 }
 
 describe("chat math parsing", () => {
+  it("keeps original source offsets after a leading byte-order mark", () => {
+    const source = "\uFEFFSee $x$ now";
+    const expected = [{ start: 5, end: 8, source: "$x$" }];
+    expect(markdownMathRanges(source)).toMatchObject(expected);
+    expect(markdownMathRanges(source, parse(source))).toMatchObject(expected);
+  });
   it("skips traversing a supplied syntax tree for a lone skill token", () => {
     let reads = 0;
     const tree = {
