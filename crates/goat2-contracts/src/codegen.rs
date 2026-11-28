@@ -28,7 +28,7 @@ pub const OWNED_DIRS: [&str; 2] = [TS_DIR, SCHEMA_DIR];
 pub type Files = BTreeMap<String, String>;
 
 /// The root types. Each gets a JSON Schema; TypeScript covers them and everything they use.
-pub const ROOTS: [&str; 18] = [
+pub const ROOTS: [&str; 19] = [
     "BotProfile",
     "CardFile",
     "ChannelAttentionEvent",
@@ -44,6 +44,7 @@ pub const ROOTS: [&str; 18] = [
     "LogLine",
     "ProviderCapabilities",
     "ProviderProbeResult",
+    "ServerProviderEntry",
     "ThreadCard",
     "TurnItem",
     "TurnItemBody",
@@ -120,6 +121,7 @@ pub fn render_typescript() -> Result<Files, String> {
         export::<DecisionItem>(&cfg)?;
         export::<DecisionRequestInput>(&cfg)?;
         export::<ProviderProbeResult>(&cfg)?;
+        export::<ServerProviderEntry>(&cfg)?;
         export::<ClientFrame>(&cfg)?;
         export::<Fold>(&cfg)?;
         export::<HostFrame>(&cfg)?;
@@ -161,6 +163,7 @@ pub fn render_limits() -> String {
         };
     }
     constant!(
+        BOT_INSTRUCTIONS_MAX_BYTES,
         LOG_FORMAT_VERSION,
         CARD_FILE_FORMAT_VERSION,
         MAX_SAFE_WIRE_INTEGER,
@@ -254,6 +257,7 @@ pub fn render_json_schemas() -> Files {
     schema_file::<DecisionItem>(&mut files, "DecisionItem");
     schema_file::<DecisionRequestInput>(&mut files, "DecisionRequestInput");
     schema_file::<ProviderProbeResult>(&mut files, "ProviderProbeResult");
+    schema_file::<ServerProviderEntry>(&mut files, "ServerProviderEntry");
     schema_file::<ClientFrame>(&mut files, "ClientFrame");
     schema_file::<Fold>(&mut files, "Fold");
     schema_file::<HostFrame>(&mut files, "HostFrame");
@@ -305,6 +309,7 @@ pub fn load_fixtures() -> Result<Vec<Fixture>, String> {
         "decision_item",
         "decision_request_input",
         "provider_probe_result",
+        "server_provider_entry",
     ] {
         read_tree(&base, &base.join(root), &mut files)?;
     }

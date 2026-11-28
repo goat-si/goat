@@ -107,6 +107,13 @@
     "face": {
       "$ref": "#/$defs/BotFace"
     },
+    "instructions": {
+      "maxLength": 16384,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "name": {
       "type": "string"
     },

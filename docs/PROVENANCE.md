@@ -212,3 +212,7 @@ priority aging and parked waits (core/sched.rs), 4 children per parent and depth
 coalescing and record-before-wake (core/actor.rs), restart wake with `interrupted_by_restart` (core/settle.rs),
 per-(thread, process generation) MCP tokens, stall recorder (stall.rs), engine group memory policy, host launch contract
 (server.rs).
+
+## Provider and bot runtime contracts (lane C)
+
+Source goat v1 `916b5ccc1b2`: `packages/contracts/src/{providerSetup,acpRegistry,server,rpc,channelBotNotes,channelGateway,botProfile}.ts` and `apps/server/src/channels/ChannelSessionFirst.ts`. Provider and bot runtime shapes are adapted to the additive GOAT 2 wire; detailed lifts and deviations are in `crates/goat2-contracts/PROVENANCE.md`.

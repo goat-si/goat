@@ -1,0 +1,7 @@
+{
+  "type": "mark_read",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "threadId": "t",
+  "seq": 3
+}

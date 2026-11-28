@@ -181,6 +181,12 @@ pub struct ThreadCard {
     #[ts(as = "u64")]
     #[schemars(with = "u64")]
     pub card_seq: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[ts(as = "Option<u32>", optional)]
+    pub open_asks: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    #[ts(as = "Option<bool>", optional)]
+    pub unread: bool,
 }
 
 /// `threads/<threadId>/card.json`: `{"v":1,"card":ThreadCard,"fold":Fold}`, replaced atomically.
@@ -249,4 +255,11 @@ impl ThreadCard {
         }
         Ok(())
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
 }

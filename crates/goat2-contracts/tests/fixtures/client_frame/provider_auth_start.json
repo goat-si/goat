@@ -1,0 +1,7 @@
+{
+  "type": "provider_auth_start",
+  "reqId": "r",
+  "clientRequestId": "c",
+  "instanceId": "codex",
+  "methodId": "browser"
+}

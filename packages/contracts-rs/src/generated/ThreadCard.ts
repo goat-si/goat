@@ -50,4 +50,4 @@ appliedSeq: number,
  * Card index global sequence, the `subscribeCards` cursor, at most
  * [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-cardSeq: number, };
+cardSeq: number, openAsks?: number, unread?: boolean, };
