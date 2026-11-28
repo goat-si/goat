@@ -3,6 +3,7 @@ import type {
   ChatAttachment,
   ItemId,
   ModelSelection,
+  ProviderCapabilities,
   ProviderProbeResult,
   RequestOutcome,
   RuntimeMode,
@@ -57,8 +58,11 @@ export interface ProbeParams {
   readonly launch: LaunchSpec | null;
 }
 
-/** goat2-contracts `ProviderProbeResult` (v1 ServerProvider subset). */
-export type ProbeResult = ProviderProbeResult;
+/**
+ * goat2-contracts `ProviderProbeResult` (v1 ServerProvider subset), plus optional capabilities
+ * the engine selected (e.g. OpenCode's generation); the factory reports them until the next probe.
+ */
+export type ProbeResult = ProviderProbeResult & { readonly capabilities?: ProviderCapabilities | null };
 
 export interface EngineInput {
   readonly inputId: string;

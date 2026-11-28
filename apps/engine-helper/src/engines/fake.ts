@@ -207,6 +207,7 @@ class FakeSession implements EngineSession {
 
 export const fakeEngine: EngineModule = {
   async probe(_params, host) {
+    const capabilities = process.env["GOAT2_FAKE_PROBE_CAPABILITIES"];
     return {
       installed: true,
       version: "0.0.0-fake",
@@ -214,6 +215,7 @@ export const fakeEngine: EngineModule = {
       auth: { status: "authenticated" },
       models: [{ slug: "fake-model", name: "Fake", isCustom: false, capabilities: null }],
       checkedAt: host.now(),
+      ...(capabilities === undefined ? {} : { capabilities: JSON.parse(capabilities) }),
     };
   },
   async start(params: InitializeParams, host: EngineHost): Promise<EngineSession> {

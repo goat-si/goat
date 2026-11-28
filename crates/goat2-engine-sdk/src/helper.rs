@@ -107,6 +107,9 @@ pub struct HelperFactory {
     driver: EngineDriver,
     launch: HelperLaunch,
     attachments: Option<AttachmentResolver>,
+    /// Capabilities the engine reported from its last successful probe (v1 OpenCode: the selected
+    /// generation's flags, driver.ts "Hot reads use the last successful probe"). None = static.
+    probed_capabilities: Arc<std::sync::Mutex<Option<ProviderCapabilities>>>,
 }
 
 /// Finds the saved file of an attachment; the host knows the thread folder (same shape as lane
@@ -123,6 +126,7 @@ impl HelperFactory {
             driver,
             launch,
             attachments: None,
+            probed_capabilities: Arc::default(),
         })
     }
 
@@ -133,6 +137,7 @@ impl HelperFactory {
             driver,
             launch,
             attachments: None,
+            probed_capabilities: Arc::default(),
         }
     }
 
@@ -253,13 +258,22 @@ impl EngineFactory for HelperFactory {
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
+        if let Some(probed) = self
+            .probed_capabilities
+            .lock()
+            .ok()
+            .and_then(|probed| probed.clone())
+        {
+            return probed;
+        }
         crate::capabilities::for_driver(&self.driver)
             .or_else(|| crate::capabilities::for_driver(&EngineDriver::Cursor))
             .expect("cursor capabilities exist")
     }
 
     /// One short-lived helper answers `probe` (the engine's own install, version, sign-in and
-    /// model checks) and exits.
+    /// model checks) and exits. A `capabilities` field next to the probe result replaces the
+    /// static capabilities until the next successful probe says otherwise.
     async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
         let (mut process, client, _inbound) = self.spawn(None)?;
         let params = json!({
@@ -274,8 +288,28 @@ impl EngineFactory for HelperFactory {
         let tail = process.stderr_tail();
         process.shutdown().await;
         match answer {
-            Ok(value) => serde_json::from_value(value)
-                .map_err(|error| EngineError::Transport(format!("invalid probe result: {error}"))),
+            Ok(mut value) => {
+                let reported = value
+                    .as_object_mut()
+                    .and_then(|map| map.remove("capabilities"))
+                    .filter(|capabilities| !capabilities.is_null());
+                let result: ProviderProbeResult =
+                    serde_json::from_value(value).map_err(|error| {
+                        EngineError::Transport(format!("invalid probe result: {error}"))
+                    })?;
+                let reported = match reported {
+                    Some(raw) => Some(
+                        serde_json::from_value::<ProviderCapabilities>(raw).map_err(|error| {
+                            EngineError::Transport(format!("invalid probe capabilities: {error}"))
+                        })?,
+                    ),
+                    None => None,
+                };
+                if let Ok(mut probed) = self.probed_capabilities.lock() {
+                    *probed = reported;
+                }
+                Ok(result)
+            }
             Err(CallError::Remote(RemoteError { code, message }))
                 if code.as_deref() == Some("unavailable") =>
             {

@@ -481,6 +481,29 @@ async fn probe_answers_from_a_short_lived_helper() {
     assert!(factory.capabilities().turns.supports_active_steering);
 }
 
+/// Capabilities reported with a probe replace the static ones until the next probe; a probe
+/// without them goes back to the static set.
+#[tokio::test]
+async fn probe_reported_capabilities_replace_the_static_ones() {
+    let fixed = goat2_engine_sdk::capabilities::for_driver(&EngineDriver::Cursor).expect("cursor");
+    let selected = goat2_engine_sdk::capabilities::for_driver(&EngineDriver::Muse).expect("muse");
+    assert_ne!(fixed, selected);
+    let reporting = HelperFactory::fake(
+        EngineDriver::Cursor,
+        launch().with_env(
+            "GOAT2_FAKE_PROBE_CAPABILITIES",
+            serde_json::to_string(&selected).expect("json"),
+        ),
+    );
+    assert_eq!(reporting.capabilities(), fixed);
+    reporting.probe().await.expect("probe");
+    assert_eq!(reporting.capabilities(), selected);
+
+    let plain = HelperFactory::fake(EngineDriver::Cursor, launch());
+    plain.probe().await.expect("probe");
+    assert_eq!(plain.capabilities(), fixed);
+}
+
 #[tokio::test]
 async fn attachments_reach_the_helper_with_resolved_paths() {
     use goat2_contracts::{ChatAttachment, ChatAttachmentType};

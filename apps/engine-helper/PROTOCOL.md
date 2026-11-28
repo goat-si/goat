@@ -41,6 +41,11 @@ Each attachment is a goat2-contracts ChatAttachment plus path: the absolute path
 | session.set_config | {settings: {modelSelection, runtimeMode}} | {}; error code unsupported when the engine has no in-session switch (EngineError::Unsupported) |
 | shutdown | {} | {}, then the helper exits 0 |
 
+probe answers a goat2-contracts ProviderProbeResult. It may add capabilities: a ProviderCapabilities
+the engine selected for what is installed (OpenCode reports its generation's flags). HelperFactory
+then returns them from capabilities() until the next successful probe; a probe without the field
+goes back to the static set in crates/goat2-engine-sdk/src/capabilities/.
+
 TurnStartResult: {status: "accepted", turnId} or {status: "declined" / "refused_unowned" / "unknown",
 reason}. SteerResult: {status: "accepted"} or {status: "declined" / "refused_unowned" / "unknown",
 reason}. Same meaning as goat2-engine-api (structure/30_wire.md).
