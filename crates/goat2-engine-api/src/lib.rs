@@ -59,12 +59,28 @@ pub struct Instructions {
 
 /// Executable, arguments and environment for one engine process (v1 provider settings
 /// `binaryPath`, `launchArgs`, instance env; ACP registry commands per runtime mode).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `Debug` prints environment keys only: an instance env can hold API keys.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LaunchSpec {
     /// None = the driver's default binary name, looked up on PATH.
     pub binary: Option<PathBuf>,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for LaunchSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: BTreeMap<&str, &str> = self
+            .env
+            .keys()
+            .map(|k| (k.as_str(), "<redacted>"))
+            .collect();
+        f.debug_struct("LaunchSpec")
+            .field("binary", &self.binary)
+            .field("args", &self.args)
+            .field("env", &env)
+            .finish()
+    }
 }
 
 /// One input handed to the engine.
@@ -361,4 +377,31 @@ pub trait EngineSession: Send + Sync {
     }
     /// Stop the process group (lane B `kill_group()`). Idempotent.
     async fn shutdown(&self);
+}
+
+#[cfg(test)]
+mod launch_spec_tests {
+    use super::{LaunchSpec, ProviderTarget};
+
+    #[test]
+    fn debug_never_prints_environment_values() {
+        let spec = LaunchSpec {
+            binary: Some("/usr/local/bin/codex".into()),
+            args: vec!["--profile".into(), "work".into()],
+            env: [("OPENAI_API_KEY".to_owned(), "sk-SECRET-VALUE".to_owned())].into(),
+        };
+        let target = ProviderTarget {
+            instance_id: "codex".into(),
+            launch: Some(spec.clone()),
+        };
+        for printed in [
+            format!("{spec:?}"),
+            format!("{target:?}"),
+            format!("{target:#?}"),
+        ] {
+            assert!(!printed.contains("sk-SECRET-VALUE"), "{printed}");
+            assert!(printed.contains("OPENAI_API_KEY"), "{printed}");
+            assert!(printed.contains("/usr/local/bin/codex"), "{printed}");
+        }
+    }
 }
