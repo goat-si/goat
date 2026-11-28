@@ -7,12 +7,12 @@ import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
 import { childPermissionRules, permissionRules, questionId } from "./permissions.ts";
 import { projectTool } from "./project.ts";
 import { safeHost } from "./redact.ts";
-import { client, startServer, type Sdk, type Server } from "./runtime.ts";
+import { client, startServer, verifyServerVersion, type Sdk, type Server } from "./runtime.ts";
 import { promptParts } from "./attachments.ts";
 
 type Client = ReturnType<typeof client>;
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; reconciling: boolean; admitted: boolean; draining: boolean; queued: Event[]; todos?: Todo[]; overflow?: boolean };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -62,10 +62,7 @@ export class OpenCodeSession implements EngineSession {
     const server = await startServer(module, params.cwd, params.launch);
     try {
       const api = client(module, server, params.cwd);
-      const health = await api.global.health({ signal: AbortSignal.timeout(5_000) });
-      if (!health.data?.healthy || !/^1\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(health.data.version)) {
-        throw new HelperError("start_failed", "OpenCode 1.x server version could not be verified");
-      }
+      await verifyServerVersion(api);
       const abortEvents = new AbortController();
       const events = await api.event.subscribe(undefined, { signal: abortEvents.signal });
       if (params.mcp) await api.mcp.add({ name: "goat", config: goatRemoteMcpConfig(params.mcp.url, `Bearer ${params.mcp.bearerToken}`) }, { throwOnError: true });
@@ -188,8 +185,9 @@ export class OpenCodeSession implements EngineSession {
       return;
     }
     if (!replay && (!turn.admitted || turn.draining)) {
-      if (turn.queued.length >= 2048) { this.broken("OpenCode event inbox exceeded capacity"); return; }
-      turn.queued.push(event); return;
+      const bytes = Buffer.byteLength(JSON.stringify(event));
+      if (turn.queued.length >= 2048 || turn.queuedBytes + bytes > 4 * 1024 * 1024) { this.broken("OpenCode event inbox exceeded capacity"); return; }
+      turn.queuedBytes += bytes; turn.queued.push({ event, bytes }); return;
     }
     const props = event.properties;
     if (event.type === "session.created" && event.properties.info.parentID && (event.properties.info.parentID === this.engineRef || this.childSessions.has(event.properties.info.parentID))) {
@@ -229,6 +227,7 @@ export class OpenCodeSession implements EngineSession {
         if (early) {
           if (early.messageId !== part.messageID || (part.type !== "text" && part.type !== "reasoning")) { this.broken("OpenCode event stream contained an inconsistent message part"); return; }
           if (!part.text.endsWith(early.text)) part = { ...part, text: part.text + early.text };
+          turn.earlyDeltaBytes -= Buffer.byteLength(early.text);
           turn.earlyDeltas.delete(part.id);
         }
         turn.parts.set(part.id, part);
@@ -249,7 +248,9 @@ export class OpenCodeSession implements EngineSession {
         const p = event.properties; const part = turn.parts.get(p.partID);
         if (p.field === "text" && !part) {
           const early = turn.earlyDeltas.get(p.partID);
-          if ((early && early.messageId !== p.messageID) || (!early && turn.earlyDeltas.size >= 2048) || (early?.text.length ?? 0) + p.delta.length > 4 * 1024 * 1024) { this.broken("OpenCode early message deltas exceeded the session limit"); return; }
+          const bytes = Buffer.byteLength(p.delta);
+          if ((early && early.messageId !== p.messageID) || (!early && turn.earlyDeltas.size >= 2048) || turn.earlyDeltaBytes + bytes > 4 * 1024 * 1024) { this.broken("OpenCode early message deltas exceeded the session limit"); return; }
+          turn.earlyDeltaBytes += bytes;
           turn.earlyDeltas.set(p.partID, { messageId: p.messageID, text: (early?.text ?? "") + p.delta });
           return;
         }
@@ -327,7 +328,7 @@ export class OpenCodeSession implements EngineSession {
     if (this.active) return { status: "declined" as const, reason: "a turn is already running" };
     if (!parsedModel(settings.modelSelection.model)) return { status: "declined" as const, reason: "OpenCode model must use provider/model format" };
     if (!promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode requires text or an attachment" };
-    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), reconciling: false, admitted: false, draining: true, queued: [] };
+    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
     this.active = turn;
     this.ownedMessages.add(turn.admission.id);
     try { await this.submit(turn, inputs, this.first); }
@@ -350,8 +351,9 @@ export class OpenCodeSession implements EngineSession {
     } finally { this.starting = false; }
   }
   private async routeQueued(turn: Turn) {
-    const event = turn.queued.shift(); if (!event) return;
-    await this.route(event, true);
+    const entry = turn.queued.shift(); if (!entry) return;
+    turn.queuedBytes -= entry.bytes;
+    await this.route(entry.event, true);
   }
   async setConfig(settings: TurnSettings) {
     if (settings.runtimeMode !== this.config.runtimeMode) throw new HelperError("unsupported", "OpenCode 1.x cannot change runtime mode in a session");

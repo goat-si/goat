@@ -100,3 +100,12 @@ export function client(module: Sdk, server: Server, cwd: string) {
     ...(server.password ? { headers: { Authorization: `Basic ${Buffer.from(`opencode:${server.password}`).toString("base64")}` } } : {}),
   });
 }
+
+// OpenCodeRuntime.ts:160-195: trust the running server's health, not only the CLI probe.
+export async function verifyServerVersion(api: ReturnType<typeof client>): Promise<string> {
+  const health = await api.global.health({ signal: AbortSignal.timeout(5_000) });
+  if (!health.data?.healthy || !/^1\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(health.data.version)) {
+    throw new HelperError("start_failed", "OpenCode 1.x server version could not be verified");
+  }
+  return health.data.version;
+}

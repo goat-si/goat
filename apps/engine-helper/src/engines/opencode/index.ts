@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import type { EngineModule } from "../../engine.ts";
 import { fakeSdkPath } from "../../sdkLoader.ts";
 import { OpenCodeSession } from "./session.ts";
-import { client, sdk, startServer } from "./runtime.ts";
+import { client, sdk, startServer, verifyServerVersion } from "./runtime.ts";
 import { variantCapabilities } from "./variant.ts";
 import { HelperError } from "../../protocol.ts";
 
@@ -38,6 +38,7 @@ export const opencodeEngine: EngineModule = {
       const server = await startServer(module, params.cwd ?? process.cwd(), params.launch);
       try {
         const api = client(module, server, params.cwd ?? process.cwd());
+        version = await verifyServerVersion(api);
         const result = await api.provider.list({}, { throwOnError: true });
         const catalog = result.data; if (!catalog) throw new Error("inventory");
         const connected = new Set(catalog.connected);

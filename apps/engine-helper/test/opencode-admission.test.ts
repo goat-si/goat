@@ -145,6 +145,14 @@ test("a different running server generation is rejected before session creation"
   assert.ok(!fake.calls.some((call) => call.method === "create" || call.method === "mcp.add" || call.method === "prompt"));
 });
 
+test("probe rejects a server whose health reports another generation", async () => {
+  fake.reset(); fake.setHealth({ healthy: true, version: "2.0.28" });
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const result = await opencodeEngine.probe!({ protocol: 1, engine: "opencode", cwd: process.cwd(), launch: null }, host);
+  assert.equal(result.status, "error");
+  assert.ok(!fake.calls.some((call) => call.method === "prompt" || call.method === "create"));
+});
+
 test("probe distinguishes an installed binary with a failed version command from a missing binary", async () => {
   const saved = process.env.GOAT2_ENGINE_HELPER_SDK_OPENCODE;
   delete process.env.GOAT2_ENGINE_HELPER_SDK_OPENCODE;
