@@ -2,6 +2,7 @@
 //! implements `goat2-engine-api`. Behaviour is lifted from GOAT v1's `ClaudeAdapterV2`; see each
 //! module's header for the v1 sources and `docs/PROVENANCE.md`.
 
+pub mod auth;
 pub mod capabilities;
 pub mod engine;
 pub mod items;

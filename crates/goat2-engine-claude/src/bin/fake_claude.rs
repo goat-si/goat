@@ -536,6 +536,17 @@ fn main() {
             exit(0);
         }
         if args.first().map(String::as_str) == Some("auth") {
+            let marker = std::env::var_os("CLAUDE_CONFIG_DIR")
+                .map(|dir| std::path::Path::new(&dir).join("goat2-fake-signed-in"));
+            if args.get(1).map(String::as_str) == Some("login") {
+                fake_login(marker);
+            }
+            if args.get(1).map(String::as_str) == Some("logout") {
+                if let Some(marker) = marker {
+                    let _ = std::fs::remove_file(marker);
+                }
+                exit(0);
+            }
             // Signed in by env, or (per-instance homes) by a marker file in CLAUDE_CONFIG_DIR.
             let logged_in = std::env::var("GOAT2_FAKE_CLAUDE_LOGGED_IN").is_ok()
                 || std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|dir| {
@@ -639,4 +650,44 @@ fn main() {
     let args = fake.args.clone();
     fake.log(json!({"kind": "start", "args": args, "env": env, "cwd": cwd}));
     fake.run();
+}
+
+/// `claude auth login` stand-in: needs a terminal, shows a URL and a prompt, reports the terminal
+/// width, and signs the Claude home in (a marker file) only for `good-code`.
+#[cfg(unix)]
+fn fake_login(marker: Option<std::path::PathBuf>) -> ! {
+    use std::io::{BufRead, Write};
+    // SAFETY: isatty and TIOCGWINSZ on the process's own descriptors.
+    if unsafe { libc::isatty(0) } != 1 {
+        eprintln!("not a terminal");
+        exit(3);
+    }
+    let mut out = std::io::stdout();
+    let _ = write!(
+        out,
+        "Open this URL to sign in: https://claude.example.test/oauth\r\nPaste code here if prompted > "
+    );
+    let _ = out.flush();
+    let mut line = String::new();
+    let _ = std::io::stdin().lock().read_line(&mut line);
+    let mut size: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: as above.
+    unsafe { libc::ioctl(0, libc::TIOCGWINSZ as _, &mut size) };
+    let _ = write!(out, "\r\ncols={}\r\n", size.ws_col);
+    if line.trim() == "good-code" {
+        if let Some(marker) = marker {
+            let _ = std::fs::write(marker, "");
+        }
+        let _ = write!(out, "Login successful.\r\n");
+        let _ = out.flush();
+        exit(0);
+    }
+    let _ = write!(out, "Invalid code\r\n");
+    let _ = out.flush();
+    exit(1);
+}
+
+#[cfg(not(unix))]
+fn fake_login(_marker: Option<std::path::PathBuf>) -> ! {
+    exit(3);
 }

@@ -23,7 +23,29 @@ use crate::util;
 pub(crate) const MANIFEST: &str = include_str!("../data/model-manifest.claudeAgent.json");
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
-async fn run(options: &LaunchOptions, args: &[&str]) -> Result<(bool, String), String> {
+/// The environment changes every CLI command the driver runs gets, as a session's launch does:
+/// host session variables, GOAT's own identity and the host's UI token are removed, then the
+/// instance environment is set.
+pub(crate) fn cli_env(options: &LaunchOptions) -> (Vec<std::ffi::OsString>, Vec<(String, String)>) {
+    let mut removed: Vec<std::ffi::OsString> = crate::launch::REMOVED_ENV
+        .iter()
+        .chain(crate::launch::REMOVED_HOST_IDENTITY.iter())
+        .map(std::ffi::OsString::from)
+        .collect();
+    for (name, _) in std::env::vars_os() {
+        let text = name.to_string_lossy();
+        if crate::launch::REMOVED_ENV_PREFIXES
+            .iter()
+            .any(|prefix| text.starts_with(prefix))
+        {
+            removed.push(name);
+        }
+    }
+    (removed, options.env.clone())
+}
+
+/// Runs `claude <args>` with the instance's environment; (success, stdout).
+pub(crate) async fn run(options: &LaunchOptions, args: &[&str]) -> Result<(bool, String), String> {
     let mut command = Command::new(&options.binary);
     command
         .args(args)
@@ -31,24 +53,11 @@ async fn run(options: &LaunchOptions, args: &[&str]) -> Result<(bool, String), S
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // The same removals as a session's launch: host session variables, GOAT's own identity and
-    // the host's UI token never reach the CLI.
-    for name in crate::launch::REMOVED_ENV
-        .iter()
-        .chain(crate::launch::REMOVED_HOST_IDENTITY.iter())
-    {
+    let (removed, set) = cli_env(options);
+    for name in removed {
         command.env_remove(name);
     }
-    for (name, _) in std::env::vars_os() {
-        let text = name.to_string_lossy();
-        if crate::launch::REMOVED_ENV_PREFIXES
-            .iter()
-            .any(|prefix| text.starts_with(prefix))
-        {
-            command.env_remove(&name);
-        }
-    }
-    for (key, value) in &options.env {
+    for (key, value) in set {
         command.env(key, value);
     }
     let output = tokio::time::timeout(PROBE_TIMEOUT, command.output())

@@ -39,6 +39,11 @@ pub fn now_rfc3339() -> String {
     rfc3339_ms(now_ms())
 }
 
+/// RFC 3339 UTC time `after` from now.
+pub fn rfc3339_after(after: std::time::Duration) -> String {
+    rfc3339_ms(now_ms().saturating_add(after.as_millis() as i64))
+}
+
 /// A random UUID v4 string.
 pub fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
