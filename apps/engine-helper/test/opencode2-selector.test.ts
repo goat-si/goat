@@ -5,6 +5,8 @@ import { capabilitiesForOpenCode2 } from "../src/engines/opencode2/capabilities.
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { opencodeEngine } from "../src/engines/opencode/index.ts";
+import { probeOpenCode2 } from "../src/engines/opencode2/probe.ts";
 
 test("classifies CLI versions with v1 token boundaries and prereleases", () => {
   assert.deepEqual(classifyOpenCodeCliVersion("opencode v2.0.3-rc.2 (linux)"), { generation: "v2", version: "2.0.3-rc.2" });
@@ -23,6 +25,17 @@ test("requires the expected JSON server shape and recognizes unauthorized", () =
 
 test("unavailable binary fails without exposing its path", async () => {
   await assert.rejects(selectOpenCodeRuntime({ binary: "/not-present/opencode" }), /^Error: Unable to determine OpenCode version/);
+});
+
+test("a missing CLI short-circuits both probe paths before server startup", { timeout: 1000 }, async () => {
+  const launch = { binary: "/definitely-not-an-opencode-binary", args: [], env: { GOAT2_ENGINE_HELPER_SDK_OPENCODE: "", GOAT2_ENGINE_HELPER_SDK_OPENCODE2: "" } };
+  const params = { protocol: 1, engine: "opencode" as const, cwd: process.cwd(), launch };
+  const host = { now: () => "2026-01-01T00:00:00Z", emit() {}, log() {}, fail(reason: string) { throw new Error(reason); } };
+  let starts = 0;
+  const direct = await probeOpenCode2(params, host, { startRuntime: async () => { starts++; throw new Error("must not start"); } });
+  const selected = await opencodeEngine.probe!(params, host);
+  for (const result of [direct, selected]) { assert.equal(result.installed, false); assert.equal(result.cli, "missing"); assert.equal(result.status, "error"); }
+  assert.equal(starts, 0);
 });
 
 test("version selection honors the launch arguments, cwd, and environment", async () => {

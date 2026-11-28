@@ -6,9 +6,13 @@ import { OpenCodeSession } from "./session.ts";
 import { client, sdk, startServer, verifyServerVersion } from "./runtime.ts";
 import { variantCapabilities } from "./variant.ts";
 import { HelperError } from "../../protocol.ts";
+import { OpenCode2Session } from "../opencode2/session.ts";
+import { probeOpenCode2 } from "../opencode2/probe.ts";
+import { selectOpenCodeRuntime, type ProbedOpenCode } from "../opencode2/select.ts";
+import type { LaunchSpec } from "../../protocol.ts";
 
 const exec = promisify(execFile);
-export const opencodeEngine: EngineModule = {
+const opencode1Engine: EngineModule = {
   async start(params, host) {
     try { return await OpenCodeSession.create(await sdk(), params, host); }
     catch (error) { if (error instanceof HelperError) throw error; throw new Error("OpenCode engine initialization failed"); }
@@ -47,7 +51,42 @@ export const opencodeEngine: EngineModule = {
         return { installed: true, version, status: ready ? "ready" : "warning", auth: { status: ready ? "authenticated" : "unknown", type: "opencode" }, models, checkedAt: host.now() };
       } finally { await server.close(); }
     } catch {
-      return { installed, version, status: "error", auth: { status: "unknown" }, models: [], checkedAt: host.now(), message: "OpenCode could not be probed" };
+      return { installed, version, cli: installed ? "present" : "missing", status: "error", auth: { status: "unknown" }, models: [], checkedAt: host.now(), message: "OpenCode could not be probed" };
+    }
+  },
+};
+
+// driver.ts:176-240: select from the installed runtime; the spawned server verifies its own version.
+async function generation(cwd: string | null, launch: LaunchSpec | null): Promise<ProbedOpenCode> {
+  const environment = { ...process.env, ...launch?.env };
+  const fake2 = environment.GOAT2_ENGINE_HELPER_SDK_OPENCODE2;
+  if (fake2?.trim()) return { generation: "v2", version: environment.GOAT2_ENGINE_HELPER_FAKE_OPENCODE2_VERSION || "2.0.28" };
+  if (fakeSdkPath("opencode", environment)) return { generation: "v1", version: "1.15.13" };
+  return selectOpenCodeRuntime({ ...(launch?.binary ? { binary: launch.binary } : {}), ...(launch?.args ? { args: launch.args } : {}), ...(cwd ? { cwd } : {}), environment });
+}
+
+export const opencodeEngine: EngineModule = {
+  async start(params, host) {
+    try {
+      const selected = await generation(params.cwd, params.launch);
+      return selected.generation === "v2" ? await OpenCode2Session.create(params, host) : await opencode1Engine.start(params, host);
+    } catch (error) {
+      if (error instanceof HelperError) throw error;
+      throw new HelperError("start_failed", "OpenCode runtime generation could not be selected");
+    }
+  },
+  async probe(params, host) {
+    try {
+      const selected = await generation(params.cwd, params.launch);
+      if (selected.generation === "v2") {
+        const fake = ({ ...process.env, ...params.launch?.env }).GOAT2_ENGINE_HELPER_SDK_OPENCODE2;
+        let clock = 0;
+        return await probeOpenCode2(params, host, { select: async () => selected, ...(fake?.trim() ? { now: () => clock, sleep: async (milliseconds: number) => { clock += milliseconds; } } : {}) });
+      }
+      return await opencode1Engine.probe!(params, host);
+    } catch {
+      // Preserve v1's installed/missing classification if the CLI did not identify itself.
+      return opencode1Engine.probe!(params, host);
     }
   },
 };

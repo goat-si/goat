@@ -40,6 +40,15 @@ export class OpenCode2Projection {
     this.emitText(id, state); state.completed = true;
     this.host.emit({ type: "item_completed", turnId: this.turnId, item: state.kind === "text" ? assistantMessage(this.base(id), state.text, state.message) : reasoning(this.base(id), state.text), locator: { turnId: this.turnId, itemId: id } });
   }
+  recoverText(message: string, kind: "text" | "reasoning", ordinal: number, text: string, completed: boolean) {
+    const id = `${message}:${kind}:${ordinal}`;
+    let state = this.texts.get(id);
+    if (!state) { state = { kind, message, text: "", sent: "", completed: false }; this.texts.set(id, state); }
+    if (state.completed) return;
+    if (text.startsWith(state.text)) state.text = text;
+    else if (completed) throw new Error("OpenCode recovered text conflicts with streamed output");
+    this.emitText(id, state); if (completed) this.completeText(id, state);
+  }
   handle(event: V2Event): boolean {
     if (!["session.text.started", "session.text.delta", "session.text.ended", "session.reasoning.started", "session.reasoning.delta", "session.reasoning.ended", "session.step.ended", "session.step.failed", "session.compaction.started", "session.compaction.ended", "session.compaction.failed"].includes(event.type)) return false;
     if (this.seen.has(event.id)) return true;
