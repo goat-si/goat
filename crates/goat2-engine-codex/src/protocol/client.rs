@@ -190,6 +190,10 @@ pub enum UserInput {
     LocalImage {
         path: PathBuf,
     },
+    /// An image by URL; GOAT sends attachments as data URLs (v1 CodexAdapterV2.ts:2656-2659).
+    Image {
+        url: String,
+    },
 }
 
 impl UserInput {
@@ -351,18 +355,17 @@ impl ThreadOptions {
     }
 }
 
-/// `turn/start` params for a text input (plus local images).
+/// `turn/start` params for these input items (see [crate::attachments::codex_input]).
 pub fn turn_start_params(
     thread_id: &str,
-    text: &str,
-    images: &[PathBuf],
+    input: Vec<UserInput>,
     client_message_id: Option<&str>,
     model: Option<&str>,
     effort: Option<&str>,
 ) -> TurnStartParams {
     TurnStartParams {
         thread_id: thread_id.into(),
-        input: user_inputs(text, images),
+        input,
         client_user_message_id: client_message_id.map(str::to_string),
         cwd: None,
         model: model.map(str::to_string),
@@ -380,24 +383,13 @@ pub fn turn_start_params(
 pub fn turn_steer_params(
     thread_id: &str,
     expected_turn_id: &str,
-    text: &str,
-    images: &[PathBuf],
+    input: Vec<UserInput>,
     client_message_id: Option<&str>,
 ) -> TurnSteerParams {
     TurnSteerParams {
         thread_id: thread_id.into(),
-        input: user_inputs(text, images),
+        input,
         expected_turn_id: expected_turn_id.into(),
         client_user_message_id: client_message_id.map(str::to_string),
     }
-}
-
-fn user_inputs(text: &str, images: &[PathBuf]) -> Vec<UserInput> {
-    let mut input = vec![UserInput::text(text)];
-    input.extend(
-        images
-            .iter()
-            .map(|path| UserInput::LocalImage { path: path.clone() }),
-    );
-    input
 }

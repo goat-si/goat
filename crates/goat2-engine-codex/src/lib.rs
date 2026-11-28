@@ -5,6 +5,7 @@
 //! unknown server requests get JSON-RPC error -32601 so Codex never waits for an answer.
 
 pub mod approvals;
+pub mod attachments;
 pub mod capabilities;
 pub mod contract;
 pub mod engine;

@@ -86,6 +86,8 @@ impl std::fmt::Display for ExitSummary {
 }
 
 const STDERR_TAIL_BYTES: usize = 64 * 1024;
+/// The shortest time a group gets between TERM and KILL on an ordinary stop.
+const TERM_MIN: Duration = Duration::from_millis(100);
 
 /// The last 64 KB of the child's stderr, for diagnostics.
 #[derive(Debug, Default)]
@@ -218,23 +220,28 @@ impl ChildProcess {
             .unwrap_or_default()
     }
 
-    /// Ordinary stop: close stdin, give the child `kill_grace` to exit, then always signal the
-    /// group (the leader exiting does not prove its descendants did), TERM then KILL.
+    /// Ordinary stop: close stdin, then always signal the group (the leader exiting does not
+    /// prove its descendants did), TERM then KILL. One `kill_grace` deadline covers the whole
+    /// stop, as v1 forces a kill 5 s after asking the process to stop; TERM always gets at least
+    /// `TERM_MIN` before KILL.
     pub async fn shutdown(&mut self) -> ExitSummary {
+        let deadline = tokio::time::Instant::now() + self.kill_grace;
         self.stdin.take();
         if self.reaped.is_none()
-            && let Ok(Ok(status)) = tokio::time::timeout(self.kill_grace, self.child.wait()).await
+            && let Ok(Ok(status)) = tokio::time::timeout_at(deadline, self.child.wait()).await
         {
             self.reaped = Some(status);
         }
-        self.end_group().await
+        let term_until = deadline.max(tokio::time::Instant::now() + TERM_MIN);
+        self.end_group(term_until).await
     }
 
     /// Stop-timer path: TERM the group, wait `kill_grace`, KILL; no stdin grace, so it returns
     /// within about one `kill_grace`.
     pub async fn terminate_group(&mut self) -> ExitSummary {
         self.stdin.take();
-        self.end_group().await
+        let term_until = tokio::time::Instant::now() + self.kill_grace;
+        self.end_group(term_until).await
     }
 
     /// Kill the whole group now (host memory policy, Drop).
@@ -277,12 +284,11 @@ impl ChildProcess {
         }
     }
 
-    async fn end_group(&mut self) -> ExitSummary {
+    async fn end_group(&mut self, deadline: tokio::time::Instant) -> ExitSummary {
         let mut signalled = false;
         if self.group_alive() {
             signalled = true;
             self.signal_group(Signal::Term);
-            let deadline = tokio::time::Instant::now() + self.kill_grace;
             while self.group_alive() && tokio::time::Instant::now() < deadline {
                 if self.reaped.is_none()
                     && let Ok(Some(status)) = self.child.try_wait()
@@ -302,6 +308,12 @@ impl ChildProcess {
             {
                 self.reaped = Some(status);
             }
+        }
+        // KILLed members can linger for a moment before the system reaps them; callers (and the
+        // host's leftover-group check) rely on the group being gone once this returns.
+        let gone_by = tokio::time::Instant::now() + Duration::from_secs(1);
+        while signalled && self.group_alive() && tokio::time::Instant::now() < gone_by {
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         ExitSummary {
             status: self.reaped,

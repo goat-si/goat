@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 
 use crate::approvals::{self, SessionAllowance, WaitingCtx};
+use crate::attachments::{self, AttachmentResolver};
 use crate::contract::{
     EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderRequestKind, RequestId,
     RequestKind, RequestOutcome, RuntimeMode, ThreadId,
@@ -63,6 +64,10 @@ pub struct CodexEngineOptions {
     pub transport: TransportConfig,
     /// `clientInfo.version` sent in initialize.
     pub client_version: String,
+    /// Finds an attachment's saved file (the host owns the thread folder). Without it every
+    /// attachment is named unavailable in the text and an image declines the turn, as v1 does
+    /// for an unresolvable attachment (CodexAdapterV2.ts:2639-2645).
+    pub attachment_resolver: Option<AttachmentResolver>,
 }
 
 impl Default for CodexEngineOptions {
@@ -79,6 +84,7 @@ impl Default for CodexEngineOptions {
             tap: None,
             transport: TransportConfig::default(),
             client_version: env!("CARGO_PKG_VERSION").to_string(),
+            attachment_resolver: None,
         }
     }
 }
@@ -140,7 +146,7 @@ async fn start_session(
     );
 
     let opened = open_thread(&conn, &options, &spec).await;
-    let (codex_thread_id, reasoning_summary) = match opened {
+    let (codex_thread_id, reasoning_summary, opened_active) = match opened {
         Ok(opened) => opened,
         Err((stage, error)) => {
             conn.close_input();
@@ -177,7 +183,10 @@ async fn start_session(
         next_attempt: 0,
         interrupt_pending: false,
         native_running: None,
-        thread_active: false,
+        // A resumed thread can already be running a turn GOAT does not own; the start guard
+        // lists turns before sending (v1 CodexTurnStartGuard.ts:58-73,113-116).
+        thread_active: opened_active,
+        resume_busy: opened_active,
         stopped_turns: HashSet::new(),
         early: Vec::new(),
         pending: HashMap::new(),
@@ -207,7 +216,7 @@ async fn open_thread(
     conn: &Connection,
     options: &CodexEngineOptions,
     spec: &SessionSpec,
-) -> Result<(String, Option<String>), (&'static str, String)> {
+) -> Result<(String, Option<String>, bool), (&'static str, String)> {
     let _: Value = conn
         .request(
             methods::INITIALIZE,
@@ -252,7 +261,12 @@ async fn open_thread(
             .await
             .map_err(|e| ("thread/start", e.to_string()))?,
     };
-    Ok((opened.thread.id, reasoning_summary))
+    let active = opened
+        .thread
+        .status
+        .as_ref()
+        .is_some_and(ThreadStatusWire::is_active);
+    Ok((opened.thread.id, reasoning_summary, active))
 }
 
 fn tail(text: &str, max: usize) -> &str {
@@ -415,6 +429,8 @@ enum DispatchPhase {
 struct Dispatch {
     attempt: u64,
     inputs: Vec<EngineInput>,
+    /// Codex input items, built before anything is sent.
+    input: Vec<UserInput>,
     settings: TurnSettings,
     reply: Option<oneshot::Sender<TurnStartResult>>,
     phase: DispatchPhase,
@@ -423,6 +439,7 @@ struct Dispatch {
 struct WaitingSteer {
     turn_id: String,
     inputs: Vec<EngineInput>,
+    input: Vec<UserInput>,
     reply: Option<oneshot::Sender<SteerResult>>,
     /// Waiting for the turn's native start until this instant; None once sent.
     start_deadline: Option<Instant>,
@@ -439,6 +456,9 @@ enum PendingKind {
 struct Pending {
     rpc_id: RpcId,
     kind: PendingKind,
+    /// Runtime mode when the request opened; a session allowance is recorded only while the
+    /// mode is unchanged (v1 CodexAdapterV2.ts:1149-1170).
+    mode: RuntimeMode,
 }
 
 const SETTLED_RING: usize = 64;
@@ -465,6 +485,10 @@ struct Actor {
     interrupt_pending: bool,
     native_running: Option<String>,
     thread_active: bool,
+    /// thread/start or thread/resume answered with a busy thread. The first start then always
+    /// lists turns before sending (v1 CodexTurnStartGuard.ts:58-73), whatever status
+    /// notifications were queued around that answer.
+    resume_busy: bool,
     stopped_turns: HashSet<String>,
     early: Vec<Inbound>,
     pending: HashMap<String, Pending>,
@@ -636,11 +660,28 @@ impl Actor {
             });
             return;
         }
+        let input = match attachments::codex_input(
+            &self.spec_thread,
+            &inputs,
+            self.options.attachment_resolver.as_ref(),
+        ) {
+            Ok(input) => input,
+            Err(reason) => {
+                let _ = reply.send(TurnStartResult::Declined { reason });
+                return;
+            }
+        };
+        // v1 endSessionApprovalsOnModeChange (CodexAdapterV2.ts:1150-1158): a mode change ends
+        // every session allowance, so A -> B -> A does not bring A's allowances back.
+        if settings.runtime_mode != self.runtime_mode {
+            self.allowance = SessionAllowance::default();
+        }
         self.runtime_mode = settings.runtime_mode;
         self.next_attempt += 1;
         self.dispatch = Some(Dispatch {
             attempt: self.next_attempt,
             inputs,
+            input,
             settings,
             reply: Some(reply),
             phase: DispatchPhase::Guarding {
@@ -660,7 +701,7 @@ impl Actor {
             return;
         };
         let busy_turn = self.native_running.clone();
-        if !self.thread_active && busy_turn.is_none() {
+        if !self.thread_active && busy_turn.is_none() && !self.resume_busy {
             self.send_turn_start();
             return;
         }
@@ -726,12 +767,10 @@ impl Actor {
         let selection = &settings.model_selection;
         let defaults = runtime::runtime_defaults(settings.runtime_mode);
         let effort = runtime::reasoning_effort(selection);
-        let text = joined_text(&dispatch.inputs);
         let client_id = dispatch.inputs.first().map(|i| i.input_id.to_string());
         let mut params = turn_start_params(
             &self.codex_thread,
-            &text,
-            &[],
+            dispatch.input.clone(),
             client_id.as_deref(),
             Some(&selection.model),
             effort.as_deref(),
@@ -786,6 +825,17 @@ impl Actor {
                 return;
             }
         }
+        let input = match attachments::codex_input(
+            &self.spec_thread,
+            &inputs,
+            self.options.attachment_resolver.as_ref(),
+        ) {
+            Ok(input) => input,
+            Err(reason) => {
+                let _ = reply.send(SteerResult::Declined { reason });
+                return;
+            }
+        };
         self.next_steer += 1;
         let id = self.next_steer;
         let started = self.owned.as_ref().is_some_and(|o| o.started);
@@ -794,6 +844,7 @@ impl Actor {
             WaitingSteer {
                 turn_id,
                 inputs,
+                input,
                 reply: Some(reply),
                 start_deadline: (!started).then(|| Instant::now() + self.options.steer_start_wait),
             },
@@ -808,13 +859,11 @@ impl Actor {
             return;
         };
         steer.start_deadline = None;
-        let text = joined_text(&steer.inputs);
         let client_id = steer.inputs.first().map(|i| i.input_id.to_string());
         let params = turn_steer_params(
             &self.codex_thread,
             &steer.turn_id,
-            &text,
-            &[],
+            steer.input.clone(),
             client_id.as_deref(),
         );
         let conn = self.conn.clone();
@@ -902,6 +951,7 @@ impl Actor {
             .map_err(|e| EngineError::Transport(e.to_string()))?;
         if let Some(kind) = allowance_kind
             && approvals::records_session_allowance(outcome)
+            && pending.mode == mode
         {
             self.allowance.kinds_for(mode).insert(kind);
         }
@@ -1340,6 +1390,7 @@ impl Actor {
             Pending {
                 rpc_id: id,
                 kind: pending_kind,
+                mode: self.runtime_mode,
             },
         );
         let summary = approvals::summary(&item);
@@ -1358,6 +1409,14 @@ impl Actor {
     async fn on_internal(&mut self, internal: Internal) {
         match internal {
             Internal::TurnsListed(result) => {
+                let after_busy_resume = std::mem::take(&mut self.resume_busy);
+                if result.is_err() && after_busy_resume && self.native_running.is_none() {
+                    // v1 classify: still busy with no turn named is "unknown" and fails closed.
+                    self.finish_dispatch(TurnStartResult::RefusedUnowned {
+                        reason: "Codex reported this conversation busy and its turns could not be listed, so this could not start. Try again when that turn ends.".into(),
+                    });
+                    return;
+                }
                 if let Ok(value) = result
                     && let Ok(list) = serde_json::from_value::<TurnsListResponse>(value)
                     && self.native_running.is_none()
@@ -1564,14 +1623,6 @@ fn waiting_ctx<'a>(
 }
 
 /// Inputs batched into one turn are separate messages; v1 sends each as its own text input.
-fn joined_text(inputs: &[EngineInput]) -> String {
-    inputs
-        .iter()
-        .map(|input| input.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

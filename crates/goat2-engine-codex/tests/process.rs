@@ -115,6 +115,27 @@ async fn drop_kills_the_group() {
 }
 
 #[tokio::test]
+async fn shutdown_ends_within_one_kill_grace() {
+    // The leader ignores both a closed stdin and TERM. One deadline covers the stdin grace and
+    // TERM (v1 forces a kill 5 s after asking to stop), so this ends near one kill_grace
+    // (300 ms), well before two.
+    let mut child = ChildProcess::spawn(&sh(
+        "trap '' TERM; echo ready; while true; do sleep 1; done",
+    ))
+    .unwrap();
+    first_line(&mut child).await;
+    let started = Instant::now();
+    let summary = child.shutdown().await;
+    assert!(summary.signalled);
+    assert!(
+        started.elapsed() < Duration::from_millis(560),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert!(!child.group_alive());
+}
+
+#[tokio::test]
 async fn host_identity_is_not_inherited() {
     // SAFETY: test-only environment mutation before spawning.
     unsafe { std::env::set_var("GOAT_TEST_IDENTITY_MARKER", "leak") };

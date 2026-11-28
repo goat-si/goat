@@ -6,8 +6,8 @@ mod support;
 use std::path::PathBuf;
 
 use goat2_engine_codex::protocol::client::{
-    InitializeParams, ThreadOptions, ThreadTurnsListParams, TurnInterruptParams, turn_start_params,
-    turn_steer_params,
+    InitializeParams, ThreadOptions, ThreadTurnsListParams, TurnInterruptParams, UserInput,
+    turn_start_params, turn_steer_params,
 };
 use goat2_engine_codex::protocol::server::{
     CommandApprovalResponse, CommandDecision, ElicitationAction, ElicitationResponse,
@@ -61,8 +61,15 @@ fn every_outbound_request_type_is_schema_valid() {
             methods::TURN_START,
             turn_start_params(
                 "t",
-                "hello",
-                &[PathBuf::from("/tmp/a.png")],
+                vec![
+                    UserInput::text("hello"),
+                    UserInput::LocalImage {
+                        path: PathBuf::from("/tmp/a.png"),
+                    },
+                    UserInput::Image {
+                        url: "data:image/png;base64,iVBORw0KGgo=".into(),
+                    },
+                ],
                 Some("goat-msg-1"),
                 Some("gpt-6-luna"),
                 Some("low"),
@@ -70,7 +77,7 @@ fn every_outbound_request_type_is_schema_valid() {
         ),
         as_request(
             methods::TURN_STEER,
-            turn_steer_params("t", "u", "more", &[], Some("goat-msg-2")),
+            turn_steer_params("t", "u", vec![UserInput::text("more")], Some("goat-msg-2")),
         ),
         as_request(
             methods::TURN_INTERRUPT,

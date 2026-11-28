@@ -751,3 +751,221 @@ async fn idle_process_stops() {
         other => panic!("expected an idle exit, got {other:?}"),
     }
 }
+
+// ---- review round 1 regressions ----
+
+#[tokio::test]
+async fn resume_onto_an_active_thread_lists_turns_and_refuses() {
+    // v1 CodexTurnStartGuard.ts:58-73,113-116: a resume that reports the thread busy is checked
+    // with thread/turns/list before any start; a running turn GOAT never owned refuses the start.
+    let t = load("codex-0.167.0/resume.json");
+    let thread = recorded_thread(&t);
+    let mut entries = entries_until(
+        &t,
+        |e| matches!(e, Entry::EmitInbound { frame, .. } if frame.pointer("/result/thread/id").is_some()),
+    );
+    if let Some(Entry::EmitInbound { frame, .. }) = entries.last_mut() {
+        frame["result"]["thread"]["status"] = json!({"type": "active", "activeFlags": []});
+    }
+    entries.push(expect(
+        json!({"id": 50, "method": "thread/turns/list", "params": {
+        "threadId": thread, "limit": 10, "sortDirection": "desc", "itemsView": "summary"}}),
+    ));
+    entries.push(emit(json!({"id": 50, "result": {"data": [
+        {"id": "foreign-turn", "items": [], "status": "inProgress", "error": null}]}})));
+    let t = synthetic("resume-active", entries);
+    let h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |_| {}).await;
+    let result = h
+        .session
+        .start_turn(
+            input("goat-input-1", "Reply with exactly: RESUMED"),
+            &settings(RuntimeMode::ApprovalRequired),
+        )
+        .await;
+    assert!(
+        matches!(result, TurnStartResult::RefusedUnowned { .. }),
+        "{result:?}"
+    );
+    // No turn/start went out: the fake had nothing more to expect.
+    finish(h).await;
+}
+
+/// A later turn/start in another runtime mode: the recorded frame with the mode-dependent
+/// fields left open, answered with a fresh turn.
+fn later_turn(template: &Value, rpc: u64, thread: &str, turn: &str) -> Vec<Entry> {
+    let mut frame = template.clone();
+    frame["id"] = json!(rpc);
+    let start = Entry::ExpectOutbound {
+        label: None,
+        frame,
+        wildcards: [
+            "/params/approvalPolicy",
+            "/params/sandboxPolicy",
+            "/params/approvalsReviewer",
+            "/params/input",
+            "/params/clientUserMessageId",
+        ]
+        .map(String::from)
+        .to_vec(),
+    };
+    let info = json!({"id": turn, "items": [], "status": "inProgress", "error": null});
+    vec![
+        start,
+        emit(json!({"id": rpc, "result": {"turn": info.clone()}})),
+        emit(json!({"method": "turn/started", "params": {"threadId": thread, "turn": info}})),
+    ]
+}
+
+#[tokio::test]
+async fn session_allowance_ends_on_a_mode_round_trip() {
+    // v1 CodexAdapterV2.ts:1150-1158: any mode change ends the session allowances, so
+    // approval-required -> auto-accept-edits -> approval-required asks again.
+    let (t, mut entries, thread, turn) = approval_prefix();
+    let template = t
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            Entry::ExpectOutbound { frame, .. } if frame["method"] == "turn/start" => {
+                Some(frame.clone())
+            }
+            _ => None,
+        })
+        .unwrap();
+    entries.push(expect(
+        json!({"id": 0, "result": {"decision": "acceptForSession"}}),
+    ));
+    // Codex reports the thread idle just before turn/completed (recorded order).
+    entries.push(thread_idle(&thread));
+    entries.push(turn_completed(&thread, &turn, "completed"));
+    entries.extend(later_turn(&template, 60, &thread, "turn-2"));
+    entries.push(thread_idle(&thread));
+    entries.push(turn_completed(&thread, "turn-2", "completed"));
+    entries.extend(later_turn(&template, 61, &thread, "turn-3"));
+    entries.push(emit(json!({"id": 9, "method": "item/commandExecution/requestApproval", "params": {
+        "threadId": thread, "turnId": "turn-3", "itemId": "exec-3", "startedAtMs": 1, "command": "ls"}})));
+    entries.push(expect(json!({"id": 9, "result": {"decision": "decline"}})));
+    entries.push(turn_completed(&thread, "turn-3", "completed"));
+    let t = synthetic("allowance-mode-round-trip", entries);
+
+    let (mut h, _) = start_approval(&t, RuntimeMode::ApprovalRequired).await;
+    let opened = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened { key, .. }) = opened.last().cloned() else {
+        unreachable!()
+    };
+    let answer = |outcome| RequestAnswer {
+        outcome,
+        text: None,
+        answers: None,
+    };
+    h.session
+        .answer_request(&key, answer(RequestOutcome::AcceptForSession))
+        .await
+        .unwrap();
+    until(&mut h, is_finished).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-2", "again"),
+                &settings(RuntimeMode::AutoAcceptEdits),
+            )
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    accepted(
+        h.session
+            .start_turn(
+                input("goat-input-3", "again"),
+                &settings(RuntimeMode::ApprovalRequired),
+            )
+            .await,
+    );
+    // Back in approval-required, the command is asked again instead of auto-accepted.
+    let opened = until(&mut h, |e| matches!(e, EngineEvent::RequestOpened { .. })).await;
+    let Some(EngineEvent::RequestOpened { key, .. }) = opened.last().cloned() else {
+        unreachable!()
+    };
+    h.session
+        .answer_request(&key, answer(RequestOutcome::Decline))
+        .await
+        .unwrap();
+    until(&mut h, is_finished).await;
+    finish(h).await;
+}
+
+fn thread_idle(thread: &str) -> Entry {
+    emit(
+        json!({"method": "thread/status/changed", "params": {"threadId": thread, "status": {"type": "idle"}}}),
+    )
+}
+
+fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
+    goat2_contracts::ChatAttachment {
+        kind: goat2_contracts::ChatAttachmentType::Image,
+        id: id.into(),
+        name: "a.png".into(),
+        mime_type: "image/png".into(),
+        size_bytes: 3,
+        blob: None,
+    }
+}
+
+#[tokio::test]
+async fn an_image_that_cannot_be_found_declines_before_sending() {
+    // v1 CodexAdapterV2.ts:2639-2645: an unresolvable image is an error, never a silent drop.
+    let t = load("codex-0.167.0/basic.json");
+    let entries = entries_until(&t, |e| method_of(e) == Some("thread/started"));
+    let t = synthetic("attachment-missing", entries);
+    let h = start(&t, RuntimeMode::ApprovalRequired, None, |_| {}).await;
+    let mut inputs = input("goat-input-1", "Look");
+    inputs[0].attachments.push(image_attachment("att-1"));
+    let result = h
+        .session
+        .start_turn(inputs, &settings(RuntimeMode::ApprovalRequired))
+        .await;
+    assert_eq!(
+        result,
+        TurnStartResult::Declined {
+            reason: "Invalid attachment id 'att-1'".into()
+        }
+    );
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn an_image_attachment_is_sent_as_a_data_url_with_its_path_in_the_text() {
+    let dir = std::env::temp_dir().join(format!("goat2-attach-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.png");
+    std::fs::write(&file, b"foo").unwrap();
+    let mut t = load("codex-0.167.0/basic.json");
+    for e in &mut t.entries {
+        if let Entry::ExpectOutbound { frame, .. } = e
+            && frame["method"] == "turn/start"
+        {
+            frame["params"]["input"] = json!([
+                {"type": "text", "text_elements": [], "text": format!(
+                    "Reply with exactly: GOAT2-OK\n\n[Attached image \"a.png\" is saved at: {}]",
+                    file.display())},
+                {"type": "image", "url": "data:image/png;base64,Zm9v"}
+            ]);
+        }
+    }
+    let resolved = file.clone();
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, None, move |o| {
+        o.attachment_resolver = Some(Arc::new(move |thread, attachment| {
+            assert_eq!(thread, &ThreadId::new("goat-thread-1"));
+            (attachment.id == "att-1").then(|| resolved.clone())
+        }));
+    })
+    .await;
+    let mut inputs = input("goat-input-1", "Reply with exactly: GOAT2-OK");
+    inputs[0].attachments.push(image_attachment("att-1"));
+    accepted(
+        h.session
+            .start_turn(inputs, &settings(RuntimeMode::ApprovalRequired))
+            .await,
+    );
+    until(&mut h, is_finished).await;
+    finish(h).await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
