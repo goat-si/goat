@@ -601,11 +601,44 @@
       "type": "object"
     },
     "EngineDriver": {
-      "description": "Engine drivers. Part 1 ships Codex only.",
-      "enum": [
-        "codex"
-      ],
-      "type": "string"
+      "description": "The provider behind an engine, as v1 `ProviderDriverKind` values (goat\n`apps/web/src/components/settings/providerDriverMeta.ts`). It names the provider, not the\ntransport, so moving a provider between driver crates never changes persisted lines. Registry\nagents are `acpRegistry` plus the agent id. Cloud kinds are Part 3.\n\nWire: `\"codex\"`, `\"claudeAgent\"`, `\"grok\"`, ..., `{\"acpRegistry\": {\"agentId\": \"kimi\"}}`.",
+      "oneOf": [
+        {
+          "enum": [
+            "codex",
+            "claudeAgent",
+            "grok",
+            "fx",
+            "antigravity",
+            "opencode",
+            "cursor",
+            "muse",
+            "pi",
+            "omo"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "acpRegistry": {
+              "properties": {
+                "agentId": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "agentId"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "acpRegistry"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "EngineItemLocator": {
       "description": "Engine location of an item: `(turnId, itemId)` inside the engine's own record.",

@@ -1,0 +1,63 @@
+{
+  "$defs": {
+    "DecisionOption": {
+      "description": "One choice of a `decision` request.",
+      "properties": {
+        "consequence": {
+          "description": "v1 `DecisionOption.consequence` (required).",
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "consequence"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "v1 `DecisionRequestInput` (MCP `decision.request`): 1 to 20 options with distinct ids.",
+  "properties": {
+    "context": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "description": "Expiry closes the request unanswered; it never approves.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "items": {
+        "$ref": "#/$defs/DecisionOption"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+    },
+    "recommended": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "context",
+    "options"
+  ],
+  "title": "DecisionRequestInput",
+  "type": "object"
+}

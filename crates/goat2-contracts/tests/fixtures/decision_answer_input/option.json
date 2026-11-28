@@ -1,0 +1,5 @@
+{
+  "id": "decision:3f2a",
+  "optionId": "merge",
+  "reason": "The failing test is unrelated"
+}
