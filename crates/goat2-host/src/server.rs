@@ -244,10 +244,15 @@ pub async fn start_with_engine(
         engine_groups: Vec::new(),
     };
     write_host_json(&host_json, &base).map_err(|e| format!("host.json: {e}"))?;
-    let state = Arc::new(Mutex::new(base));
+    // (host.json, seq of the snapshot it holds). Snapshots are numbered when taken; a writer
+    // whose snapshot is older than the one on disk drops it, so a late writer never removes a
+    // live engine group from host.json.
+    let state = Arc::new(Mutex::new((base, 0u64)));
+    let issued = Arc::new(std::sync::atomic::AtomicU64::new(0));
     {
         let (state, path) = (state.clone(), host_json.clone());
         host.on_engine_groups(move |groups| {
+            let seq = issued.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
             // Identities are read with `ps` off the async runtime.
             let (state, path) = (state.clone(), path.clone());
             std::thread::spawn(move || {
@@ -260,9 +265,13 @@ pub async fn start_with_engine(
                         })
                     })
                     .collect();
-                let mut s = state.lock().expect("host.json");
-                s.engine_groups = records;
-                let _ = write_host_json(&path, &s);
+                let mut guard = state.lock().expect("host.json");
+                let (json, written) = &mut *guard;
+                if seq > *written {
+                    *written = seq;
+                    json.engine_groups = records;
+                    let _ = write_host_json(&path, json);
+                }
             });
         });
     }

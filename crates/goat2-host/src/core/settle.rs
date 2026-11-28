@@ -118,9 +118,18 @@ async fn rewake_lost_wait_results(host: &Host, parent: &ThreadId) {
         let LogEvent::ChildReported(reported) = &line.event else {
             continue;
         };
-        let prefix = format!("child:{}:", reported.child_thread_id);
+        // The exact wake key of this result (same as wake_input): one child can report several
+        // runs, and a wake for one run does not cover another.
+        let key = format!(
+            "child:{}:{}",
+            reported.child_thread_id,
+            reported
+                .child_run_id
+                .as_ref()
+                .map_or("restart", |r| r.as_str())
+        );
         let woken = after[i..].iter().any(|l| {
-            matches!(&l.event, LogEvent::InputAccepted(input) if input.client_request_id.starts_with(&prefix))
+            matches!(&l.event, LogEvent::InputAccepted(input) if input.client_request_id == key)
         });
         if woken {
             continue;

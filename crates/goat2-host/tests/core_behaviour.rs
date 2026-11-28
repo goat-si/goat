@@ -1475,3 +1475,128 @@ async fn keyed_send_is_found_past_the_recent_lines() {
     assert_eq!(value["inputId"], first["inputId"]);
     assert_eq!(value["deduplicated"], true);
 }
+
+// ---------------------------------------------------------------- final review round 4 regressions
+
+#[tokio::test]
+async fn recovery_tells_apart_two_results_of_the_same_child() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let (bot, child) = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let bot = main_bot(&t);
+            send(&t, &bot, "two-1", "work", InputMode::Followup).await;
+            eventually("bot running", || running(&t, &bot)).await;
+            let me = caller(&t, &bot).await;
+            let child = child_id(
+                &t.host
+                    .thread_start(
+                        &me,
+                        ThreadStartArgs {
+                            task: "c".into(),
+                            ..Default::default()
+                        },
+                    )
+                    .await,
+            );
+            // Inside this parent run the child reported twice; only the second run's wake was
+            // written before the crash.
+            let cursor = goat2_contracts::ThreadCursor {
+                epoch: t.host.store().card(&child).unwrap().epoch,
+                seq: 1,
+            };
+            let reported = |run: &str, text: &str| {
+                LogEvent::ChildReported(goat2_contracts::ChildReported {
+                    child_thread_id: child.clone(),
+                    child_run_id: Some(run.into()),
+                    status: ChildResultStatus::Completed,
+                    summary: text.into(),
+                    child_cursor: cursor.clone(),
+                })
+            };
+            t.host
+                .store()
+                .append(&bot, vec![reported("run_a", "first result")])
+                .unwrap();
+            t.host
+                .store()
+                .append(
+                    &bot,
+                    vec![
+                        reported("run_b", "second result"),
+                        LogEvent::InputAccepted(goat2_contracts::InputAccepted {
+                            input_id: "in_wake_b".into(),
+                            from: InputSource::Child {
+                                thread_id: child.clone(),
+                            },
+                            mode: InputMode::Followup,
+                            text: "second result".into(),
+                            attachments: vec![],
+                            client_request_id: format!("child:{child}:run_b"),
+                        }),
+                    ],
+                )
+                .unwrap();
+            (bot, child)
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    eventually("the first result wakes the parent too", || {
+        events(&t, &bot).iter().any(|e| {
+            matches!(e,
+            LogEvent::InputAccepted(i) if i.client_request_id == format!("child:{child}:run_a"))
+        })
+    })
+    .await;
+    drop(keep);
+}
+
+#[tokio::test]
+async fn a_keyed_wait_mode_retry_still_waits() {
+    let t = setup(manual()).await;
+    let bot = main_bot(&t);
+    send(&t, &bot, "wr-1", "work", InputMode::Followup).await;
+    eventually("bot running", || running(&t, &bot)).await;
+    let me = caller(&t, &bot).await;
+    // First attempt: wait mode, its wait times out (the reply was lost to the agent).
+    let first = t
+        .host
+        .thread_start(
+            &me,
+            ThreadStartArgs {
+                task: "c".into(),
+                mode: Some(StartMode::Wait),
+                timeout_ms: Some(50),
+                client_request_id: Some("wait-key".into()),
+                ..Default::default()
+            },
+        )
+        .await;
+    let child = child_id(&first);
+    eventually("child running", || running(&t, &child)).await;
+    // Retry with the same key waits for the child's result again.
+    let host = t.host.clone();
+    let me2 = me.clone();
+    let retry = tokio::spawn(async move {
+        host.thread_start(
+            &me2,
+            ThreadStartArgs {
+                task: "c".into(),
+                mode: Some(StartMode::Wait),
+                client_request_id: Some("wait-key".into()),
+                ..Default::default()
+            },
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!retry.is_finished(), "the retry waits");
+    t.fake.finish_turn(&child, "done now");
+    let result = retry.await.unwrap();
+    let SurfaceResult::Ok { value } = &result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(value["deduplicated"], true);
+    assert_eq!(value["wait"]["released"], "completed");
+    assert_eq!(value["wait"]["result"]["summary"], "done now");
+}

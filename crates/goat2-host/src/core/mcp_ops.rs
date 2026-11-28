@@ -84,13 +84,28 @@ impl Host {
         rt.run_slot.map(|slot| slot.park())
     }
 
-    /// The whole log of a thread (keyed retries only; runs in spawn_blocking).
-    async fn whole_log(&self, thread: &ThreadId) -> Vec<goat2_contracts::LogLine> {
+    /// The whole log of a thread (keyed retries only; runs in spawn_blocking). A read failure
+    /// is an error: a keyed write must not run when it cannot tell whether it already ran.
+    async fn whole_log(
+        &self,
+        thread: &ThreadId,
+    ) -> Result<Vec<goat2_contracts::LogLine>, Box<SurfaceResult>> {
         let store = self.inner.store.clone();
         let thread = thread.clone();
-        tokio::task::spawn_blocking(move || store.read_after(&thread, 0).unwrap_or_default())
-            .await
-            .unwrap_or_default()
+        let read = tokio::task::spawn_blocking(move || store.read_after(&thread, 0)).await;
+        let failure = match read {
+            Ok(Ok(lines)) => return Ok(lines),
+            Ok(Err(e)) => e.to_string(),
+            Err(e) => e.to_string(),
+        };
+        Err(Box::new(SurfaceResult::err(
+            ErrorCode::Unavailable,
+            "log_unreadable",
+            format!(
+                "cannot read the thread log to check the key, so nothing was written: {failure}"
+            ),
+            true,
+        )))
     }
 
     /// An earlier input to `thread` with this clientRequestId, from its whole log.
@@ -98,14 +113,15 @@ impl Host {
         &self,
         thread: &ThreadId,
         key: &str,
-    ) -> Option<goat2_contracts::InputId> {
-        self.whole_log(thread)
-            .await
+    ) -> Result<Option<goat2_contracts::InputId>, Box<SurfaceResult>> {
+        Ok(self
+            .whole_log(thread)
+            .await?
             .into_iter()
             .find_map(|l| match l.event {
                 LogEvent::InputAccepted(i) if i.client_request_id == key => Some(i.input_id),
                 _ => None,
-            })
+            }))
     }
 
     /// The caller's own child, or a refusal.
@@ -250,11 +266,18 @@ impl McpHost for Host {
             // A crash may have stopped an earlier attempt between its steps (child created,
             // parent `child.started`, child's first input). Finish the missing ones before
             // answering, so a retry never reports a start that did not happen.
-            let recorded = self.whole_log(&caller.thread_id).await.iter().any(|l| {
+            let parent_log = match self.whole_log(&caller.thread_id).await {
+                Ok(lines) => lines,
+                Err(e) => return *e,
+            };
+            let recorded = parent_log.iter().any(|l| {
                 matches!(&l.event, LogEvent::ChildStarted(c) if c.child_thread_id == existing.id)
             });
             let start_key = format!("mcp:{}:start", existing.id);
-            let input = self.input_with_key(&existing.id, &start_key).await;
+            let input = match self.input_with_key(&existing.id, &start_key).await {
+                Ok(input) => input,
+                Err(e) => return *e,
+            };
             let mut completed = Vec::new();
             if !recorded {
                 let by_item_id = existing
@@ -295,15 +318,32 @@ impl McpHost for Host {
                 }
                 completed.push("first input");
             }
-            return SurfaceResult::ok(json!({
-                "started": {
-                    "childThreadId": existing.id,
-                    "title": existing.title,
-                    "link": format!("[{}](goat-thread://v1/{})", existing.title, existing.id),
-                },
-                "deduplicated": true,
-                "completedSteps": completed,
-            }));
+            let started = json!({
+                "childThreadId": existing.id,
+                "title": existing.title,
+                "link": format!("[{}](goat-thread://v1/{})", existing.title, existing.id),
+            });
+            if args.mode != Some(StartMode::Wait) {
+                return SurfaceResult::ok(json!({
+                    "started": started,
+                    "deduplicated": true,
+                    "completedSteps": completed,
+                }));
+            }
+            // A wait-mode retry keeps wait-mode semantics: this run owns the child (Stop
+            // cascades to it) and the call waits for its result like the first attempt.
+            self.record_wait_mode(&caller.run_id, &existing.id);
+            drop(fenced);
+            let waited = self.wait_child(caller, &existing.id, args.timeout_ms).await;
+            return match waited {
+                SurfaceResult::Ok { value } => SurfaceResult::ok(json!({
+                    "started": started,
+                    "deduplicated": true,
+                    "completedSteps": completed,
+                    "wait": value,
+                })),
+                other => other,
+            };
         }
         // Held until the child's first input made it busy, so parallel starts cannot pass the cap.
         let Some(reservation) = self.reserve_child(&caller.thread_id) else {
@@ -448,9 +488,14 @@ impl McpHost for Host {
             .client_request_id
             .as_deref()
             .map(|k| format!("mcp:{}:send:{k}", caller.thread_id));
-        if let Some(key) = &key
-            && let Some(input_id) = self.input_with_key(&child.id, key).await
-        {
+        let found = match &key {
+            Some(key) => match self.input_with_key(&child.id, key).await {
+                Ok(found) => found,
+                Err(e) => return *e,
+            },
+            None => None,
+        };
+        if let Some(input_id) = found {
             return SurfaceResult::ok(json!({
                 "threadId": child.id,
                 "inputId": input_id,
@@ -659,9 +704,12 @@ impl McpHost for Host {
             {
                 return handoff(&request_id, "open");
             }
-            let seen = self.whole_log(&caller.thread_id).await.iter().any(
-                |l| matches!(&l.event, LogEvent::RequestOpened(r) if r.request_id == request_id),
-            );
+            let seen = match self.whole_log(&caller.thread_id).await {
+                Ok(lines) => lines.iter().any(
+                    |l| matches!(&l.event, LogEvent::RequestOpened(r) if r.request_id == request_id),
+                ),
+                Err(e) => return *e,
+            };
             if seen {
                 return handoff(&request_id, "resolved");
             }

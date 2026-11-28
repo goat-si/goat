@@ -43,6 +43,8 @@ pub struct RunPermit {
 pub struct RunSlot {
     sched: Arc<Scheduler>,
     st: Mutex<SlotState>,
+    /// Wakes resumptions waiting on another resumption's acquisition.
+    reacquired: tokio::sync::Notify,
 }
 
 impl std::fmt::Debug for RunSlot {
@@ -58,6 +60,8 @@ struct SlotState {
     /// Waits currently parking this slot.
     parks: usize,
     finished: bool,
+    /// One resumption is acquiring the slot back; the others wait for it.
+    reacquiring: bool,
 }
 
 impl RunPermit {
@@ -69,7 +73,9 @@ impl RunPermit {
                     holding: true,
                     parks: 0,
                     finished: false,
+                    reacquiring: false,
                 }),
+                reacquired: tokio::sync::Notify::new(),
             }),
         }
     }
@@ -123,29 +129,42 @@ impl RunSlot {
     /// this, also while other waits of the same run are still parked: a run that runs again
     /// always holds a slot. (A later park only lends the slot again when it is the run's first.)
     async fn unpark(self: Arc<Self>) {
-        let need = {
+        {
             let mut st = self.st.lock().expect("slot");
             st.parks = st.parks.saturating_sub(1);
-            !st.finished && !st.holding
-        };
-        if !need {
-            return;
         }
-        let Ok(permit) = self.sched.acquire(Priority::Child).await else {
-            return;
-        };
+        // Several resumptions of one run share a single acquisition: the first acquires, the
+        // others wait for it (four parents each queueing twice could otherwise hold every slot).
+        loop {
+            let notified = self.reacquired.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut st = self.st.lock().expect("slot");
+                if st.finished || st.holding {
+                    return;
+                }
+                if !st.reacquiring {
+                    st.reacquiring = true;
+                    break;
+                }
+            }
+            notified.await;
+        }
+        let permit = self.sched.acquire(Priority::Child).await.ok();
         let take = {
             let mut st = self.st.lock().expect("slot");
-            if !st.finished && !st.holding {
+            st.reacquiring = false;
+            let take = permit.is_some() && !st.finished && !st.holding;
+            if take {
                 st.holding = true;
-                true
-            } else {
-                false
             }
+            take
         };
-        if take {
+        if let (true, Some(permit)) = (take, permit) {
             permit.disown();
         }
+        self.reacquired.notify_waiters();
     }
 }
 
@@ -336,6 +355,38 @@ mod tests {
         assert_eq!(sched.running(), 1);
         // Finishing the run releases exactly once.
         drop(permit);
+        assert_eq!(sched.running(), 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_resumptions_of_one_run_share_one_acquisition() {
+        // Two runs, one slot each, both parked with two waits; two children take the slots.
+        let sched = Scheduler::new(2, 1);
+        let p1 = sched.acquire(Priority::Human).await.unwrap();
+        let p2 = sched.acquire(Priority::Human).await.unwrap();
+        let (w1a, w1b) = (p1.slot().park(), p1.slot().park());
+        let (w2a, w2b) = (p2.slot().park(), p2.slot().park());
+        let c1 = sched.acquire(Priority::Child).await.unwrap();
+        let c2 = sched.acquire(Priority::Child).await.unwrap();
+        assert_eq!(sched.running(), 2);
+        // All four resumptions start at once; only one acquisition per run may queue.
+        let resumes: Vec<_> = [w1a, w1b, w2a, w2b]
+            .into_iter()
+            .map(|w| tokio::spawn(w.resume()))
+            .collect();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(sched.waiting(), 2, "one queued acquisition per run");
+        drop(c1);
+        drop(c2);
+        for r in resumes {
+            tokio::time::timeout(Duration::from_secs(2), r)
+                .await
+                .expect("no deadlock")
+                .unwrap();
+        }
+        assert_eq!(sched.running(), 2);
+        drop(p1);
+        drop(p2);
         assert_eq!(sched.running(), 0);
     }
 
