@@ -158,6 +158,29 @@ describe("goat theme", () => {
     }),
   );
 
+  it.effect("publishes the file named with a leading space, not its trimmed sibling", () =>
+    Effect.gen(function* () {
+      const baseDir = makeBaseDir();
+      const spaced = NodePath.join(baseDir, " palettes", "nightfall.json");
+      const trimmed = NodePath.join(baseDir, "palettes", "nightfall.json");
+      NodeFS.mkdirSync(NodePath.dirname(spaced));
+      NodeFS.mkdirSync(NodePath.dirname(trimmed));
+      NodeFS.writeFileSync(spaced, NIGHTFALL_THEME_JSON);
+      NodeFS.writeFileSync(trimmed, JUNK_THEME_JSON);
+      const previous = process.cwd();
+      try {
+        process.chdir(baseDir);
+        yield* runCli(["theme", "set", " palettes/nightfall.json", "--base-dir", baseDir]);
+      } finally {
+        process.chdir(previous);
+      }
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(baseDir, "userdata", "themes", "nightfall.json"), "utf8"),
+        NIGHTFALL_THEME_JSON,
+      );
+    }),
+  );
+
   it.effect("refuses to publish over a directory with the theme's file name", () =>
     Effect.gen(function* () {
       const baseDir = makeBaseDir();

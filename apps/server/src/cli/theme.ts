@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/cli";
 
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as ServerConfig from "../config.ts";
 import {
   MAX_THEME_FILE_BYTES,
@@ -452,7 +453,7 @@ const themeSetCommand = Command.make("set", {
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const target = yield* expandHomePath(flags.theme.trim());
+      let target = yield* expandHomePath(flags.theme.trim());
       if (target.length === 0) {
         return yield* new ThemeTargetMissingError();
       }
@@ -464,6 +465,15 @@ const themeSetCommand = Command.make("set", {
         target.includes("/") ||
         target.includes("\\") ||
         target.startsWith("~");
+      if (looksLikePath) {
+        const expanded = yield* expandHomePath(flags.theme);
+        const asTyped =
+          (yield* HostProcess.Platform) === "win32" && !expanded.startsWith("\\\\?\\")
+            ? expanded.replace(/ +$/, "")
+            : expanded;
+        const info = yield* fs.stat(asTyped).pipe(Effect.option);
+        if (Option.isSome(info) && info.value.type === "File") target = asTyped;
+      }
       const targetIsFile =
         looksLikePath && (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false)));
       let themeId: string;
