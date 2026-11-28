@@ -4776,3 +4776,152 @@ async fn a_runless_request_carries_its_card_inline_and_an_oversized_card_never_f
     send(&t, &id, "card-next", "still writable", InputMode::Followup).await;
     eventually("next turn runs", || running(&t, &id)).await;
 }
+
+#[tokio::test]
+async fn an_open_runless_request_keeps_its_session_from_the_idle_stop() {
+    let t = setup_with(manual(), |o| o.idle_stop = Duration::from_millis(150)).await;
+    let id = start_user_thread(&t, "keep", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    t.fake
+        .emit(&id, session_request("k1", "Allow the background edit?"));
+    eventually("filed", || open_requests(&t, &id).len() == 1).await;
+    assert!(t.fake.finish_turn(&id, "done"));
+    // Several idle periods pass: the session stays, so the request stays answerable.
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    assert!(
+        !shut_down(&t, &id),
+        "the idle stop ended a session with an open request"
+    );
+    assert_eq!(open_requests(&t, &id).len(), 1);
+    let open = open_requests(&t, &id).remove(0);
+    t.host
+        .command(ClientFrame::ResolveRequest {
+            req_id: "r".into(),
+            client_request_id: "keep-answer".into(),
+            thread_id: id.clone(),
+            request_id: open.request_id,
+            outcome: RequestOutcome::Accept,
+            text: None,
+            answers: None,
+            option_id: None,
+        })
+        .await
+        .unwrap();
+    // Answered: the idle stop applies again.
+    eventually("idle stop after the answer", || shut_down(&t, &id)).await;
+}
+
+#[tokio::test]
+async fn a_continuation_with_no_answer_is_dropped_never_offered_for_resend() {
+    let t = setup(manual()).await;
+    let id = idle_with_session(&t, "unk").await;
+    t.fake.unknown_continuations(true);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::ContinuationRequested {
+            key: "c1".into(),
+            text: "background work finished".into(),
+        },
+    );
+    eventually("offered to the engine", || {
+        !continuation_starts(&t).is_empty()
+    })
+    .await;
+    eventually("nothing held or queued", || {
+        let f = t.host.store().fold(&id).unwrap();
+        f.queued_inputs.is_empty()
+            && f.held_inputs.is_empty()
+            && !f
+                .open_requests
+                .iter()
+                .any(|r| r.kind == RequestKind::Resend)
+            && f.active_run_id.is_none()
+    })
+    .await;
+    assert!(events(&t, &id).iter().any(|e| matches!(
+        e,
+        LogEvent::RequestResolved(r) if r.outcome == RequestOutcome::Dropped
+    )));
+}
+
+#[tokio::test]
+async fn a_continuation_cut_off_by_a_crash_is_never_resent() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = idle_with_session(&t, "crash").await;
+            // The engine never answers before the host dies: run.started is on disk.
+            t.fake.set_continuation_delay(Duration::from_secs(30));
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::ContinuationRequested {
+                    key: "c1".into(),
+                    text: "background work finished".into(),
+                },
+            );
+            eventually("continuation run started", || {
+                t.host.store().fold(&id).unwrap().active_run_id.is_some()
+            })
+            .await;
+            id
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    eventually("the cut-off continuation is dropped", || {
+        let f = t.host.store().fold(&id).unwrap();
+        f.held_inputs.is_empty()
+            && f.queued_inputs.is_empty()
+            && !f
+                .open_requests
+                .iter()
+                .any(|r| r.kind == RequestKind::Resend)
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        !t.fake
+            .calls()
+            .iter()
+            .any(|c| matches!(c, FakeCall::Turn { .. })),
+        "never sent as a prompt"
+    );
+}
+
+#[tokio::test]
+async fn an_in_turn_request_for_a_turn_that_is_not_running_is_declined() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "late-req", Some("hi")).await;
+    eventually("running", || running(&t, &id)).await;
+    let request = |turn: &str, key: &str| goat2_host::engine::EngineEvent::RequestOpened {
+        turn_id: turn.into(),
+        key: key.into(),
+        item_id: None,
+        kind: RequestKind::Approval,
+        summary: "Allow?".into(),
+        item: None,
+    };
+    let declined = |t: &T, key: &str| {
+        t.fake.calls().iter().any(|c| {
+            matches!(
+                c,
+                FakeCall::Answer { key: k, outcome: RequestOutcome::Decline, .. } if k == key
+            )
+        })
+    };
+    t.fake.emit(&id, request("turn-from-before", "k-stale"));
+    eventually("stale turn declined", || declined(&t, "k-stale")).await;
+    assert!(open_requests(&t, &id).is_empty());
+    // The running turn's own request is filed as before.
+    t.fake
+        .emit(&id, request(&t.fake.active_turn(&id).unwrap(), "k-now"));
+    eventually("filed on the run", || open_requests(&t, &id).len() == 1).await;
+    // With no turn running, a request is declined, not dropped.
+    assert!(t.fake.finish_turn(&id, "done"));
+    eventually("idle", || {
+        t.host.store().fold(&id).unwrap().active_run_id.is_none()
+    })
+    .await;
+    t.fake.emit(&id, request("turn-gone", "k-idle"));
+    eventually("idle request declined", || declined(&t, "k-idle")).await;
+}

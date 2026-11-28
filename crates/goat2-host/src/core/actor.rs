@@ -435,7 +435,11 @@ impl Actor {
                     && self.session.is_some()
                 {
                     self.prune_ended_subagents();
-                    if self.live_subagents.is_empty() {
+                    if !self.session_requests.is_empty() {
+                        // An open runless request lives as long as its session: the person may
+                        // still answer it, so the engine keeps running. Look again later.
+                        self.arm_idle();
+                    } else if self.live_subagents.is_empty() {
                         self.stop_session("idle").await;
                     } else if self.live_subagents.values().all(|s| s.ended.is_some()) {
                         // Only finished items are still on the way: look again later.
@@ -661,7 +665,7 @@ impl Actor {
     /// Runless engine requests and queued continuations left by an engine session that no
     /// longer exists (a host restart): the engine that held them is gone. Requests close; the
     /// continuations are dropped, never sent as a fresh prompt.
-    async fn close_stale_session_work(&self) {
+    async fn close_stale_session_work(&mut self) {
         let Some(fold) = self.host.inner.store.fold(&self.id) else {
             return;
         };
@@ -680,9 +684,13 @@ impl Actor {
         if !events.is_empty() {
             self.append(events);
         }
+        // System inputs still queued, or held behind a resend request (a continuation run cut
+        // off between run.started and the engine's answer): a continuation among them must
+        // never run, since a resend or a start would send it as a fresh prompt.
         let system: Vec<InputId> = fold
             .queued_inputs
             .iter()
+            .chain(fold.held_inputs.iter().flat_map(|h| h.inputs.iter()))
             .filter(|q| q.source == InputSource::System)
             .map(|q| q.input_id.clone())
             .collect();
@@ -692,11 +700,14 @@ impl Actor {
         // Queued inputs do not keep their clientRequestId: read it from the log once.
         let store = self.host.inner.store.clone();
         let id = self.id.clone();
-        let lines = tokio::task::spawn_blocking(move || store.read_after(&id, 0))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default();
+        let read = tokio::task::spawn_blocking(move || store.read_after(&id, 0)).await;
+        let Ok(Ok(lines)) = read else {
+            // Unknown which system inputs are continuations: hold the queue so none runs as a
+            // prompt; the person's next message releases it.
+            tracing::error!(thread = %self.id, "could not read the log to find stale continuations: queue held");
+            self.held = true;
+            return;
+        };
         let continuations: Vec<InputId> = lines
             .iter()
             .filter_map(|l| match &l.event {
@@ -709,7 +720,47 @@ impl Actor {
                 _ => None,
             })
             .collect();
+        for held in &fold.held_inputs {
+            if !held.inputs.is_empty()
+                && held
+                    .inputs
+                    .iter()
+                    .all(|q| continuations.contains(&q.input_id))
+            {
+                self.drop_resend(&held.run_id, "an engine continuation is never resent");
+            }
+        }
         self.cancel_queued(&continuations);
+    }
+
+    /// Resolve an unknown run's resend request as dropped: its held inputs are discarded.
+    fn drop_resend(&self, run_id: &RunId, why: &str) {
+        let request_id = crate::store::resend_request_id(run_id);
+        if self.is_open(&request_id) {
+            self.append(vec![LogEvent::RequestResolved(RequestResolved {
+                request_id,
+                outcome: RequestOutcome::Dropped,
+                option_id: None,
+                text: Some(why.to_owned()),
+                answers: None,
+            })]);
+        }
+    }
+
+    /// Decline an in-turn engine request the host will not file. The engine's error text can
+    /// name the key: not logged.
+    async fn decline_engine_request(&self, key: &str, why: &str) {
+        tracing::debug!(thread = %self.id, why, "an engine request was declined");
+        if let Some(s) = &self.session {
+            let answer = RequestAnswer {
+                outcome: RequestOutcome::Decline,
+                text: None,
+                answers: None,
+            };
+            if s.session.answer_request(key, answer).await.is_err() {
+                tracing::warn!(thread = %self.id, "failed to decline an engine request");
+            }
+        }
     }
 
     /// Cancel the inputs among `ids` that are still queued (not carried by a run).
@@ -1159,6 +1210,7 @@ impl Actor {
                     .await;
             }
             TurnStartResult::Unknown { reason } => {
+                let dropped_continuation = continuation.is_some().then(|| run_id.clone());
                 self.phase = Phase::Running(ActiveRun {
                     run_id,
                     turn_id: String::new(),
@@ -1169,6 +1221,11 @@ impl Actor {
                     steered: Vec::new(),
                 });
                 self.finish_run(RunOutcome::Unknown, Some(reason)).await;
+                // A continuation is never resent: a resend would go out as a fresh prompt (the
+                // engine's key is spent). Its resend request is dropped at once.
+                if let Some(run_id) = dropped_continuation {
+                    self.drop_resend(&run_id, "an engine continuation is never resent");
+                }
             }
         }
     }
@@ -1257,16 +1314,29 @@ impl Actor {
                 self.host.stream_done(&self.id, &item_id);
             }
             EngineEvent::RequestOpened {
+                turn_id,
                 key,
                 item_id,
                 kind,
                 summary,
                 item,
-                ..
             } => {
+                // An in-turn request belongs to the turn it names. One for a turn that is not
+                // running (late, or none runs) is declined so the engine does not wait on a
+                // request nobody can see; runless requests come as SessionRequestOpened.
                 let Phase::Running(run) = &mut self.phase else {
+                    self.decline_engine_request(&key, "no turn is running")
+                        .await;
                     return;
                 };
+                if run.turn_id != turn_id {
+                    self.decline_engine_request(
+                        &key,
+                        "the request names a turn that is not running",
+                    )
+                    .await;
+                    return;
+                }
                 let request_id = RequestId::new(new_id("req"));
                 run.engine_requests.push((key, request_id.clone()));
                 let run_id = run.run_id.clone();

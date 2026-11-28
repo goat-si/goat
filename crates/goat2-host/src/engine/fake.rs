@@ -93,6 +93,10 @@ struct Shared {
     steer_results: HashMap<ThreadId, VecDeque<SteerResult>>,
     /// When set, start_continuation answers Declined (the engine no longer holds the key).
     decline_continuations: bool,
+    /// When set, start_continuation answers Unknown (no answer from the engine).
+    unknown_continuations: bool,
+    /// How long start_continuation takes before it answers.
+    continuation_delay: Duration,
     senders: HashMap<ThreadId, mpsc::UnboundedSender<EngineEvent>>,
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
@@ -201,6 +205,16 @@ impl FakeEngine {
     /// Make start_continuation answer Declined (the engine no longer holds the key).
     pub fn decline_continuations(&self, decline: bool) {
         self.shared.lock().expect("fake").decline_continuations = decline;
+    }
+
+    /// Make start_continuation answer Unknown (no answer from the engine).
+    pub fn unknown_continuations(&self, unknown: bool) {
+        self.shared.lock().expect("fake").unknown_continuations = unknown;
+    }
+
+    /// Make start_continuation take `delay` before it answers.
+    pub fn set_continuation_delay(&self, delay: Duration) {
+        self.shared.lock().expect("fake").continuation_delay = delay;
     }
 
     /// How many probes ran so far.
@@ -610,10 +624,18 @@ impl EngineSession for FakeSession {
         inputs: Vec<EngineInput>,
         _settings: &TurnSettings,
     ) -> TurnStartResult {
+        let delay = self.engine.shared.lock().expect("fake").continuation_delay;
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
         let mut shared = self.engine.shared.lock().expect("fake");
         let result = if shared.decline_continuations {
             TurnStartResult::Declined {
                 reason: "continuation no longer available".into(),
+            }
+        } else if shared.unknown_continuations {
+            TurnStartResult::Unknown {
+                reason: "no answer".into(),
             }
         } else {
             TurnStartResult::Accepted {
