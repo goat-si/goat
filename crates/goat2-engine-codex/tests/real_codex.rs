@@ -242,3 +242,56 @@ async fn real_codex_smoke() {
     h.session.shutdown().await;
     let _ = std::fs::remove_dir_all(&cwd);
 }
+
+#[tokio::test]
+#[ignore = "runs the real installed codex with the local account"]
+async fn real_codex_probe() {
+    let factory = CodexEngineFactory::new(CodexEngineOptions::default());
+    let started = std::time::Instant::now();
+    let probe = factory.probe().await.expect("probe");
+    eprintln!(
+        "probe in {:?}: status {:?}, version {:?}, auth {:?}/{:?}, {} models, default {:?}, message {:?}",
+        started.elapsed(),
+        probe.status,
+        probe.version,
+        probe.auth.status,
+        probe.auth.auth_type,
+        probe.models.len(),
+        probe
+            .models
+            .iter()
+            .find(|m| m.is_default == Some(true))
+            .map(|m| &m.slug),
+        probe.message
+    );
+    assert!(probe.installed);
+    assert_eq!(probe.cli, Some(goat2_contracts::ServerProviderCli::Present));
+    assert_eq!(probe.version.as_deref(), Some("0.167.0"));
+    assert!(
+        probe
+            .binary_path
+            .as_deref()
+            .is_some_and(|p| p.ends_with("/codex"))
+    );
+    assert_eq!(probe.status, goat2_contracts::ServerProviderState::Ready);
+    assert_eq!(
+        probe.auth.status,
+        goat2_contracts::ServerProviderAuthStatus::Authenticated
+    );
+    assert!(!probe.models.is_empty(), "codex lists its models");
+    assert_eq!(
+        probe
+            .models
+            .iter()
+            .filter(|m| m.is_default == Some(true))
+            .count(),
+        1
+    );
+    assert!(probe.models.iter().all(|m| {
+        m.capabilities
+            .as_ref()
+            .and_then(|c| c.option_descriptors.as_ref())
+            .is_some()
+    }));
+    assert!(goat2_engine_codex::probe::parse_rfc3339_ms(&probe.checked_at).is_some());
+}
