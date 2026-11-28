@@ -340,3 +340,44 @@ fn requested_start_observed_as_followup_maps_to_start() {
         "{out:?}"
     );
 }
+
+/// GOAT 2 logs start_thread's input, and a steer to an idle thread, as steer; requested start with
+/// no active run maps to start, while a steer during a run stays steer.
+#[test]
+fn idle_steer_requested_as_start_is_start() {
+    use goat2_parity::scenario::SendMode;
+    let accepted = |id: &str, req: &str| -> LogEvent {
+        serde_json::from_value(serde_json::json!({"type":"input.accepted","inputId":id,"from":{"kind":"user"},"mode":"steer","text":"x","clientRequestId":req})).unwrap()
+    };
+    let run = |kind: &str, input: &str| -> LogEvent {
+        serde_json::from_value(match kind {
+            "run.started" => serde_json::json!({"type":"run.started","runId":"run-1","inputIds":[input],"generation":1,"engineRef":null}),
+            _ => serde_json::json!({"type":"run.finished","runId":"run-1","outcome":"completed"}),
+        })
+        .unwrap()
+    };
+    let mode_of = |events: Vec<TraceEvent>| match &events[0] {
+        TraceEvent::InputAccepted { mode, .. } => mode.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut m = AliasMap::default();
+    m.register_request_mode("a", "i1", SendMode::Start);
+    m.register_request_mode("b", "i2", SendMode::Start);
+    m.register_request_mode("c", "i3", SendMode::Steer);
+    assert_eq!(
+        mode_of(m.map("t", &accepted("in-1", "a")).unwrap()),
+        SendMode::Start
+    );
+    m.map("t", &run("run.started", "in-1")).unwrap();
+    // During a run: a requested start observed as steer is a contradiction and stays steer.
+    assert_eq!(
+        mode_of(m.map("t", &accepted("in-2", "b")).unwrap()),
+        SendMode::Steer
+    );
+    m.map("t", &run("run.finished", "")).unwrap();
+    // A requested steer stays steer even on an idle thread.
+    assert_eq!(
+        mode_of(m.map("t", &accepted("in-3", "c")).unwrap()),
+        SendMode::Steer
+    );
+}

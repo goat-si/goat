@@ -750,6 +750,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
+ "tungstenite 0.28.0",
 ]
 
 [[package]]

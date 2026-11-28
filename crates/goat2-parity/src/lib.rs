@@ -4,7 +4,10 @@ pub mod trace;
 
 pub mod compare;
 pub mod goat2_map;
+pub mod goat2_runner;
 pub mod loader;
 pub mod refs;
 pub mod target;
 pub mod transcript;
+
+pub mod fake_codex;
