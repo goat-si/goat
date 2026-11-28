@@ -218,3 +218,12 @@ Decision: Pi/OmO are driven from Rust directly (no Node helper) because v1 rpc.t
 | `apps/engine-helper/test/server.test.ts` | none | new: inject a failing loader for the pre-existing unavailable test after Muse registration. |
 
 Not lifted: usage and limits, account pools, text generation, cloud and checkpoints; attachment blob resolution and v1's provider-host runtime instructions are not exposed by this helper seam. V1 background workflow wake offers and runless child approvals are not mapped by the current helper session protocol; these fail the helper visibly. Windows launcher resolution and workspace path canonicalization are not lifted.
+## P2-S pi
+
+Owner decision: Pi and OmO use the Rust JSONL RPC transport directly; OmO is a
+profile of the same runtime, not a Node helper driver. The driver is not yet
+implemented by this entry.
+
+| GOAT 2 path | GOAT v1 source at `916b5ccc1b2` | Treatment |
+|---|---|---|
+| `crates/goat2-engine-sdk/src/pi/mod.rs` | `packages/provider-pi/src/server/mcpInjection.ts:49-205` | Launch argument validation ported to Rust; GOAT 2 receives tokenized arguments. |
