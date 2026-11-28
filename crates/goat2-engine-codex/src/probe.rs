@@ -1179,6 +1179,22 @@ fn configured_service_tier(
     })
 }
 
+/// v1 `CodexCyberAccessConfig` (CodexProvider.ts:97-107): `daybreak` and
+/// `features.api_key_cyber_access_programs`, each absent, null or a boolean; other fields tolerated.
+#[derive(Deserialize)]
+struct CyberAccessConfig {
+    #[serde(default)]
+    daybreak: Option<bool>,
+    #[serde(default)]
+    features: Option<CyberAccessFeatures>,
+}
+
+#[derive(Deserialize)]
+struct CyberAccessFeatures {
+    #[serde(default)]
+    api_key_cyber_access_programs: Option<bool>,
+}
+
 /// v1 `applyConfiguredCodexCyberAccess` with the snapshot's daybreak and API-key program flags
 /// (CodexProvider.ts:603-608).
 fn configured_cyber_access(
@@ -1186,14 +1202,19 @@ fn configured_cyber_access(
     account: &AccountResponse,
     config: Option<&Value>,
 ) -> Vec<ServerProviderModel> {
+    // v1 decodeCodexCyberAccessConfig (CodexProvider.ts:97-107): the two fields are decoded
+    // together; a mistyped one drops both (daybreak off, programs not ruled out), as v1 does at
+    // CodexProvider.ts:603-617.
+    let cyber = config.and_then(|c| serde_json::from_value::<CyberAccessConfig>(c.clone()).ok());
     let daybreak: Option<bool> =
-        config.map(|c| c.get("daybreak").and_then(Value::as_bool) == Some(true));
+        config.map(|_| cyber.as_ref().and_then(|c| c.daybreak) == Some(true));
     let programs_unavailable = account.account_type() == Some("apiKey")
-        && config.is_none_or(|c| {
-            c.pointer("/features/api_key_cyber_access_programs")
-                .and_then(Value::as_bool)
-                == Some(false)
-        });
+        && (config.is_none()
+            || cyber
+                .as_ref()
+                .and_then(|c| c.features.as_ref())
+                .and_then(|f| f.api_key_cyber_access_programs)
+                == Some(false));
     let offered = map_descriptors(models, |descriptors, model| {
         descriptors
             .into_iter()
@@ -1656,6 +1677,73 @@ mod tests {
         ] {
             assert!(!ok(bad.clone()), "{bad}");
         }
+    }
+
+    /// Final review r3: v1 decodes `daybreak` and `features.api_key_cyber_access_programs` together
+    /// (CodexProvider.ts:97-107,603-617); a mistyped one drops both.
+    #[test]
+    fn cyber_access_config_is_decoded_as_one_as_v1() {
+        let model = model_from_codex(
+            &json!({"id": "m", "model": "m", "displayName": "m", "description": "",
+            "hidden": false, "isDefault": true, "defaultReasoningEffort": "medium",
+            "supportedReasoningEfforts": [{"reasoningEffort": "medium", "description": ""}],
+            "availableAccessPrograms": {"cyber": ["standard", "daybreakBlue"]}}),
+        )
+        .unwrap();
+        let account = |kind: &str| -> AccountResponse {
+            serde_json::from_value(json!({"account": {"type": kind, "email": null, "planType": "pro"}, "requiresOpenaiAuth": true})).unwrap()
+        };
+        let cyber = |account: &AccountResponse, config: Value| {
+            configured_cyber_access(vec![model.clone()], account, Some(&config))
+                .into_iter()
+                .next()
+                .and_then(|m| m.capabilities?.option_descriptors)
+                .and_then(|d| {
+                    d.into_iter().find_map(|d| match d {
+                        ProviderOptionDescriptor::Select {
+                            id, current_value, ..
+                        } if id == "cyberAccessProgram" => Some(current_value),
+                        _ => None,
+                    })
+                })
+        };
+        // Daybreak off with the config read keeps the model's own default (v1).
+        let standard = || Some(Some("standard".to_string()));
+        let chatgpt = account("chatgpt");
+        assert_eq!(
+            cyber(&chatgpt, json!({"daybreak": true})),
+            Some(Some("daybreakBlue".to_string()))
+        );
+        // A mistyped feature flag next to it: v1's decode fails, daybreak counts as off.
+        assert_eq!(
+            cyber(
+                &chatgpt,
+                json!({"daybreak": true, "features": {"api_key_cyber_access_programs": "no"}})
+            ),
+            standard()
+        );
+        assert_eq!(cyber(&chatgpt, json!({"daybreak": "yes"})), standard());
+        assert_eq!(
+            cyber(&chatgpt, json!({"daybreak": null, "features": null})),
+            standard()
+        );
+        // An API key with the programs turned off hides the option; a mistyped flag does not.
+        let api_key = account("apiKey");
+        assert_eq!(
+            cyber(
+                &api_key,
+                json!({"features": {"api_key_cyber_access_programs": false}})
+            ),
+            None
+        );
+        assert_eq!(
+            cyber(
+                &api_key,
+                json!({"features": {"api_key_cyber_access_programs": 0}})
+            ),
+            standard()
+        );
+        assert_eq!(cyber(&api_key, json!({"features": []})), standard());
     }
 
     #[test]
