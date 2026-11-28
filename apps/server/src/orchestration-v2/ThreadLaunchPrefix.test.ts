@@ -96,8 +96,13 @@ it.effect("renames a temporary branch with a configured prefix when generation s
       Stream.filter((stored) => stored.commandId === "prefix-rename:branch-rename"),
       Stream.runHead,
     );
-    const projection = yield* threads.getThreadProjection(launched.threadId);
+    const projection = yield* preparationSettled(launched.threadId);
     assert.equal(projection.thread.branch, "my-prefix/fix-parser");
+    assert.isFalse(
+      projection.turnItems.some(
+        (item) => item.type === "system_notice" && item.title === "Branch not renamed",
+      ),
+    );
     assert.match(
       harness.renameBranch.mock.calls[0]?.[0]?.oldBranch ?? "",
       /^my-prefix\/[0-9a-f]{8}$/,

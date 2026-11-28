@@ -403,7 +403,7 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       );
     if (bootstrapped === undefined) return {} satisfies AutoBootstrapWelcomeTargets;
     const { project } = bootstrapped;
-    const shell = yield* threads.getShellSnapshot();
+    const shell = yield* threads.getShellSnapshot({ projectId: project.id, location: "active" });
     const existingThread = shell.threads.find(
       (thread) =>
         thread.projectId === project.id && thread.lineage.relationshipToParent !== "subagent",

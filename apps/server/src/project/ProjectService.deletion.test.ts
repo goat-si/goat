@@ -25,6 +25,7 @@ import * as LegacyV1ThreadImporter from "../orchestration-v2/legacy/LegacyV1Thre
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
+import { refuseFullShellSnapshot } from "../orchestration-v2/testkit/boundedShellSnapshot.ts";
 import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecutor.ts";
 import { planThreadDeletion } from "../orchestration-v2/ThreadDeletion.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -39,7 +40,7 @@ import * as RepositoryIdentityResolver from "./RepositoryIdentityResolver.ts";
 const layerEventPersistence = EventSink.layer.pipe(
   Layer.provideMerge(Layer.merge(EventStore.layer, ProjectionStore.layer)),
 );
-const layerServices = Layer.mergeAll(
+const layerUnboundedServices = Layer.mergeAll(
   LegacyV1ThreadImporter.layer.pipe(Layer.provideMerge(layerEventPersistence)),
   ProjectionMaintenance.layer.pipe(Layer.provide(layerEventPersistence)),
   ProjectStore.layer,
@@ -68,6 +69,14 @@ const layerServices = Layer.mergeAll(
   ),
   Layer.provideMerge(ServerSettings.layerTest()),
 );
+// Project deletion reads only the project's threads; the full snapshot stalls a large install.
+const layerServices = Layer.effect(
+  ProjectionStore.ProjectionStoreV2,
+  Effect.gen(function* () {
+    const service = yield* ProjectionStore.ProjectionStoreV2;
+    return { ...service, getShellSnapshot: refuseFullShellSnapshot(service.getShellSnapshot) };
+  }),
+).pipe(Layer.provideMerge(layerUnboundedServices));
 const layerDatabase = SqlitePersistence.layerMemory.pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "project-deletion-test-" })),
   Layer.provideMerge(NodeServices.layer),

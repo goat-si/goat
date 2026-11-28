@@ -17,6 +17,41 @@ const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
 // FAT/exFAT mtimes have two-second resolution; network filesystems may be coarser.
 const CONFIG_MTIME_GRANULARITY_MS = 2_000;
 
+/** Git's reading of a boolean environment variable that is set. */
+const gitEnvTrue = (value: string) => /^(?:true|yes|on|1)$/i.test(value.trim());
+
+/**
+ * Config files git reads besides the repository's own, as far as the environment shows them.
+ * Null when one is relative: git resolves it against each worktree, so worktrees can differ.
+ */
+export function userGitConfigFiles(
+  path: Path.Path,
+  env: NodeJS.ProcessEnv,
+): ReadonlyArray<string> | null {
+  const home = env.HOME ?? env.USERPROFILE ?? "";
+  const global =
+    env.GIT_CONFIG_GLOBAL !== undefined
+      ? [env.GIT_CONFIG_GLOBAL]
+      : [
+          path.join(env.XDG_CONFIG_HOME || path.join(home, ".config"), "git", "config"),
+          path.join(home, ".gitconfig"),
+        ];
+  // Packaged gits keep their system config under their own prefix.
+  const system =
+    env.GIT_CONFIG_NOSYSTEM !== undefined && gitEnvTrue(env.GIT_CONFIG_NOSYSTEM)
+      ? []
+      : env.GIT_CONFIG_SYSTEM !== undefined
+        ? [env.GIT_CONFIG_SYSTEM]
+        : [
+            "/etc/gitconfig",
+            "/opt/homebrew/etc/gitconfig",
+            "/usr/local/etc/gitconfig",
+            ...(env.ProgramFiles ? [path.join(env.ProgramFiles, "Git", "etc", "gitconfig")] : []),
+          ];
+  const files = [...system, ...global];
+  return files.every((file) => path.isAbsolute(file)) ? files : null;
+}
+
 /**
  * Splits a git config into the text outside exact \`[branch "<name>"]\` sections and each such
  * section's text. Returns null whenever a value or section outside the branch's own section could
@@ -55,7 +90,9 @@ export function splitBranchSections(
 // Unknown layouts or inaccessible metadata disable reuse; git remains authoritative.
 // A branch-scoped read leaves other branches' config sections out: a repository with many
 // worktrees rewrites its shared config whenever any of them publishes a branch.
-export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* () {
+export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* (
+  options: { readonly userConfigFiles?: ReadonlyArray<string> | null } = {},
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const digest = yield* Digest.Digest;
@@ -178,6 +215,60 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
         exit._tag === "Success" && exit.value !== null ? "1 second" : "0 seconds",
     },
   );
+  const userConfigFiles =
+    options.userConfigFiles !== undefined
+      ? options.userConfigFiles
+      : userGitConfigFiles(path, process.env);
+  /**
+   * Everything outside the repository's config and one worktree's HEAD and branch that remote
+   * list, remote URL and remote HEAD reads depend on; null when a user config has includes.
+   */
+  const sharedStamp = Effect.fnUntraced(function* (
+    commonDir: string,
+    remotes: ReadonlyArray<string>,
+  ) {
+    if (userConfigFiles === null) return null;
+    const heads = remotes
+      .toSorted()
+      .map((remote) => path.join(commonDir, "refs", "remotes", remote, "HEAD"));
+    // rev-parse --verify follows a remote HEAD to its target, which can move on its own.
+    const targets = yield* Effect.forEach(heads, (head) =>
+      fs.readFileString(head).pipe(
+        Effect.map((text) => /^ref: (refs\/\S+)\s*$/.exec(text)?.[1] ?? null),
+        Effect.orElseSucceed(() => null),
+      ),
+    );
+    // Legacy remote files are edited in place without touching their directory.
+    const legacy = yield* Effect.forEach(["remotes", "branches"], (directory) =>
+      fs.readDirectory(path.join(commonDir, directory)).pipe(Effect.orElseSucceed(() => [])),
+    );
+    if (legacy.some((entries) => entries.length > 0)) return null;
+    const files = [
+      path.join(commonDir, "packed-refs"),
+      path.join(commonDir, "reftable", "tables.list"),
+      ...heads,
+      ...targets.flatMap((target) => (target === null ? [] : [path.join(commonDir, target)])),
+    ];
+    const refStamps = yield* Effect.forEach(files, stamp, { concurrency: "unbounded" });
+    const userConfigs = yield* Effect.forEach(userConfigFiles, (file) =>
+      stamp(file).pipe(
+        Effect.flatMap((fileStamp) =>
+          fileStamp.value === "missing"
+            ? Effect.succeed("missing")
+            : configSections(file, fileStamp).pipe(
+                Effect.map(({ sections }) =>
+                  sections === null
+                    ? null
+                    : [sections.shared, ...[...sections.branches].flat()].join("\u0000"),
+                ),
+              ),
+        ),
+      ),
+    );
+    if (userConfigs.includes(null)) return null;
+    return [...refStamps.map((entry) => entry.value), ...userConfigs].join("\u0000");
+  });
+
   return Effect.fn("GitMetadataFingerprint.read")(
     function* (cwd: string, branch?: string) {
       const dirs = yield* detachStackFrame(Cache.get(directories, path.resolve(cwd)));
@@ -230,10 +321,25 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
           repositoryStamps[configIndex] = config.fallback;
         }
       }
+      // An include can depend on the worktree, so a repository with one shares nothing.
+      const outside = config?.sections == null ? null : yield* sharedStamp(dirs.commonDir, remotes);
+      // Hashed: it holds config text and keys long-lived cache entries.
+      const shared =
+        outside === null
+          ? null
+          : Hex.encode(
+              yield* digest.digest(
+                Digest.sha256,
+                new TextEncoder().encode(
+                  [dirs.commonDir, ...repositoryStamps.slice(1), outside].join("\u0000"),
+                ),
+              ),
+            );
       return {
         root: dirs.root,
         repository: `${dirs.gitDir}\u0000${repositoryStamps.join("\u0000")}`,
         refs: refStamps.join("\u0000"),
+        shared,
       };
     },
     Effect.orElseSucceed(() => null),

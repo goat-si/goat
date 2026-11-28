@@ -13,6 +13,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../../persistence/Sqlite.ts";
 import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import { refuseFullShellSnapshot } from "../../orchestration-v2/testkit/boundedShellSnapshot.ts";
 import {
   MainCheckoutUnknownError,
   makeClaudeCloudFolderTrust,
@@ -84,15 +85,17 @@ const harness = (
           { projectId: deleted, deletedAt: "2026-10-01T00:00:00.000Z" },
         ] as never),
     } as never);
+    const shells = [
+      { projectId: live, worktreePath: WORKTREE },
+      { projectId: deleted, worktreePath: "/fixture/worktrees/gone" },
+    ];
     const projection = Projection.ProjectionStoreV2.of({
-      getShellSnapshot: () =>
+      getShellSnapshot: refuseFullShellSnapshot((options?: Projection.ShellSnapshotOptions) =>
         Effect.succeed({
-          threads: [
-            { projectId: live, worktreePath: WORKTREE },
-            { projectId: deleted, worktreePath: "/fixture/worktrees/gone" },
-          ],
+          threads: shells.filter((shell) => shell.worktreePath === options?.worktreePath),
           archivedThreads: [],
         } as never),
+      ),
     } as never);
     const cli = ClaudeCloudCli.ClaudeCloudCli.of({
       // Like Claude: choosing Yes writes the folder's trust into its own config.
@@ -146,12 +149,17 @@ const layer = Layer.mergeAll(SqlitePersistence.layerMemory, NodeServices.layer);
 
 it.effect("trusts only live project folders and their GOAT worktrees", () =>
   Effect.gen(function* () {
-    const { trust } = yield* harness();
+    const { trust, sql } = yield* harness();
+    // Stored before paths were resolved; the indexed lookup cannot match this spelling.
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES ('spelled', ${live}, 'spelled', 'codex', 'full-access', 'default', '', '', ${JSON.stringify({ worktreePath: "/fixture/worktrees/goat/../goat/spelled" })})`;
     assert.deepEqual(
       yield* Effect.forEach(
         [
           ROOT,
           WORKTREE,
+          "/fixture/worktrees/goat/spelled",
           "/fixture/worktrees/gone",
           "/tmp/elsewhere",
           STRAY_WORKTREE,
@@ -161,7 +169,7 @@ it.effect("trusts only live project folders and their GOAT worktrees", () =>
         trust.policy.allowed,
       ),
       // Claude would record the next two at unregistered checkouts; the last root is unknown.
-      [true, true, false, false, false, false, false],
+      [true, true, true, false, false, false, false, false],
     );
   }).pipe(Effect.provide(layer), Effect.scoped),
 );

@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as TestClock from "effect/testing/TestClock";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 import { layerTest, makeTmpDir, git, initRepoWithCommit } from "../vcs/testing/gitFixture.ts";
@@ -127,13 +128,13 @@ it.effect(
       yield* TestClock.adjust("1 minute");
       yield* sweep;
       assert.equal(reads, 2);
-      // Its own upstream and the remotes still invalidate.
+      // Its own upstream invalidates its branch reads; the remote list does not depend on it.
       yield* git(cwd, ["config", "branch.feature/own.merge", "refs/heads/feature/own"]);
       yield* sweep;
-      assert.equal(reads, 4);
+      assert.equal(reads, 3);
       yield* git(cwd, ["remote", "set-url", "origin", "https://github.com/example/moved.git"]);
       yield* sweep;
-      assert.equal(reads, 6);
+      assert.equal(reads, 5);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
@@ -220,5 +221,57 @@ it.effect("a merged answer confirmed while its fingerprint was forgotten is chec
     yield* state.validate(cwd, "main", false);
     yield* state.verifyTerminal(cwd, "main", merged, recheck);
     assert.equal(rechecks, 2);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("invalidating any worktree moves every cwd's lookup generation", () =>
+  Effect.gen(function* () {
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
+    // Shared reads span worktrees, so a lookup here must not join one from before.
+    const before = state.lookupGeneration("/repo/a");
+    yield* state.forget("/repo/b");
+    const afterForget = state.lookupGeneration("/repo/a");
+    assert.notEqual(afterForget, before);
+    yield* state.bumpEpoch("/repo/b");
+    assert.notEqual(state.lookupGeneration("/repo/a"), afterForget);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("a changed shared stamp keeps later lookups out of a flight that read the old one", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    yield* git(cwd, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    yield* git(cwd, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 16 });
+    yield* state.validate(cwd, "feature", false);
+    const before = state.lookupGeneration(cwd);
+    // Only the default branch's target moves: no file of this branch's own fingerprint changes.
+    yield* git(cwd, ["update-ref", "-d", "refs/remotes/origin/main"]);
+    yield* state.validate(cwd, "feature", false);
+    assert.notEqual(state.lookupGeneration(cwd), before);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("a cwd whose stamp becomes shareable keeps later lookups out of an older flight", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    yield* git(cwd, ["checkout", "-b", "feature"]);
+    const fs = yield* FileSystem.FileSystem;
+    const userConfig = `${yield* makeTmpDir()}/gitconfig`;
+    yield* fs.writeFileString(userConfig, '[includeIf "gitdir:/elsewhere/"]\n\tpath = work\n');
+    const state = yield* makePrLookupGitState({
+      normalizeCwd: Effect.succeed,
+      capacity: 16,
+      userConfigFiles: [userConfig],
+    });
+    yield* state.validate(cwd, "feature", false);
+    const before = state.lookupGeneration(cwd);
+    // Only the user config changes; nothing in the repository's own fingerprint moves.
+    yield* fs.writeFileString(userConfig, "[user]\n\tname = Someone\n");
+    yield* state.validate(cwd, "feature", false);
+    assert.notEqual(state.lookupGeneration(cwd), before);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );

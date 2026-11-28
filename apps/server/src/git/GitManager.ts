@@ -103,6 +103,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
 import { makePrLookupGitState, prLookupFailureTtl } from "./prLookupGitState.ts";
+import { makePrLookupFlights } from "./prLookupFlights.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@goat/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -824,6 +825,7 @@ export const make = Effect.gen(function* () {
     );
   const {
     epoch: prLookupEpoch,
+    lookupGeneration: prLookupGeneration,
     bumpEpoch: bumpPrLookupEpoch,
     remember: rememberPrLookupGitState,
     forget: forgetPrLookupGitState,
@@ -2359,6 +2361,24 @@ export const make = Effect.gen(function* () {
     };
   });
   const branchPrLookups = yield* Semaphore.make(BRANCH_PR_LOOKUP_CONCURRENCY);
+  const branchPullRequestFlight = yield* makePrLookupFlights(
+    Effect.fn("branchPullRequest.lookup")(function* (request) {
+      const { cwd: cacheCwd, branch } = request;
+      const pullRequest = yield* lookupBranchPullRequest(cacheCwd, branch, request);
+      if (
+        pullRequest === null ||
+        pullRequest.state === "open" ||
+        request.freshGitState ||
+        !request.confirmTerminal
+      ) {
+        return pullRequest;
+      }
+      const recheck = { refresh: false, freshGitState: true };
+      const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
+      return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
+    }, branchPrLookups.withPermits(1)),
+    prLookupGeneration,
+  );
   const branchPullRequest: GitManager["Service"]["branchPullRequest"] = Effect.fn(
     "branchPullRequest",
   )(function* ({ cwd, branch }, options) {
@@ -2366,22 +2386,14 @@ export const make = Effect.gen(function* () {
     const refresh = options?.refresh === true;
     const freshGitState = refresh || options?.freshGitState === true;
     yield* validatePrLookupGitState(cacheCwd, branch, refresh);
-    const pullRequest = yield* lookupBranchPullRequest(cacheCwd, branch, {
+    return yield* branchPullRequestFlight({
+      cwd: cacheCwd,
+      branch,
       refresh,
       freshGitState,
+      confirmTerminal: options?.confirmTerminal !== false,
     });
-    if (
-      pullRequest === null ||
-      pullRequest.state === "open" ||
-      freshGitState ||
-      options?.confirmTerminal === false
-    ) {
-      return pullRequest;
-    }
-    const recheck = { refresh: false, freshGitState: true };
-    const verify = lookupBranchPullRequest(cacheCwd, branch, recheck);
-    return yield* verifyTerminalPrLookup(cacheCwd, branch, pullRequest, verify);
-  }, branchPrLookups.withPermits(1));
+  });
   const invalidateLocalStatus: GitManager["Service"]["invalidateLocalStatus"] = Effect.fn(
     "invalidateLocalStatus",
   )(function* (cwd) {

@@ -6,6 +6,8 @@ import { makeGitMetadataFingerprint } from "../vcs/gitMetadataFingerprint.ts";
 
 const FRESH_READ_TTL_MS = 1_000;
 const BACKGROUND_READ_TTL_MS = 5 * 60_000;
+// Reads answered by a repository's common config and remote refs, never by one worktree's state.
+const REPOSITORY_READ = /^(?:remotes|remoteUrl\u0000|defaultBranch\u0000)/;
 
 const PR_LOOKUP_FAILURE_BASE_TTL = Duration.seconds(20);
 const PR_LOOKUP_FAILURE_MAX_TTL = Duration.minutes(15);
@@ -23,10 +25,19 @@ export function prLookupFailureTtl(consecutiveFailures: number): Duration.Durati
 export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function* (options: {
   readonly normalizeCwd: (cwd: string) => Effect.Effect<string>;
   readonly capacity: number;
+  /** Overrides the user and system git config files the environment names. */
+  readonly userConfigFiles?: ReadonlyArray<string> | null;
 }) {
-  const fingerprint = yield* makeGitMetadataFingerprint();
+  const fingerprint = yield* makeGitMetadataFingerprint(
+    options.userConfigFiles === undefined ? {} : { userConfigFiles: options.userConfigFiles },
+  );
   const epochs = new Map<string, number>();
   const fingerprints = new Map<string, string>();
+  // Each cwd's last validated repository stamp; linked worktrees with equal stamps share reads.
+  const sharedStamps = new Map<string, string | null>();
+  // Explicit refreshes and GOAT mutations cover state the stamps cannot see, so they restart
+  // every shared read.
+  let sharedGeneration = 0;
   const remembered = new Map<
     string,
     { readonly startedAtMs: number; readonly completedAtMs: number; readonly value: string | null }
@@ -84,9 +95,11 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   };
   const bumpEpoch = Effect.fn("PrLookupGitState.bumpEpoch")(function* (cwd: string) {
     const key = yield* options.normalizeCwd(cwd);
+    sharedGeneration++;
     advanceEpoch(key);
   });
   const forget = Effect.fn("PrLookupGitState.forget")(function* (cwd: string) {
+    sharedGeneration++;
     clear(yield* options.normalizeCwd(cwd));
   });
   const validate = Effect.fn("PrLookupGitState.validate")(function* (
@@ -98,6 +111,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     if (metadata === null) {
       advanceEpoch(cwd);
       clear(cwd);
+      sharedStamps.delete(cwd);
       return;
     }
     const branchKey = `${cwd}\u0000${branch}`;
@@ -116,9 +130,19 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
       // A read that started before the refresh must not answer or repopulate for later callers.
       restartReads(cwd);
       clear(cwd);
+      sharedGeneration++;
     }
     saveFingerprint(cwd, metadata.repository);
     saveFingerprint(branchKey, metadata.refs);
+    // A lookup already in flight read the old shared state; later ones must not join it.
+    const previousShared = sharedStamps.get(cwd);
+    if (previousShared !== undefined && previousShared !== metadata.shared) restartReads(cwd);
+    sharedStamps.delete(cwd);
+    if (sharedStamps.size >= options.capacity) {
+      const oldest = sharedStamps.keys().next().value;
+      if (oldest !== undefined) sharedStamps.delete(oldest);
+    }
+    sharedStamps.set(cwd, metadata.shared);
   });
   // Untraced: each lookup asks for several keys, mostly from memory, every sweep minute; a read
   // that misses has its own git span under lookupBranchPullRequest.
@@ -128,7 +152,9 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     fresh: boolean,
     read: Effect.Effect<string | null, GitCommandError>,
   ) {
-    const entryKey = `${cwd}\u0000${key}`;
+    const stamp = REPOSITORY_READ.test(key) ? (sharedStamps.get(cwd) ?? undefined) : undefined;
+    const scope = stamp === undefined ? cwd : `shared\u0000${sharedGeneration}\u0000${stamp}`;
+    const entryKey = `${scope}\u0000${key}`;
     const startedAtMs = yield* Clock.currentTimeMillis;
     const entry = remembered.get(entryKey);
     // A validated fresh lookup may share a short burst; background reads keep
@@ -139,7 +165,9 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     ) {
       return entry.value;
     }
-    const generation = readGeneration(cwd);
+    const currentGeneration = () =>
+      stamp === undefined ? readGeneration(cwd) : -1 - sharedGeneration;
+    const generation = currentGeneration();
     const pendingKey = `${entryKey}\u0000${generation}`;
     let shared = pending.get(pendingKey);
     if (shared === undefined) {
@@ -153,7 +181,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     const latest = remembered.get(entryKey);
     // A git mutation must not let an older in-flight read repopulate its cache.
     if (
-      readGeneration(cwd) !== generation ||
+      currentGeneration() !== generation ||
       (latest !== undefined && latest.startedAtMs > startedAtMs)
     )
       return value;
@@ -207,6 +235,8 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   });
   return {
     epoch,
+    /** Moves whenever a lookup for the cwd must not join one that started before. */
+    lookupGeneration: (cwd: string) => `${epoch(cwd)}:${readGeneration(cwd)}:${sharedGeneration}`,
     bumpEpoch,
     remember,
     forget,

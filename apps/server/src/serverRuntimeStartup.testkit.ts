@@ -41,6 +41,7 @@ import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeReco
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
+import { refuseFullShellSnapshot } from "./orchestration-v2/testkit/boundedShellSnapshot.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -279,13 +280,15 @@ export const bootstrapScenario = (
         }),
         Layer.mock(ThreadManagement.ThreadManagementService)({
           countThreads: () => Effect.succeed(0),
-          getShellSnapshot: () =>
+          // Startup looks for a thread in the bootstrapped project only.
+          getShellSnapshot: refuseFullShellSnapshot(() =>
             Effect.succeed({
               threads: [],
               archivedThreads: [],
               schemaVersion: 1,
               snapshotSequence: 0,
             }),
+          ),
         }),
         Layer.mock(ThreadLaunch.ThreadLaunchService)({
           launch: (input) => {
