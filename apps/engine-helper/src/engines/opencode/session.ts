@@ -148,6 +148,10 @@ export class OpenCodeSession implements EngineSession {
   }
   private finish(turn: Turn, outcome: TurnOutcome) {
     if (this.active !== turn) return;
+    if (turn.interrupted && outcome.type === "done") {
+      if (!turn.stopIdle) return;
+      outcome = this.stopOutcome(turn);
+    }
     if (outcome.type === "failed") {
       let invalidated = false;
       for (const [id, receipt] of turn.steers) if (!receipt.accepted) { turn.steers.delete(id); invalidated = true; }
@@ -406,7 +410,7 @@ export class OpenCodeSession implements EngineSession {
       }
       case "session.status":
         if (event.properties.status.type === "idle") { if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
-        else await this.admission(turn, "observed");
+        else { turn.admission.idle = false; await this.admission(turn, "observed"); }
         return;
       case "session.idle":
         if (turn.interrupted) { turn.stopIdle = true; if (!turn.stopPending) this.finish(turn, this.stopOutcome(turn)); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
@@ -414,8 +418,10 @@ export class OpenCodeSession implements EngineSession {
       case "session.compacted": {
         turn.overflow = false;
         const id = `${turn.id}:compaction`;
+        delete turn.lastUsage;
+        for (const pending of turn.usagePending.values()) for (const partId of pending.keys()) turn.usagePartIds.add(partId);
+        turn.usagePending.clear();
         if (turn.emitted.has(id)) return;
-        delete turn.lastUsage; turn.usagePending.clear();
         this.completed(turn, id, item({ ...this.base(id, turn), strength: "weak", title: "Context compacted" }, "compaction", { driver: "opencode", summary: "Context compacted" }));
         return;
       }

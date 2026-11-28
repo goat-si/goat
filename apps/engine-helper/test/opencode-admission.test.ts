@@ -90,6 +90,29 @@ test("idle before an uncertain steer reply is reconciled after the reply", async
   } finally { await session.shutdown(); }
 });
 
+test("native activity after an early idle supersedes it before an uncertain steer reply", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } }); await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = fake.holdPrompt();
+    try {
+      const steering = session.steer(turn.turnId, [{ inputId: "unknown", text: "fail-prompt", attachments: [] }]); await gate.reached;
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+      await fake.sendEvent("session.status", { sessionID: session.engineRef, status: { type: "busy" } });
+      gate.release(); assert.equal((await steering).status, "unknown");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+      const terminal = events.find((event) => event.type === "turn_finished");
+      assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "failed");
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});
+
 test("accepted steers settle before the turn finishes, including unread cancellation", async () => {
   for (const read of [true, false]) {
     fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
@@ -244,6 +267,32 @@ test("usage respects native step order, unresolved ownership, and compaction", a
   }
 });
 
+test("later compaction invalidates intervening and replayed usage", async () => {
+  for (const replay of [false, true]) {
+    fake.reset(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+    const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+    const session = await opencodeEngine.start(params, host);
+    try {
+      const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+      assert.equal(turn.status, "accepted"); await new Promise<void>((resolve) => setImmediate(resolve));
+      const prompt = fake.calls.filter((entry) => entry.method === "prompt").at(-1)?.args as { messageID: string };
+      const info = { id: "assistant", sessionID: session.engineRef, role: "assistant", parentID: prompt.messageID, time: {} };
+      const step = { id: "step", sessionID: session.engineRef, messageID: "assistant", type: "step-finish", reason: "stop", cost: 0, tokens: { input: 20, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } };
+      await fake.sendEvent("session.compacted", { sessionID: session.engineRef });
+      if (!replay) await fake.sendEvent("message.updated", { sessionID: session.engineRef, info });
+      await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step });
+      await fake.sendEvent("session.compacted", { sessionID: session.engineRef });
+      if (replay) {
+        await fake.sendEvent("message.part.updated", { sessionID: session.engineRef, part: step });
+        await fake.sendEvent("message.updated", { sessionID: session.engineRef, info });
+      }
+      await fake.sendEvent("session.idle", { sessionID: session.engineRef }); await finished.promise;
+      assert.equal(events.some((event) => event.type === "token_usage"), false, `replay=${replay}`);
+      assert.equal(events.filter((event) => event.type === "item_completed" && event.item.type === "compaction").length, 1);
+    } finally { await session.shutdown(); }
+  }
+});
+
 test("context usage includes the model input limit from the catalog", async () => {
   fake.reset(); fake.setModelLimits({ input: 1000, context: 2000 });
   const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
@@ -268,6 +317,21 @@ test("a steer is declined after native completion while usage catalog is pending
     assert.equal((await session.steer(turn.turnId, [{ inputId: "late", text: "unread-steer", attachments: [] }])).status, "declined");
     assert.equal(fake.calls.filter((call) => call.method === "prompt").length, 1);
   } finally { gate.release(); await session.shutdown(); }
+});
+
+test("interrupt during a usage catalog lookup never finishes as done", async () => {
+  fake.reset(); const gate = fake.holdProvider(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); const abort = fake.holdAbort(session.engineRef);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hello", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await gate.reached;
+    const stopping = session.interrupt(turn.turnId); await abort.reached; abort.release(); await stopping;
+    gate.release(); await finished.promise;
+    const terminal = events.find((event) => event.type === "turn_finished");
+    assert.equal(terminal?.type === "turn_finished" && terminal.outcome.type, "interrupted");
+  } finally { abort.release(); gate.release(); await session.shutdown(); }
 });
 
 test("a provider failure is not delayed by a stalled usage catalog", async () => {
