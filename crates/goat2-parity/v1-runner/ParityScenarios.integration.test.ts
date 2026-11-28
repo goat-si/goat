@@ -30,6 +30,8 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const threadAliases = new Set(scenario.steps.map((s: any) => s.thread).filter(Boolean));
   if (threadAliases.size !== 1) throw new Error(`single-thread runner got threads ${[...threadAliases]}`);
   const sends = scenario.steps.filter((s: any) => s.do === "send");
+  const editSteps = scenario.steps.filter((s: any) => s.do === "queue_edit");
+  if (editSteps.length > 1 || (editSteps.length === 1 && (sends.length !== 2 || editSteps[0].input !== sends[1].input || editSteps[0].thread !== sends[1].thread))) throw new Error("unsupported queue edit target");
   // v1's fixture DSL creates one run per start/queue send, numbered by send order
   // (shared.ts runIndex). Resolve a scenario run alias through the expected trace:
   // the run.started event names the input whose send created that run.
@@ -50,6 +52,7 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   for (const s of scenario.steps) {
     if (s.do === "send" && s.mode === "start") fixtureSteps.push({type: "message", text: s.text});
     else if (s.do === "send" && s.mode === "queue") fixtureSteps.push({type: "queue_message", text: s.text});
+    else if (s.do === "queue_edit") fixtureSteps.push({type: "cancel_queued_run", targetRunIndex: 2});
     else if (s.do === "await" && s.until === "run_status" && fixtureSteps.length > 0) {
       const list = awaitsAfterSend.get(fixtureSteps.length - 1) ?? [];
       list.push(s);
@@ -61,7 +64,6 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
   const transcript = yield* Schema.decodeUnknownEffect(CodexReplay.CodexAppServerReplayTranscript)(materializeReplayTranscriptWorkspace(raw, workspace));
   const marked = {...transcript, entries: transcript.entries.map((entry) => ({...entry, parityOriginal: true}))};
   const augmented = withThreadSetupReads(withThreadNames(marked, [`Replay fixture: ${scenario.name}`]));
-  const driver = yield* CodexReplay.makeReplayDriver(augmented);
   const materialized = yield* materializeFixtureInput({scenario: scenario.name, fixtureInput: {steps: fixtureSteps}, driver: ProviderDriverKind.make("codex"), modelSelection: CODEX_MODEL_SELECTION});
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threadId = materialized.projectionThreadIds[0];
@@ -84,8 +86,24 @@ it.effect("replays the parity scenario", () => Effect.scoped(Effect.gen(function
       steps.push({type: "await_run_status", threadId, runId: ids.derive.run({threadId, ordinal}), status: a.status});
     }
   }
+  const edit = editSteps[0];
+  if (edit) {
+    const index = steps.findIndex((s: any) => s.type === "dispatch" && s.command.type === "queued-run.cancel");
+    if (index < 0) throw new Error("missing queued edit placeholder");
+    const command = steps[index].command;
+    steps.splice(index, 1,
+      {type: "await_run_status", threadId, runId: command.runId, status: "queued"},
+      {type: "dispatch", command: {...command, type: "queued-run.edit", text: edit.text}},
+      {type: "release_replay_gate", label: "turn/completed"},
+      {type: "await", key: "run:1"},
+      {type: "await_thread_idle", threadId});
+  }
   if (sendIndex !== sends.length - 1) throw new Error(`materialized ${sendIndex + 1} sends, scenario has ${sends.length}`);
-  const harness = {...CodexOrchestratorReplayHarness, makeProviderAdapterRegistryLayer: () => CodexAdapterV2Testkit.layer({transcript, driver})};
+  let driver: any;
+  const harness = {...CodexOrchestratorReplayHarness, makeProviderAdapterRegistryLayer: (_: any, options: any) => Layer.unwrap(Effect.gen(function* () {
+    driver = yield* CodexReplay.makeReplayDriver(augmented, options?.replayGate ? {beforeEmitInbound: (entry) => Effect.promise((signal) => options.replayGate.beforeEmit(entry.label, signal))} : {});
+    return CodexAdapterV2Testkit.layer({transcript, driver});
+  }))};
   const exit = yield* Effect.exit(runOrchestratorV2ProviderReplayScenario({name: `${scenario.name}/codex`, transcript, commands: materialized.commands, steps, projectionThreadIds: materialized.projectionThreadIds, runtimePolicyOverride: {cwd: workspace}}, harness));
   const state = yield* Ref.get(driver.state);
   const trace = traceFromV1(scenario, Exit.isSuccess(exit) ? exit.value.storedEvents : [], driver.transcript, state, threadId, messageInputs, Exit.isFailure(exit) ? Cause.pretty(exit.cause) : undefined);
