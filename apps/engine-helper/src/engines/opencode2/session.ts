@@ -522,6 +522,7 @@ export class OpenCode2Session implements EngineSession {
       await stopChildren();
       const result = await bounded(10_000, this.shutdownSignal.signal, (signal) => this.runtime.client.session.interrupt({ sessionID: this.engineRef }, { signal }));
       if (!result.interrupted) throw new HelperError("transport", "OpenCode 2 interrupt was not confirmed");
+      checked.clear();
       await stopChildren();
       turn.interrupted = true;
     } catch (error) {

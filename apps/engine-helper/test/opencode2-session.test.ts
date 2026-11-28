@@ -803,3 +803,18 @@ test("conflicting terminal text during replay fails the owning session visibly",
     } finally { history.release(); }
   } finally { await session.shutdown(); }
 });
+
+test("second child check detects a restart even if its start event is delayed", async () => {
+  const fake = scriptedRuntime(); const events: EngineEvent[] = []; const session = await OpenCode2Session.fromRuntime(fake.runtime, params, hostFor(events));
+  try {
+    const turn = await session.startTurn(input("i", "hold"), settings); assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("not admitted"); await tick();
+    fake.emit("session.created", { sessionID: "child", parentID: session.engineRef }); fake.setActive({ child: { type: "running" } }); await tick();
+    const gate = fake.holdInterrupt(session.engineRef);
+    try {
+      const stopping = session.interrupt(turn.turnId); await gate.reached;
+      fake.setActive({ child: { type: "running" } }); fake.emit("session.execution.interrupted", { sessionID: session.engineRef, reason: "user" }); await tick();
+      gate.release(); await stopping; await tick();
+      assert.equal(fake.calls.filter((call) => call.method === "session.interrupt" && (call.input as { sessionID: string }).sessionID === "child").length, 2);
+    } finally { gate.release(); }
+  } finally { await session.shutdown(); }
+});
