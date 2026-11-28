@@ -236,6 +236,19 @@ test("context usage includes the model input limit from the catalog", async () =
   } finally { await session.shutdown(); }
 });
 
+test("a steer is declined after native completion while usage catalog is pending", async () => {
+  fake.reset(); const gate = fake.holdProvider(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hello", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await gate.reached;
+    assert.equal((await session.steer(turn.turnId, [{ inputId: "late", text: "unread-steer", attachments: [] }])).status, "declined");
+    assert.equal(fake.calls.filter((call) => call.method === "prompt").length, 1);
+  } finally { gate.release(); await session.shutdown(); }
+});
+
 test("a provider failure is not delayed by a stalled usage catalog", async () => {
   fake.reset(); const gate = fake.holdProvider(); const events: EngineEvent[] = []; const finished = Promise.withResolvers<void>();
   const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };

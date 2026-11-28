@@ -513,7 +513,7 @@ export class OpenCodeSession implements EngineSession {
   }
   async steer(turnId: string, inputs: ReadonlyArray<EngineInput>) {
     const turn = this.active;
-    if (!turn || turn.id !== turnId || turn.interrupted || turn.admission.pending || !promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode turn is not available for steering" };
+    if (!turn || turn.id !== turnId || turn.interrupted || turn.admission.pending || turn.usageLookup || !promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode turn is not available for steering" };
     const previous = turn.admission;
     turn.admission = { id: messageId(), accepted: false, observed: false, idle: false, pending: true };
     const id = turn.admission.id;
