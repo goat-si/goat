@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use goat2_contracts::{
-    EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities, RequestKind, TurnItem,
+    EngineDriver, EngineItemLocator, EngineRef, ItemId, ProviderCapabilities, ProviderProbeResult,
+    RequestKind, TurnItem,
 };
 use goat2_engine_api::{
     EngineError, EngineEvent, EngineFactory, EngineHandle, EngineInput, EngineSession,
@@ -27,6 +28,7 @@ const PROTOCOL_VERSION: u64 = 1;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(90);
 const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_TAIL_LINES: usize = 200;
 
 /// The engines the helper runs.
@@ -119,6 +121,33 @@ impl HelperFactory {
         }
     }
 
+    /// Start a helper process with its stdio connected.
+    fn spawn(&self, cwd: Option<PathBuf>) -> Result<Spawned, EngineError> {
+        let mut launch = Launch::new(&self.launch.node)
+            .arg(&self.launch.entry)
+            .without_host_identity();
+        launch.cwd = cwd;
+        launch.env_set.extend(self.launch.env.iter().cloned());
+        let mut process = ChildProcess::spawn(&launch).map_err(|error| {
+            EngineError::Unavailable(format!(
+                "engine helper could not start ({}): {error}",
+                self.launch.node.display()
+            ))
+        })?;
+        let (Some(stdin), Some(stdout)) = (process.take_stdin(), process.take_stdout()) else {
+            process.kill_group();
+            return Err(EngineError::StartFailed(
+                "engine helper has no stdio".into(),
+            ));
+        };
+        let (connection, inbound) = Connection::start(stdin, stdout, HelperDialect);
+        let client = Client {
+            connection,
+            next_id: AtomicU64::new(1),
+        };
+        Ok((process, client, inbound))
+    }
+
     fn initialize_params(&self, spec: &SessionSpec) -> Value {
         let resume = spec
             .resume
@@ -156,29 +185,8 @@ impl HelperFactory {
 #[async_trait]
 impl EngineFactory for HelperFactory {
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
-        let mut launch = Launch::new(&self.launch.node)
-            .arg(&self.launch.entry)
-            .without_host_identity();
-        launch.cwd = Some(PathBuf::from(&spec.engine.cwd));
-        launch.env_set.extend(self.launch.env.iter().cloned());
-        let mut process = ChildProcess::spawn(&launch).map_err(|error| {
-            EngineError::Unavailable(format!(
-                "engine helper could not start ({}): {error}",
-                self.launch.node.display()
-            ))
-        })?;
-        let (Some(stdin), Some(stdout)) = (process.take_stdin(), process.take_stdout()) else {
-            process.kill_group();
-            return Err(EngineError::StartFailed(
-                "engine helper has no stdio".into(),
-            ));
-        };
+        let (mut process, client, inbound) = self.spawn(Some(PathBuf::from(&spec.engine.cwd)))?;
         let pgid = process.pid();
-        let (connection, inbound) = Connection::start(stdin, stdout, HelperDialect);
-        let client = Client {
-            connection,
-            next_id: AtomicU64::new(1),
-        };
         let params = self.initialize_params(&spec);
         let engine_ref = match client.call("initialize", params, INITIALIZE_TIMEOUT).await {
             Ok(result) => match result.get("engineRef").and_then(Value::as_str) {
@@ -226,7 +234,36 @@ impl EngineFactory for HelperFactory {
             .or_else(|| crate::capabilities::for_driver(&EngineDriver::Cursor))
             .expect("cursor capabilities exist")
     }
+
+    /// One short-lived helper answers `probe` (the engine's own install, version, sign-in and
+    /// model checks) and exits.
+    async fn probe(&self) -> Result<ProviderProbeResult, EngineError> {
+        let (mut process, client, _inbound) = self.spawn(None)?;
+        let params = json!({
+            "protocol": PROTOCOL_VERSION,
+            "engine": self.engine.wire_name(),
+            "cwd": Value::Null,
+            "launch": Value::Null,
+        });
+        let answer = client.call("probe", params, PROBE_TIMEOUT).await;
+        let _ = client.call("shutdown", json!({}), SHUTDOWN_TIMEOUT).await;
+        client.connection.close_input().await;
+        let tail = process.stderr_tail();
+        process.shutdown().await;
+        match answer {
+            Ok(value) => serde_json::from_value(value)
+                .map_err(|error| EngineError::Transport(format!("invalid probe result: {error}"))),
+            Err(CallError::Remote(RemoteError { code, message }))
+                if code.as_deref() == Some("unavailable") =>
+            {
+                Err(EngineError::Unavailable(message))
+            }
+            Err(error) => Err(start_error(error, &tail)),
+        }
+    }
 }
+
+type Spawned = (ChildProcess, Client, mpsc::UnboundedReceiver<Inbound>);
 
 fn start_error(error: CallError, stderr_tail: &str) -> EngineError {
     match error {

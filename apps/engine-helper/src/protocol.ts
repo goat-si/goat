@@ -3,6 +3,7 @@ import type {
   ChatAttachment,
   ItemId,
   ModelSelection,
+  ProviderProbeResult,
   RequestOutcome,
   RuntimeMode,
   TurnItem,
@@ -46,6 +47,17 @@ export interface InitializeParams {
   readonly instructions: Instructions | null;
   readonly launch: LaunchSpec | null;
 }
+
+/** `probe`: install, version, sign-in state and models without a session. */
+export interface ProbeParams {
+  readonly protocol: number;
+  readonly engine: EngineKind;
+  readonly cwd: string | null;
+  readonly launch: LaunchSpec | null;
+}
+
+/** goat2-contracts `ProviderProbeResult` (v1 ServerProvider subset). */
+export type ProbeResult = ProviderProbeResult;
 
 export interface EngineInput {
   readonly inputId: string;
