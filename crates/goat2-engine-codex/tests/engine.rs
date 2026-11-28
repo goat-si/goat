@@ -898,6 +898,83 @@ fn thread_idle(thread: &str) -> Entry {
     )
 }
 
+/// resume.json up to the resume answer, with the answer reporting the thread busy. Codex
+/// 0.167.0 sends an idle thread/status/changed before that answer (recorded order).
+fn busy_resume_prefix() -> (Vec<Entry>, String) {
+    let t = load("codex-0.167.0/resume.json");
+    let thread = recorded_thread(&t);
+    let mut entries = entries_until(
+        &t,
+        |e| matches!(e, Entry::EmitInbound { frame, .. } if frame.pointer("/result/thread/id").is_some()),
+    );
+    if let Some(Entry::EmitInbound { frame, .. }) = entries.last_mut() {
+        frame["result"]["thread"]["status"] = json!({"type": "active", "activeFlags": []});
+    }
+    (entries, thread)
+}
+
+fn turns_list(rpc: u64, thread: &str) -> Entry {
+    expect(json!({"id": rpc, "method": "thread/turns/list", "params": {
+        "threadId": thread, "limit": 10, "sortDirection": "desc", "itemsView": "summary"}}))
+}
+
+fn foreign_running(rpc: u64) -> Entry {
+    emit(json!({"id": rpc, "result": {"data": [
+        {"id": "foreign-turn", "items": [], "status": "inProgress", "error": null}]}}))
+}
+
+async fn refused_start(h: &EngineHandle, id: &str) {
+    let result = h
+        .session
+        .start_turn(input(id, "hi"), &settings(RuntimeMode::ApprovalRequired))
+        .await;
+    assert!(
+        matches!(result, TurnStartResult::RefusedUnowned { .. }),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_turn_list_after_a_busy_resume_keeps_every_retry_guarded() {
+    // v1 classify (CodexTurnStartGuard.ts:78-105): busy with no turn named fails closed. The
+    // busy resume stays unsettled until a readable list, so the retry lists again.
+    let (mut entries, thread) = busy_resume_prefix();
+    entries.push(turns_list(50, &thread));
+    entries.push(emit(
+        json!({"id": 50, "error": {"code": -32603, "message": "list failed"}}),
+    ));
+    entries.push(turns_list(51, &thread));
+    entries.push(emit(json!({"id": 51, "result": {"data": "not a list"}})));
+    entries.push(turns_list(52, &thread));
+    entries.push(foreign_running(52));
+    let t = synthetic("busy-resume-list-failures", entries);
+    let h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |_| {}).await;
+    refused_start(&h, "goat-input-1").await; // list error
+    refused_start(&h, "goat-input-2").await; // unreadable list
+    refused_start(&h, "goat-input-3").await; // the foreign turn, listed
+    // No turn/start ever went out: the fake had nothing more to expect.
+    finish(h).await;
+}
+
+#[tokio::test]
+async fn idle_stop_spares_a_resumed_turn_goat_does_not_own() {
+    // The idle clock lists turns instead of stopping a process whose resume answered busy; a
+    // running native turn keeps the process (stopping it would kill that turn).
+    let (mut entries, thread) = busy_resume_prefix();
+    entries.push(turns_list(50, &thread));
+    entries.push(foreign_running(50));
+    let t = synthetic("busy-resume-idle", entries);
+    let mut h = start(&t, RuntimeMode::ApprovalRequired, Some(&thread), |o| {
+        o.idle_timeout = Some(Duration::from_millis(200));
+    })
+    .await;
+    let quiet = tokio::time::timeout(Duration::from_millis(1500), h.events.recv()).await;
+    assert!(quiet.is_err(), "no event (and no idle exit): {quiet:?}");
+    // Still alive and still guarded: the listed foreign turn refuses a start without a resend.
+    refused_start(&h, "goat-input-1").await;
+    finish(h).await;
+}
+
 fn image_attachment(id: &str) -> goat2_contracts::ChatAttachment {
     goat2_contracts::ChatAttachment {
         kind: goat2_contracts::ChatAttachmentType::Image,

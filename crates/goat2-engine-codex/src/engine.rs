@@ -186,6 +186,7 @@ async fn start_session(
         // A resumed thread can already be running a turn GOAT does not own; the start guard
         // lists turns before sending (v1 CodexTurnStartGuard.ts:58-73,113-116).
         thread_active: opened_active,
+        allowance_epoch: 0,
         resume_busy: opened_active,
         stopped_turns: HashSet::new(),
         early: Vec::new(),
@@ -456,9 +457,10 @@ enum PendingKind {
 struct Pending {
     rpc_id: RpcId,
     kind: PendingKind,
-    /// Runtime mode when the request opened; a session allowance is recorded only while the
-    /// mode is unchanged (v1 CodexAdapterV2.ts:1149-1170).
-    mode: RuntimeMode,
+    /// The allowance set current when the request opened; an answer records a session
+    /// allowance only into that same set, so A -> B -> A cannot revive it (v1 binds answers to
+    /// the request's approval set, CodexAdapterV2.ts:1144-1170).
+    allowance_epoch: u64,
 }
 
 const SETTLED_RING: usize = 64;
@@ -485,6 +487,8 @@ struct Actor {
     interrupt_pending: bool,
     native_running: Option<String>,
     thread_active: bool,
+    /// Bumped on every runtime-mode change, which ends the session allowances.
+    allowance_epoch: u64,
     /// thread/start or thread/resume answered with a busy thread. The first start then always
     /// lists turns before sending (v1 CodexTurnStartGuard.ts:58-73), whatever status
     /// notifications were queued around that answer.
@@ -586,16 +590,20 @@ impl Actor {
 
     fn arm_idle(&mut self) {
         self.idle_deadline = match self.options.idle_timeout {
-            Some(idle)
-                if self.owned.is_none()
-                    && self.dispatch.is_none()
-                    && self.pending.is_empty()
-                    && self.steers.is_empty() =>
-            {
-                Some(Instant::now() + idle)
-            }
+            Some(idle) if self.is_quiet() => Some(Instant::now() + idle),
             _ => None,
         };
+    }
+
+    /// Nothing runs or waits. A native turn GOAT does not own keeps the process too: stopping
+    /// it would kill that turn (v1 treats a working thread as busy, CodexTurnStartGuard.ts:78-105).
+    fn is_quiet(&self) -> bool {
+        self.owned.is_none()
+            && self.dispatch.is_none()
+            && self.pending.is_empty()
+            && self.steers.is_empty()
+            && !self.thread_active
+            && self.native_running.is_none()
     }
 
     // ---- commands ----
@@ -675,6 +683,7 @@ impl Actor {
         // every session allowance, so A -> B -> A does not bring A's allowances back.
         if settings.runtime_mode != self.runtime_mode {
             self.allowance = SessionAllowance::default();
+            self.allowance_epoch += 1;
         }
         self.runtime_mode = settings.runtime_mode;
         self.next_attempt += 1;
@@ -726,20 +735,7 @@ impl Actor {
             }
             None if !*listed => {
                 *listed = true;
-                let conn = self.conn.clone();
-                let internal = self.internal.clone();
-                let thread = self.codex_thread.clone();
-                let limit = self.options.guard_list_timeout;
-                tokio::spawn(async move {
-                    let params = ThreadTurnsListParams::recent(&thread);
-                    let call = conn.request_value(methods::THREAD_TURNS_LIST, &params);
-                    let result = tokio::time::timeout(limit, call).await.unwrap_or(Err(
-                        CallError::Deadline {
-                            method: methods::THREAD_TURNS_LIST.into(),
-                        },
-                    ));
-                    let _ = internal.send(Internal::TurnsListed(result));
-                });
+                self.spawn_turns_list();
             }
             None => {
                 self.finish_dispatch(TurnStartResult::RefusedUnowned {
@@ -756,6 +752,25 @@ impl Actor {
             let _ = reply.send(result);
         }
         self.interrupt_pending = false;
+    }
+
+    /// v1 listedRunningTurn (CodexTurnStartGuard.ts:58-73): newest turns, 5 s bound.
+    fn spawn_turns_list(&self) {
+        let conn = self.conn.clone();
+        let internal = self.internal.clone();
+        let thread = self.codex_thread.clone();
+        let limit = self.options.guard_list_timeout;
+        tokio::spawn(async move {
+            let params = ThreadTurnsListParams::recent(&thread);
+            let call = conn.request_value(methods::THREAD_TURNS_LIST, &params);
+            let result =
+                tokio::time::timeout(limit, call)
+                    .await
+                    .unwrap_or(Err(CallError::Deadline {
+                        method: methods::THREAD_TURNS_LIST.into(),
+                    }));
+            let _ = internal.send(Internal::TurnsListed(result));
+        });
     }
 
     fn send_turn_start(&mut self) {
@@ -951,7 +966,7 @@ impl Actor {
             .map_err(|e| EngineError::Transport(e.to_string()))?;
         if let Some(kind) = allowance_kind
             && approvals::records_session_allowance(outcome)
-            && pending.mode == mode
+            && pending.allowance_epoch == self.allowance_epoch
         {
             self.allowance.kinds_for(mode).insert(kind);
         }
@@ -1390,7 +1405,7 @@ impl Actor {
             Pending {
                 rpc_id: id,
                 kind: pending_kind,
-                mode: self.runtime_mode,
+                allowance_epoch: self.allowance_epoch,
             },
         );
         let summary = approvals::summary(&item);
@@ -1409,23 +1424,30 @@ impl Actor {
     async fn on_internal(&mut self, internal: Internal) {
         match internal {
             Internal::TurnsListed(result) => {
-                let after_busy_resume = std::mem::take(&mut self.resume_busy);
-                if result.is_err() && after_busy_resume && self.native_running.is_none() {
-                    // v1 classify: still busy with no turn named is "unknown" and fails closed.
-                    self.finish_dispatch(TurnStartResult::RefusedUnowned {
-                        reason: "Codex reported this conversation busy and its turns could not be listed, so this could not start. Try again when that turn ends.".into(),
-                    });
-                    return;
-                }
-                if let Ok(value) = result
-                    && let Ok(list) = serde_json::from_value::<TurnsListResponse>(value)
-                    && self.native_running.is_none()
-                {
-                    self.native_running = list
-                        .data
-                        .into_iter()
-                        .find(|t| t.status == Some(TurnStatusWire::InProgress))
-                        .map(|t| t.id);
+                let list = result
+                    .ok()
+                    .and_then(|value| serde_json::from_value::<TurnsListResponse>(value).ok());
+                match list {
+                    Some(list) => {
+                        // Only a readable list settles a busy resume.
+                        self.resume_busy = false;
+                        if self.native_running.is_none() {
+                            self.native_running = list
+                                .data
+                                .into_iter()
+                                .find(|t| t.status == Some(TurnStatusWire::InProgress))
+                                .map(|t| t.id);
+                        }
+                    }
+                    None if self.resume_busy && self.native_running.is_none() => {
+                        // v1 classify: busy with no turn named is "unknown" and fails closed;
+                        // the busy resume stays unsettled, so a retry lists again.
+                        self.finish_dispatch(TurnStartResult::RefusedUnowned {
+                            reason: "Codex reported this conversation busy and its turns could not be listed, so this could not start. Try again when that turn ends.".into(),
+                        });
+                        return;
+                    }
+                    None => {}
                 }
                 self.advance_dispatch().await;
             }
@@ -1534,6 +1556,16 @@ impl Actor {
         }
         if self.idle_deadline.is_some_and(|at| now >= at) {
             self.idle_deadline = None;
+            if !self.is_quiet() {
+                // Became busy after the clock was armed; the loop re-arms once quiet again.
+                return;
+            }
+            if self.resume_busy {
+                // The resume answered busy and nothing has settled it yet: list turns instead of
+                // stopping; a running turn keeps the process, an idle thread re-arms the clock.
+                self.spawn_turns_list();
+                return;
+            }
             self.exit("idle", true).await;
             return;
         }
