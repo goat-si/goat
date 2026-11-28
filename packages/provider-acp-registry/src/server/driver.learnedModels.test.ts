@@ -165,7 +165,17 @@ const makeProfiles = Effect.fn("makeProfiles")(function* (
       ...coordinator,
       ...(getLiveConfiguration === undefined
         ? {}
-        : { getLiveConfiguration: getLiveConfiguration(coordinator) }),
+        : {
+            getLiveConfiguration: getLiveConfiguration(coordinator),
+            getLiveConfigurationWithRevision: (targetInstanceId) =>
+              getLiveConfiguration(coordinator)(targetInstanceId).pipe(
+                Effect.flatMap((configuration) =>
+                  coordinator
+                    .getLiveConfigurationWithRevision(targetInstanceId)
+                    .pipe(Effect.map(({ revision }) => ({ configuration, revision }))),
+                ),
+              ),
+          }),
     }),
     Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
       ...catalogWithInspection(ready),

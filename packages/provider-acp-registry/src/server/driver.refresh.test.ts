@@ -339,9 +339,9 @@ it.layer(driverLayer, { excludeTestServices: true })(
                 version: "1.0.0",
                 distribution: "npx",
               }),
-              resolve: () =>
+              resolve: (_settings, _cwd, _env, options) =>
                 Effect.gen(function* () {
-                  const gate = resolveGate;
+                  const gate = options?.allowInstall === false ? resolveGate : undefined;
                   if (gate !== undefined) {
                     yield* Deferred.succeed(gate.entered, undefined);
                     yield* Deferred.await(gate.release);

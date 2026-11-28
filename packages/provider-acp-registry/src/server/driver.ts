@@ -438,6 +438,9 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           .pipe(Effect.ignore);
       }
       const learnedGeneration = yield* learnedModels.generation;
+      const probeStartLiveRevision = Option.isSome(runtimeCoordinator)
+        ? (yield* runtimeCoordinator.value.getLiveConfigurationWithRevision(instanceId)).revision
+        : 0;
       const environment = yield* currentEnvironment;
       const currentInspection = hasRegistryAgent
         ? yield* catalog.inspect(effectiveConfig, environment).pipe(Effect.option)
@@ -487,9 +490,6 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           runtimeChanged: false,
         };
       }
-      const probeStartLiveRevision = Option.isSome(runtimeCoordinator)
-        ? (yield* runtimeCoordinator.value.getLiveConfigurationWithRevision(instanceId)).revision
-        : 0;
       const runtimeChanged =
         (cached !== null &&
           (cached.provider.version !== inspectedVersion ||
@@ -610,6 +610,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               const current = yield* Ref.get(enrichmentCache);
               if (current.generation !== generation || !(yield* matchesEnvironment)) return;
               const envKey = envKeyFor(environment);
+              let effectiveLearnedGeneration = learnedGeneration;
               if (fresh && provider.status === "ready") {
                 const probedBuiltIn = provider.models.filter((model) => !model.isCustom);
                 const authoritativeProbe =
@@ -622,7 +623,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                       )
                     : true;
                   if (cleared) {
-                    if (runtimeChanged) yield* clearLiveState;
+                    if (runtimeChanged) {
+                      yield* clearLiveState;
+                    } else {
+                      yield* learnedModels.clear;
+                    }
+                    effectiveLearnedGeneration = yield* learnedModels.generation;
                     if (authoritativeProbe) {
                       yield* Ref.set(lastAcceptedCatalog, { envKey, models: probedBuiltIn });
                     }
@@ -630,7 +636,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
                 }
               }
               const enriched = yield* withLiveRuntimeState(provider, environment, {
-                generation: learnedGeneration,
+                generation: effectiveLearnedGeneration,
               });
               if (yield* matchesEnvironment) {
                 if (

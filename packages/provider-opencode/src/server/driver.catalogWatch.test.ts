@@ -39,23 +39,19 @@ const openCode2Runtime = {
 
 const openCode2Model = (providerID: string, id: string, name: string) => ({
   id,
+  modelID: id,
   providerID,
   name,
-  family: id,
-  status: "active",
-  capabilities: {
-    temperature: true,
-    reasoning: false,
-    attachment: false,
-    toolcall: true,
-    input: { text: true, audio: false, image: false, video: false, pdf: false },
-    output: { text: true, audio: false, image: false, video: false, pdf: false },
-    interleaved: false,
-  },
-  cost: [],
-  limit: { context: 128_000, output: 8_192 },
+  package: "@opencode/ai/providers/openai-compatible",
+  settings: {},
+  compatibility: {},
+  capabilities: { tools: true, input: ["text"], output: ["text"] },
   variants: [],
-  time: { released: "2026-01-01" },
+  time: { released: 1789516800000 },
+  cost: [{ input: 0, output: 0, cache: { read: 0, write: 0 } }],
+  status: "active",
+  enabled: true,
+  limit: { context: 1000000, output: 65536 },
 });
 
 const layer = Layer.mergeAll(
@@ -89,6 +85,8 @@ const create = (config: Partial<OpenCodeSettings>, http: HttpClient.HttpClient) 
 // port, and stopping a server ends its event streams.
 const makeIdlingOpenCode2Instance = Effect.gen(function* () {
   const subscribed = yield* Deferred.make<void>();
+  const modelsRead = yield* Deferred.make<void>();
+  const restartedModelsRead = yield* Deferred.make<void>();
   const catalogs = { machine: [openCode2Model("opencode", "big-pickle", "Big Pickle")] };
   const servers: Array<{
     running: boolean;
@@ -98,7 +96,8 @@ const makeIdlingOpenCode2Instance = Effect.gen(function* () {
     const url = new URL(request.url);
     const json = (body: unknown, status = 200) =>
       Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(body, { status })));
-    const server = servers[Number(url.port) - 4096];
+    const serverIndex = Number(url.port) - 4096;
+    const server = servers[serverIndex];
     if (!server?.running) return json({ _tag: "InternalServerError", message: "stopped" }, 503);
     switch (url.pathname) {
       case "/api/info":
@@ -115,10 +114,21 @@ const makeIdlingOpenCode2Instance = Effect.gen(function* () {
           ),
         );
       case "/api/model":
+        return Deferred.succeed(
+          serverIndex === 0 ? modelsRead : restartedModelsRead,
+          undefined,
+        ).pipe(
+          Effect.andThen(
+            json({
+              location: { directory: "/work" },
+              data: catalogs.machine,
+            }),
+          ),
+        );
       case "/api/provider":
         return json({
           location: { directory: "/work" },
-          data: url.pathname === "/api/provider" ? [] : catalogs.machine,
+          data: [],
         });
       default:
         return json({ _tag: "NotFoundError", message: "not found" }, 404);
@@ -161,9 +171,10 @@ const makeIdlingOpenCode2Instance = Effect.gen(function* () {
     Stream.runCollect,
     Effect.forkChild,
   );
-  // The catalog's settle delay starts only after its first HTTP read; the first event
-  // subscription is a request that follows that read.
+  // The catalog's settle delay starts only after its first HTTP read; followScans may
+  // subscribe to `/api/event` before that read, so wait for both.
   yield* Deferred.await(subscribed);
+  yield* Deferred.await(modelsRead);
   yield* TestClock.adjust("5 seconds");
   yield* Fiber.join(ready);
   return {
@@ -178,7 +189,11 @@ const makeIdlingOpenCode2Instance = Effect.gen(function* () {
         message: "Rename the thread",
         modelSelection: { instanceId: instance.instanceId, model: "opencode/big-pickle" },
       })
-      .pipe(Effect.ignore, Effect.andThen(TestClock.adjust("5 seconds"))),
+      .pipe(
+        Effect.ignore,
+        Effect.andThen(Deferred.await(restartedModelsRead)),
+        Effect.andThen(TestClock.adjust("5 seconds")),
+      ),
     // The managed server stops 30 seconds after its last borrower.
     idleOut: TestClock.adjust("31 seconds"),
   };

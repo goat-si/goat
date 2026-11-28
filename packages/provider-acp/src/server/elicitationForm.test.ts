@@ -218,11 +218,15 @@ describe("parseElicitationForm", () => {
         ["tier", undefined],
       ],
     );
-    assert.deepStrictEqual(form.content({ confirm: "Yes", tier: "pro" }), {
+    assert.deepStrictEqual(form.content({ confirm: "true", tier: "pro" }), {
       confirm: true,
       tier: "pro",
     });
-    assert.isUndefined(form.content({ extras: "Yes", mode: "fast", tier: "pro" }));
+    assert.deepStrictEqual(
+      form.content({ extras: "false", mode: "", confirm: "true", tier: "pro" }),
+      { extras: false, mode: "", confirm: true, tier: "pro" },
+    );
+    assert.isUndefined(form.content({ extras: "true", tier: "pro" }));
   });
 });
 
