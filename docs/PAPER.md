@@ -89,6 +89,10 @@ actions sit. Change the SSOT board first, then re-sync the platform boards (they
 | 모바일 iOS — 봇 홈 / 봇 대화 | 390 × 844 | Large title "Bots", search + new bot buttons, list grouped Needs you first, tab bar (Bots, Threads, Machines, Me), home indicator. Chat: back chevron with needs-you badge, centered bot + model, (i) opens the overview as a sheet |
 | 모바일 Android — 봇 홈 / 봇 대화 | 412 × 915 | M3: top app bar with search + account avatar, filter chips (All / Needs you / Running), extended FAB "New bot", navigation bar with pill indicator, gesture handle. Chat: back arrow, bot + model left, overflow menu opens the overview |
 
+One model picker (2026-11-28): the runtime/model chip lives only in the composer, on every
+platform. The bar under the chat header is gone, and headers show the bot's job and machine, not
+the model. Versions stay in Overview → Runtime.
+
 Mobile decisions on both platforms: the decision card leaves the transcript and docks above the
 composer (thumb zone). Primary action is the strongest control. iOS stacks it full width with the
 two others below; Android puts pill buttons right-aligned in Text / Outlined / Filled order.
