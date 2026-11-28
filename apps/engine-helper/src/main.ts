@@ -6,6 +6,10 @@ import { engineLoaders } from "./engines.ts";
 import { createServer } from "./server.ts";
 import { classifyRejection } from "./rejections.ts";
 
+// Electron-as-Node needs this only to start the helper. Engines and the agent commands they run
+// inherit process.env, and the variable breaks every Electron app they launch.
+delete process.env["ELECTRON_RUN_AS_NODE"];
+
 // stdout belongs to the protocol. Anything else that writes there (SDK logging, console.*) goes to
 // stderr, before any SDK loads.
 const protocolWrite = process.stdout.write.bind(process.stdout);
