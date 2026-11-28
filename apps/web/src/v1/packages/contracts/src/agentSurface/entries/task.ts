@@ -1,0 +1,146 @@
+import { entry } from "../entry.ts";
+import { ORCHESTRATION_RECEIPT } from "../idempotencyReasons.ts";
+
+export const taskEntries = {
+  "task.create": entry({
+    resource: "task",
+    verb: "create",
+    name: "delegate_task",
+    toolkit: "orchestrator",
+    operation: "task",
+    summary: "Delegate a child task",
+    description:
+      "Delegate a child task, here or on another machine (target.host, remote.cwd); it stays this thread's subagent. Goals and loops use goat_thread_launch. isolation='worktree' gives a GOAT-managed checkout; never ask children to make worktrees or clones. Completion wakes this thread; don't poll; follow the result's next. After an unknown launch keep taskId; never relaunch.",
+    guide:
+      "Delegate a research lane, review round, or implementation slice from an active agent run in this GOAT thread. The child receives the supplied task prompt without parent conversation history. Children appear under their parent in the sidebar while relevant. The user can promote a child to a top-level thread, ending its task relationship here. Start work that owns a goal, runs HOTL, cxc-loop or repeated PABCD, or spans several cycles with goat_thread_launch so the user can see, steer and resume it.\n\nChoose providers and models with goat_provider_list, which uses the composer's live catalog. Prefer native subagent tools for same-provider work only if they support the chosen model and no model options are requested or inherited. Use goat_task_create for a model the native tool lacks, cross-provider work, or an explicitly GOAT-owned child. Also use it when options are requested, or when retaining the parent's instance and model with nonempty inheritedOptions from goat_provider_list; native subagents cannot reliably apply GOAT model options.\n\nFor each GOAT delegated review round, call goat_task_create with top-level role='review'; goat_review_findings_record refuses tasks with any other role. Include the original brief, prior findings, responses and unresolved objections in the prompt. Record every finding's accepted or rebutted decision with evidence using goat_review_findings_record after each round. Keep each round's taskId and use a distinct clientRequestId that stays stable across retries of that round.\n\nFor an intermediate round, pass continueFrom with the previous round's taskId to keep that reviewer: the new task runs in the same childThreadId and provider conversation with its own taskId and ledger. continueFrom names this thread's latest finished review round in that child, on a local provider that supports follow-ups; omitted target fields keep the reviewer's provider and model, and another model, isolation, runtimeMode, interactionMode, a remote host or a slash-command brief is refused. reviewRound reports continuedFrom and conversation: continued means the provider completed this round's brief in the earlier native conversation; recovered (another native conversation), rewound (rolled back) and not_started (no completed brief) mean it did not; unverified means GOAT lacks the records to tell; compacted means GOAT recorded a compaction there. For the final approval before merging, start a fresh reviewer without continueFrom. Do not start review rounds with goat_thread_send; it refuses finished review children.\n\nSet isolation='worktree' whenever a child needs a separate checkout: GOAT creates and binds a managed worktree based on the parent's local commit. Do not ask children to run git worktree add or git clone for their lanes. Uncommitted edits are not copied. Cloud providers skip local worktree preparation; providers that upload the project folder, such as Claude Cloud, use its current checkout and may include local changes. Project setup runs before the child starts, except setup scripts configured as async can continue after it starts. Omit isolation to share the parent's checkout.\n\nProvider/model and modes inherit unless overridden. Options inherit only for the same provider instance and model. Explicit options override individual inherited values; [] or {} clears them. Set target.options with advertised IDs and values: Claude {effort: 'max', fastMode: true}; Codex {reasoningEffort: 'max', serviceTier: 'priority'}, when advertised by that model. Check providerInstanceId, model and options in the result.\n\nAn explicit runtimeMode must be listed in the target provider's runtimeModes from goat_provider_list. An inherited mode steps down to the broadest supported mode within the parent's ceiling. Leave runtimeMode unset unless the user asks for a supervised child; approval-required and auto-accept-edits can make it wait for a person on actions that need approval.\n\nPrefer mode='async' for long work. mode='wait' releases on completion, timeout, pending approval or a pending user-input question in the child thread. pendingRequestIds identifies questions to read and answer or forward; question release is not waitTimedOut. If hasPendingQuestion, pass threadId=childThreadId to goat_pending_request_list, goat_pending_request_read with requestId, and goat_pending_request_respond, or ask the user. Include host for remote child requests. The child keeps running and completion still wakes this thread.\n\nIf pendingApproval is set, consult the fresh full request in childThreadId before any response: the record can outlive its provider callback. It grants no approval authority. Decisions remain with the child's existing approval holder; agents inside GOAT use pending request tools for questions only and forward approvals to the user.\n\ntimeoutMs in mode='wait' limits the parent's wait and does not cancel the child. waitTimedOut means that wait expired without a releasing result; retain taskId and use goat_task_read later. Async completion notifies and wakes this thread, steering into active turns where supported or queuing otherwise. Never poll or spawn watchers: follow the result's next, ending the turn only when no other work is left; use goat_task_read only if the result is needed mid-turn. An async child keeps running if this turn is interrupted or stopped. A wait child still waiting stops with the turn. An explicit full thread Stop cascade stops local delegated children, including async children. goat_task_cancel stops either mode.\n\nFor another machine, pass target.host (an SSH alias from goat_ssh_host_list or a linked host from goat_host_link_list) and remote.cwd, optionally remote.workspace; on a linked host remote.cwd must be one of its existing projects. The child is still this thread's subagent: it is listed under this thread and its completion wakes this thread. Use goat_ssh_thread_launch there only for a separate top-level thread. This needs a full-access/default caller. Models and options are checked on that host. Retain taskId after an unknown launch outcome; do not relaunch. The result includes host and a remote childThreadId that can be null. Parent Stop does not cancel remote tasks; use goat_task_cancel.",
+    parameters: {
+      task: "The child's whole brief, up to 120000 characters. It does not see this conversation.",
+      target:
+        "Where the child runs: {providerInstanceId, model, options, host?} from goat_provider_list. Omitted fields inherit from this thread.",
+      "target.model": "A model id from goat_provider_list for that instance.",
+      remote: "With target.host: {cwd, workspace?}, the folder on that machine to run in.",
+      title: "The child thread's title in the sidebar.",
+      role: "What the child does. Review rounds use review, which goat_review_findings_record requires.",
+      continueFrom:
+        "Review rounds only: the previous finished review round's taskId. Continues that reviewer's conversation as a new task.",
+      interactionMode: "inherit (default), default or plan.",
+    },
+    examples: [
+      {
+        title: "Start a review round on another model",
+        args: {
+          task: "Review the diff on branch fix/flaky-checkout against dev. Report findings with path:line.",
+          role: "review",
+          target: {
+            providerInstanceId: "codex",
+            model: "gpt-6.1-sol",
+            options: { reasoningEffort: "high" },
+          },
+          clientRequestId: "checkout-review-1",
+        },
+      },
+      {
+        title: "Continue the same reviewer for the next round",
+        args: {
+          task: "Round 2: I fixed findings 1 and 3 and rebutted 2 (see the commit). Re-check them and the new diff.",
+          role: "review",
+          continueFrom: "<previous round taskId>",
+          clientRequestId: "checkout-review-2",
+        },
+      },
+      {
+        title: "Delegate an implementation slice in its own worktree",
+        args: {
+          task: "Add a --json flag to goat thread list and test it.",
+          isolation: "worktree",
+          title: "thread list --json",
+        },
+      },
+    ],
+    effect: "destructive",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: ["approval"],
+    idempotency: "domain",
+    idempotencyReason: ORCHESTRATION_RECEIPT,
+    annotations: {
+      title: "Delegate a child task",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+  "task.read": entry({
+    resource: "task",
+    verb: "read",
+    name: "task_status",
+    toolkit: "orchestrator",
+    summary: "Get delegated task status",
+    description:
+      "Read status and results of this parent thread's GOAT-owned delegated task; reading a terminal result acknowledges automatic delivery. A completed turn with live nested work can still be unfinished. Later child-thread runs do not reopen a published task and can remain active after it ends. stop=unresponsive: Stop went unanswered; task.cancel with force: true ends it.",
+    guide:
+      "Use childRunId to identify the original delegated run. workState distinguishes working, waiting_for_children and result_available. A completed turn with live nested work is not a completed task. summary is the final result, includes provider errors on failure and stays stable after publication.\n\nhasPendingChildRuns reports later queued or executing turns in the backing child thread, even after the task is terminal. It does not reopen the task. goat_task_cancel stops those turns too. Turns held in a stopped queue wait for the user and do not count.\n\nlatestTerminal* exposes later non-monitor turn results. latestTerminalSummary and latestTerminalResultContextTransferId independently become null when they exactly repeat summary and resultContextTransferId, respectively.\n\npendingApproval identifies the oldest pending live approval for this task's own unfinished work. Consult the fresh full request in childThreadId before responding: a record can outlive its provider callback and grants no approval authority. Decisions remain with the child's existing approval holder.\n\nReading a terminal result acknowledges its automatic parent delivery. Remote tasks return host, a remote childThreadId or null, summary-only results, pendingApproval=null, null context transfer/run IDs and hasPendingChildRuns=false. Later remote work is outside the task. Do not watch the remote child; completion already reaches the parent.",
+    idempotencyReason:
+      "taskStatus reads current task progress and acknowledges only terminal completion deliveries that are not already acknowledged or disposed. A stored replay would hide later progress and terminal delivery.",
+    parameters: { taskId: "The taskId goat_task_create returned." },
+    examples: [
+      { title: "Read a delegated task's status and result", args: { taskId: "<taskId>" } },
+    ],
+    effect: "write",
+    capability: "none",
+    capabilityReason:
+      "Reads the caller's own delegated tasks; a write only because reading settles their state.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: {
+      title: "Get delegated task status",
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+  }),
+  "task.cancel": entry({
+    resource: "task",
+    verb: "cancel",
+    name: "task_cancel",
+    toolkit: "orchestrator",
+    summary: "Cancel delegated task",
+    description:
+      "Stop a GOAT-owned delegated task and its local child thread, including later runs. Nested local tasks stop and queued turns are held. Local cancellation drops the completion wake (pending cloud work keeps it): read the child with task.read after cancel; no wake follows. Published results remain. Remote cancellation stays pending until the run stops; parent Stop does not cancel remote tasks.",
+    guide:
+      "Local cancellation normally disposes automatic parent delivery. Cloud-backed local tasks retain it while cloud cancellation or observation remains pending, so the eventual result can still reach the parent. The child stops like user Stop: interrupt the running turn, hold other queued turns, end pull request watches and stop its delegated local tasks. Cancel the task's own queued turn even when held in a stopped queue.\n\nThis also stops later child-thread runs after the task is terminal. A terminal task normally returns its existing status; orphan recovery can instead return cancelled when the parent still records active work whose child run is missing. Published results remain available. A child promoted to a top-level thread is no longer stopped by this task.\n\nRemote tasks request interruption of their launched run and return cancel_requested until it stops. Refused or unreachable cancellation preserves intent and the mailbox. A cancelled remote task's result still reaches the parent like any terminal result. Parent Stop does not cancel remote tasks.\n\nforce: true is a person's Force stop, run for the parent only after a cancel left the child's stop.state unresponsive. forceStop.outcome is killed (its agent process was ended), released (its provider session was closed), releasing (still closing) or shared (another working thread uses that session, so it is detached and the stuck turn keeps running out of sight). On macOS and Windows force releases the session and never kills a process. A refusal stops nothing and answers task_not_cancellable with a reason: not_unresponsive (no run ignored its Stop), not_owner (another thread's task, a grandchild, a promoted child or a provider-native subagent), superseded (a newer run started), cloud (its vendor stops it), remote (the host predates force stop) or mode (the child runs above this thread's mode, so a person must use Force stop). A remote task also needs its host to advertise taskForceStop and this thread to be in full-access default mode with an active run. After a lost response, read the task before retrying: a retry answers not_unresponsive when the first force already worked.",
+    parameters: {
+      taskId: "The taskId goat_task_create returned.",
+      reason: "Why it stops, recorded as the stop reason; up to 2000 characters.",
+      force:
+        "Only after a cancel left the child stop=unresponsive (task.read; for a remote task, thread.status with host): kill its agent and end the run. Parent only.",
+    },
+    examples: [
+      {
+        title: "Stop a delegated task that is no longer needed",
+        args: {
+          taskId: "<taskId>",
+          reason: "Superseded by the merged fix.",
+          clientRequestId: "cancel-checkout-review-1",
+        },
+      },
+    ],
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "Cancels only tasks this parent thread delegated, so narrowing a profile never strands its own work.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason:
+      "clientRequestId fixes the stop command ids, but each call re-reads the child's delegated tasks, so a repeat can also stop work started after the first call.",
+    annotations: {
+      title: "Cancel delegated task",
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+  }),
+} as const;
