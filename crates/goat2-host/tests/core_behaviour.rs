@@ -2100,6 +2100,61 @@ fn subagent_item(
     item
 }
 
+#[tokio::test]
+async fn a_steer_the_engine_cancels_is_requeued_as_a_followup() {
+    let t = setup(manual()).await;
+    let id = start_user_thread(&t, "steer-cancel", Some("start")).await;
+    eventually("running", || running(&t, &id)).await;
+    let turn = t.fake.active_turn(&id).unwrap();
+    send(&t, &id, "steer-cancel-more", "also this", InputMode::Steer).await;
+    let steered = t
+        .fake
+        .calls()
+        .into_iter()
+        .find_map(|c| match c {
+            FakeCall::Steer { input_ids, .. } => input_ids.first().cloned(),
+            _ => None,
+        })
+        .expect("the steer reached the engine");
+    let accepted_before = count(&t, &id, "input.accepted");
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::SteerUpdated {
+            turn_id: turn,
+            input_ids: vec![steered.as_str().into()],
+            status: goat2_host::engine::SteerStatus::Cancelled {
+                reason: "discarded".into(),
+            },
+        },
+    );
+    eventually("requeued", || {
+        t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .queued_inputs
+            .iter()
+            .any(|q| q.input_id.as_str() == steered && q.mode == InputMode::Followup)
+    })
+    .await;
+    assert_eq!(
+        count(&t, &id, "input.accepted"),
+        accepted_before,
+        "no second message"
+    );
+    // The next turn carries it.
+    t.fake.finish_turn(&id, "done");
+    eventually("next turn with the input", || {
+        t.fake.calls().iter().any(|c| {
+            matches!(
+                c,
+                FakeCall::Turn { input_ids, .. } if input_ids.contains(&steered)
+            )
+        })
+    })
+    .await;
+}
+
 fn signins(t: &T, id: &ThreadId) -> Vec<goat2_contracts::RequestOpened> {
     events(t, id)
         .into_iter()
