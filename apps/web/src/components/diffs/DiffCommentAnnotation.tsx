@@ -134,6 +134,7 @@ export function DiffCommentAnnotation({
           }
           if (event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
             if (speech?.voice.blocksSubmission()) {
               speech.voice.cancel();
               return;
