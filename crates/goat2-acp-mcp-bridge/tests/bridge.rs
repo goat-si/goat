@@ -314,12 +314,15 @@ fn in_flight_requests_are_bounded_and_finished_ones_are_reaped() {
         }
     });
     let server = thread::spawn(move || {
-        // Hold every request until the bridge refuses one, or one more than the limit arrived.
+        // Hold requests until all LIMIT have arrived AND the test saw the refusal, or until one
+        // more than the limit arrived (a broken bound). Waiting for both matters: under load the
+        // refusal can be seen before every held request has connected.
         let mut held = Vec::new();
-        while held.len() <= LIMIT {
+        let mut refused = false;
+        while held.len() <= LIMIT && !(refused && held.len() == LIMIT) {
             match received.recv().unwrap() {
                 Event::Connection(stream) => held.push(stream),
-                Event::Refused => break,
+                Event::Refused => refused = true,
             }
         }
         let forwarded = held.len();
