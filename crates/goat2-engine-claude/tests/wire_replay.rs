@@ -836,3 +836,95 @@ async fn an_accepted_steer_unread_at_exit_is_reported_cancelled() {
     assert!(cancelled_at < finished_at);
     handle.session.shutdown().await;
 }
+
+/// Review round 5 finding 1 (v1 `ClaudeAdapterV2.ts:5237-5256`: each steer is read on its own
+/// `started` or echo): of two queued steers only the started one completes; the other, later
+/// discarded, is cancelled and never reported read.
+#[tokio::test]
+async fn only_the_started_steer_of_two_is_reported_completed() {
+    let run = Run::new("wire/two_steers_one_started.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let first = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "First steer."))
+        .await;
+    let second = handle
+        .session
+        .steer(&turn_id, input_as("steer-b", "Second steer."))
+        .await;
+    assert_eq!(
+        (first, second),
+        (SteerResult::Accepted, SteerResult::Accepted)
+    );
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    let updates: Vec<(Vec<String>, bool)> = steer_updates(&events)
+        .into_iter()
+        .map(|(_, ids, status)| (ids, status == SteerStatus::Completed))
+        .collect();
+    assert_eq!(
+        updates,
+        vec![
+            (vec!["steer-a".to_string()], true),
+            (vec!["steer-b".to_string()], false),
+        ]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review round 5 finding 2: a steer Claude started is read for good; a later discard of it does
+/// not cancel (and so requeue) it.
+#[tokio::test]
+async fn a_discard_after_start_does_not_cancel_a_read_steer() {
+    let run = Run::new("wire/steer_started_then_discarded.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(
+        steer_updates(&events),
+        vec![(
+            turn_id.clone(),
+            vec!["steer-a".to_string()],
+            SteerStatus::Completed
+        )]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
+
+/// Review round 5 finding 3: Claude starts the steer and finishes the turn before `steer`
+/// returns; the steer's outcome still goes out before the turn ends.
+#[tokio::test]
+async fn a_steer_read_before_steer_returns_reports_before_the_turn_ends() {
+    let run = Run::new("wire/steer_burst_finishes_turn.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    let completed_at = events.iter().position(|e| {
+        matches!(
+            e,
+            EngineEvent::SteerUpdated {
+                status: SteerStatus::Completed,
+                ..
+            }
+        )
+    });
+    assert!(
+        completed_at.is_some(),
+        "no Completed before TurnFinished: {events:?}"
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
