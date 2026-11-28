@@ -24,10 +24,11 @@ use goat2_contracts::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::AsyncReadExt;
 use tokio::time::{Instant, timeout_at};
 
 use crate::engine::{CodexEngineOptions, base_launch};
-use crate::process::ChildProcess;
+use crate::process::{ChildProcess, Launch};
 use crate::protocol::client::InitializeParams;
 use crate::protocol::methods;
 use crate::transport::Connection;
@@ -48,6 +49,9 @@ pub async fn probe(options: &CodexEngineOptions) -> ProviderProbeResult {
     probe_with(options, PROBE_TIMEOUT).await
 }
 
+/// v1 CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER.
+const FORCE_KILL_AFTER: Duration = Duration::from_secs(2);
+
 /// [probe] with an explicit budget (tests).
 pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> ProviderProbeResult {
     let checked_at = rfc3339_now();
@@ -57,10 +61,10 @@ pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> Provi
     let deadline = Instant::now() + budget;
     let spawned_at_ms = now_ms();
     let mut launch = base_launch(options, &program, cwd.clone());
-    launch.kill_grace = Duration::from_secs(2); // v1 CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER
+    launch.kill_grace = FORCE_KILL_AFTER;
     let mut child = match ChildProcess::spawn(&launch) {
         Ok(child) => child,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Err(error) if command_missing(&error, binary_path.as_deref(), &cwd) => {
             return failed(
                 checked_at,
                 false,
@@ -100,7 +104,13 @@ pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> Provi
     let drain = tokio::spawn(async move { while inbound.recv().await.is_some() {} });
     let outcome = timeout_at(
         deadline,
-        discover(&conn, options, spawned_at_ms, deadline - DISCOVERY_MARGIN),
+        discover(
+            &conn,
+            options,
+            &cwd,
+            spawned_at_ms,
+            deadline - DISCOVERY_MARGIN,
+        ),
     )
     .await;
     conn.close_input();
@@ -130,13 +140,21 @@ pub async fn probe_with(options: &CodexEngineOptions, budget: Duration) -> Provi
     }
 }
 
+/// v1 classifySpawnFailure "missing": not found is also what a vanished cwd or a missing
+/// interpreter gives; only a command that cannot be found counts (CodexProvider.ts:655-665).
+fn command_missing(error: &std::io::Error, binary_path: Option<&str>, cwd: &Path) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound && binary_path.is_none() && cwd.is_dir()
+}
+
 /// v1 `CodexAppServerProviderSnapshot`, the parts GOAT 2 reports.
 struct Snapshot {
     version: Option<String>,
     account: AccountResponse,
-    /// None when the catalog did not arrive in time.
+    /// v1 `effectiveBaseUrl`: the endpoint the config Codex read for the cwd selects.
+    effective_base_url: Option<String>,
+    /// None when the catalog did not arrive within the discovery deadline.
     models: Option<Vec<ServerProviderModel>>,
-    /// `config/read` `config`; None when unread.
+    /// `config/read` `config` (no cwd); None when unread.
     config: Option<Value>,
 }
 
@@ -167,6 +185,7 @@ impl AccountResponse {
 async fn discover(
     conn: &Connection,
     options: &CodexEngineOptions,
+    cwd: &Path,
     spawned_at_ms: i64,
     discovery_deadline: Instant,
 ) -> Result<Snapshot, String> {
@@ -180,51 +199,96 @@ async fn discover(
     conn.notify(methods::INITIALIZED, &Value::Null)
         .map_err(|e| e.to_string())?;
     let version = version_from_user_agent(&init.user_agent);
+    // v1 withCodexAppServerClient (CodexProvider.ts:453-461): the effective endpoint from the
+    // config Codex reads for this cwd.
+    let route_config = conn
+        .request_value(
+            methods::CONFIG_READ,
+            &json!({ "cwd": cwd, "includeLayers": false }),
+        )
+        .await
+        .ok()
+        .and_then(|v| v.get("config").cloned());
+    let effective_base_url = route_config
+        .as_ref()
+        .and_then(|c| read_effective_base_url(c, openai_base_url_env(options).as_deref()));
     let account: AccountResponse = conn
         .request("account/read", &json!({}))
         .await
         .map_err(|e| e.to_string())?;
-    if account.account.is_none() && account.requires_openai_auth {
+    if account.account.is_none()
+        && account.requires_openai_auth
+        && !routes_away_from_openai(effective_base_url.as_deref())
+    {
         return Ok(Snapshot {
             version,
             account,
+            effective_base_url,
             models: Some(Vec::new()),
             config: None,
         });
     }
-    // Optional discovery finishes before the outer deadline can discard the account result.
-    let config = timeout_at(
-        discovery_deadline.min(Instant::now() + CONFIG_TIMEOUT),
-        conn.request_value(methods::CONFIG_READ, &json!({ "includeLayers": false })),
-    )
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .and_then(|v| v.get("config").cloned());
-    let models = if account.account_type() == Some("chatgpt") {
-        chatgpt_models(
-            conn,
-            init.codex_home.as_deref(),
-            spawned_at_ms,
-            discovery_deadline,
+    // v1 runs these together under the discovery deadline (CodexProvider.ts:535-600); the
+    // config read has its own 3 s cap.
+    let config_read = async {
+        timeout_at(
+            discovery_deadline.min(Instant::now() + CONFIG_TIMEOUT),
+            conn.request_value(methods::CONFIG_READ, &json!({ "includeLayers": false })),
         )
         .await
-    } else {
-        timeout_at(discovery_deadline, all_models(conn))
-            .await
-            .ok()
-            .flatten()
+        .ok()
+        .and_then(Result::ok)
+        .and_then(|v| v.get("config").cloned())
     };
+    let model_list = async {
+        if account.account_type() == Some("chatgpt") {
+            chatgpt_models(
+                conn,
+                init.codex_home.as_deref(),
+                spawned_at_ms,
+                discovery_deadline,
+            )
+            .await
+        } else {
+            deadline_models(conn, discovery_deadline).await
+        }
+    };
+    let (config, models) = tokio::join!(config_read, model_list);
     Ok(Snapshot {
         version,
         account,
-        models,
+        effective_base_url,
+        models: models?,
         config,
     })
 }
 
+/// The factory's OPENAI_BASE_URL for Codex, else the host's (Codex inherits it).
+fn openai_base_url_env(options: &CodexEngineOptions) -> Option<String> {
+    options
+        .env_set
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "OPENAI_BASE_URL")
+        .map(|(_, v)| v.to_string_lossy().into_owned())
+        .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+}
+
+/// The catalog within the deadline: `None` when it passed; an error when Codex refused or
+/// answered unreadably (v1 propagates it to the failure path; only the deadline makes the
+/// catalog absent).
+async fn deadline_models(
+    conn: &Connection,
+    deadline: Instant,
+) -> Result<Option<Vec<ServerProviderModel>>, String> {
+    match timeout_at(deadline, all_models(conn)).await {
+        Ok(result) => result.map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
 /// v1 `requestAllCodexModels`: every page of model/list.
-async fn all_models(conn: &Connection) -> Option<Vec<ServerProviderModel>> {
+async fn all_models(conn: &Connection) -> Result<Vec<ServerProviderModel>, String> {
     let mut models = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -232,8 +296,14 @@ async fn all_models(conn: &Connection) -> Option<Vec<ServerProviderModel>> {
             Some(c) => json!({ "cursor": c }),
             None => json!({}),
         };
-        let page = conn.request_value("model/list", &params).await.ok()?;
-        let data = page.get("data")?.as_array()?;
+        let page = conn
+            .request_value("model/list", &params)
+            .await
+            .map_err(|e| format!("model/list: {e}"))?;
+        let data = page
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "model/list answered without data".to_string())?;
         models.extend(data.iter().filter_map(model_from_codex));
         cursor = page
             .get("nextCursor")
@@ -241,7 +311,7 @@ async fn all_models(conn: &Connection) -> Option<Vec<ServerProviderModel>> {
             .filter(|c| !c.is_empty())
             .map(str::to_string);
         if cursor.is_none() {
-            return Some(models);
+            return Ok(models);
         }
     }
 }
@@ -254,13 +324,12 @@ async fn chatgpt_models(
     codex_home: Option<&str>,
     spawned_at_ms: i64,
     deadline: Instant,
-) -> Option<Vec<ServerProviderModel>> {
-    let models = timeout_at(deadline, all_models(conn))
-        .await
-        .ok()
-        .flatten()?;
+) -> Result<Option<Vec<ServerProviderModel>>, String> {
+    let Some(models) = deadline_models(conn, deadline).await? else {
+        return Ok(None);
+    };
     let Some(home) = codex_home else {
-        return Some(models);
+        return Ok(Some(models));
     };
     let cache = Path::new(home).join("models_cache.json");
     let refresh_until = deadline.min(Instant::now() + CATALOG_REFRESH_TIMEOUT);
@@ -270,17 +339,13 @@ async fn chatgpt_models(
         }
         if Instant::now() + CATALOG_REFRESH_POLL > refresh_until {
             // v1: "Codex did not refresh its model catalog in time; using the cached catalog."
-            return Some(models);
+            return Ok(Some(models));
         }
         tokio::time::sleep(CATALOG_REFRESH_POLL).await;
     }
-    Some(
-        timeout_at(deadline, all_models(conn))
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or(models),
-    )
+    Ok(Some(
+        deadline_models(conn, deadline).await?.unwrap_or(models),
+    ))
 }
 
 fn cache_fetched_at_ms(path: &Path) -> Option<i64> {
@@ -295,12 +360,11 @@ fn from_snapshot(
     checked_at: String,
     binary_path: Option<String>,
 ) -> ProviderProbeResult {
+    let effective = snapshot.effective_base_url.as_deref();
     let (status, mut auth, message) =
-        account_status(&snapshot.account, codex_home_setting(options));
+        account_status(&snapshot.account, effective, codex_home_setting(options));
     let config = snapshot.config.as_ref();
-    if let Some(endpoint) = config.and_then(custom_endpoint) {
-        auth.endpoint = Some(endpoint);
-    }
+    auth.endpoint = codex_endpoint(config, effective);
     let models = snapshot.models.as_ref().map(|models| {
         let models = preferred_default(models.clone());
         let models = configured_service_tier(
@@ -333,20 +397,22 @@ fn from_snapshot(
     }
 }
 
-/// v1 `accountProbeStatus` (CodexProviderAccount.ts:133-170), without the OpenCodex route.
+/// v1 `accountProbeStatus` (CodexProviderAccount.ts:133-170).
 fn account_status(
     account: &AccountResponse,
+    effective_base_url: Option<&str>,
     codex_home: Option<String>,
 ) -> (ServerProviderState, ServerProviderAuth, Option<String>) {
-    if account.account.is_none() && account.requires_openai_auth {
+    if account.account.is_none()
+        && account.requires_openai_auth
+        && !routes_away_from_openai(effective_base_url)
+    {
         let message = match codex_home {
             Some(home) => format!(
-                "Codex CLI is not authenticated. Run \u{60}codex login\u{60} with CODEX_HOME set to {} and try again.",
+                "Codex CLI is not authenticated. Run `codex login` with CODEX_HOME set to {} and try again.",
                 serde_json::to_string(&home).unwrap_or(home)
             ),
-            None => {
-                "Codex CLI is not authenticated. Run \u{60}codex login\u{60} and try again.".into()
-            }
+            None => "Codex CLI is not authenticated. Run `codex login` and try again.".into(),
         };
         return (
             ServerProviderState::Error,
@@ -422,37 +488,211 @@ fn codex_home_setting(options: &CodexEngineOptions) -> Option<String> {
         .map(|(_, v)| v.to_string_lossy().into_owned())
 }
 
-/// v1 `codexCustomEndpoint`: the origin of a custom endpoint Codex sends model requests to.
-fn custom_endpoint(config: &Value) -> Option<String> {
-    let provider = config
-        .get("model_provider")
-        .and_then(Value::as_str)
-        .unwrap_or("openai");
-    let base = if provider == "openai" {
-        config
-            .get("openai_base_url")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())?
-    } else {
-        config
-            .get("model_providers")?
-            .get(provider)?
-            .get("base_url")?
-            .as_str()?
+/// The parts of a WHATWG URL v1's endpoint logic reads (no URL crate: dependencies are fixed).
+#[derive(Debug, PartialEq)]
+struct Url {
+    scheme: String,
+    /// Lowercase; IPv6 keeps its brackets.
+    host: String,
+    /// None when absent or the scheme's default.
+    port: Option<u16>,
+    path: String,
+    has_credentials: bool,
+    has_query: bool,
+    has_fragment: bool,
+}
+
+impl Url {
+    fn parse(text: &str) -> Option<Url> {
+        let text = text.trim();
+        let (scheme, rest) = text.split_once("://")?;
+        let mut chars = scheme.chars();
+        if !chars.next()?.is_ascii_alphabetic()
+            || !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        {
+            return None;
+        }
+        let scheme = scheme.to_ascii_lowercase();
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(end);
+        let (has_credentials, host_port) = match authority.rsplit_once('@') {
+            Some((_, hp)) => (true, hp),
+            None => (false, authority),
+        };
+        let (host, port) = if let Some(v6) = host_port.strip_prefix('[') {
+            let (inside, after) = v6.split_once(']')?;
+            if inside.is_empty()
+                || !inside
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == ':' || c == '.')
+            {
+                return None;
+            }
+            if !after.is_empty() && !after.starts_with(':') {
+                return None;
+            }
+            (
+                format!("[{}]", inside.to_ascii_lowercase()),
+                after.strip_prefix(':'),
+            )
+        } else {
+            match host_port.rsplit_once(':') {
+                Some((h, p)) => (h.to_ascii_lowercase(), Some(p)),
+                None => (host_port.to_ascii_lowercase(), None),
+            }
+        };
+        if host.is_empty()
+            || host
+                .chars()
+                .any(|c| c.is_whitespace() || matches!(c, '/' | '\\' | '?' | '#' | '@'))
+        {
+            return None;
+        }
+        let port = match port {
+            None | Some("") => None,
+            Some(p) if p.bytes().all(|b| b.is_ascii_digit()) => Some(p.parse::<u16>().ok()?),
+            Some(_) => return None,
+        };
+        let default = match scheme.as_str() {
+            "http" | "ws" => Some(80),
+            "https" | "wss" => Some(443),
+            _ => None,
+        };
+        let port = port.filter(|p| Some(*p) != default);
+        let path_end = tail.find(['?', '#']).unwrap_or(tail.len());
+        let path = if tail[..path_end].is_empty() {
+            "/".to_string()
+        } else {
+            tail[..path_end].to_string()
+        };
+        Some(Url {
+            scheme,
+            host,
+            port,
+            path,
+            has_credentials,
+            has_query: tail[path_end..].starts_with('?'),
+            has_fragment: tail.contains('#'),
+        })
+    }
+
+    fn hostname(&self) -> &str {
+        &self.host
+    }
+
+    fn origin(&self) -> String {
+        match self.port {
+            Some(port) => format!("{}://{}:{port}", self.scheme, self.host),
+            None => format!("{}://{}", self.scheme, self.host),
+        }
+    }
+
+    fn is_http(&self) -> bool {
+        self.scheme == "http" || self.scheme == "https"
+    }
+}
+
+/// v1 `readEffectiveBaseUrl` (OpenCodexRoute.ts:151-178): configuration wins only where the
+/// selected provider's endpoint is actually observable.
+fn read_effective_base_url(config: &Value, env_openai_base_url: Option<&str>) -> Option<String> {
+    let root = config.as_object()?;
+    let provider = match root.get("model_provider") {
+        None | Some(Value::Null) => Value::from("openai"),
+        Some(v) => v.clone(),
     };
-    let (scheme, rest) = base.split_once("://")?;
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
+    let selected = provider
+        .as_str()
+        .and_then(|p| root.get("model_providers")?.get(p))
+        .filter(|v| v.is_object());
+    let non_null = |v: Option<&Value>| v.filter(|v| !v.is_null()).cloned();
+    let configured = non_null(root.get("openai_base_url"))
+        .or_else(|| non_null(selected.and_then(|s| s.get("base_url"))));
+    let is_openai = provider.as_str() == Some("openai");
+    if is_openai
+        && let Some(env) = env_openai_base_url
+        && configured.as_ref().and_then(Value::as_str) != Some(env)
+    {
         return None;
     }
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .filter(|a| !a.is_empty())?;
-    let host = authority.rsplit('@').next()?.to_ascii_lowercase();
-    let hostname = host.split(':').next().unwrap_or("");
-    let native = scheme == "https" && (hostname == "api.openai.com" || hostname == "chatgpt.com");
-    (!native).then(|| format!("{scheme}://{host}"))
+    let base = if is_openai {
+        configured.unwrap_or_else(|| Value::from("https://api.openai.com/v1"))
+    } else {
+        non_null(selected.and_then(|s| s.get("base_url")))?
+    };
+    let url = Url::parse(base.as_str()?)?;
+    if url.has_credentials || url.has_query || url.has_fragment {
+        return None;
+    }
+    Some(
+        format!("{}{}", url.origin(), url.path)
+            .trim_end_matches('/')
+            .to_string(),
+    )
+}
+
+/// v1 `routesAwayFromOpenAi`.
+fn routes_away_from_openai(effective_base_url: Option<&str>) -> bool {
+    let Some(url) = effective_base_url.and_then(Url::parse) else {
+        return false;
+    };
+    let host = url.hostname().trim_end_matches('.');
+    !host.is_empty()
+        && !["openai.com", "chatgpt.com"]
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{d}")))
+}
+
+/// v1 `codexRouteBaseUrl`: `Some(None)` is Codex's auth-dependent OpenAI default; `None` a
+/// route that cannot be read.
+fn route_base_url(config: &Value) -> Option<Option<String>> {
+    let root = config.as_object()?;
+    let text = |v: Option<&Value>| -> Option<Option<String>> {
+        match v {
+            None | Some(Value::Null) => Some(None),
+            Some(Value::String(s)) => Some(Some(s.clone())),
+            Some(_) => None,
+        }
+    };
+    let provider = match root.get("model_provider") {
+        None | Some(Value::Null) => "openai".to_string(),
+        Some(Value::String(s)) => s.clone(),
+        Some(_) => return None,
+    };
+    if provider == "openai" {
+        return Some(text(root.get("openai_base_url"))?.filter(|s| !s.is_empty()));
+    }
+    let entry = root.get("model_providers")?.get(&provider)?;
+    text(entry.get("base_url"))
+}
+
+/// v1 `routesToNativeOpenai`.
+fn routes_to_native_openai(config: &Value) -> bool {
+    match route_base_url(config) {
+        None => false,
+        Some(None) => true,
+        Some(Some(base)) => Url::parse(&base).is_some_and(|u| {
+            u.scheme == "https"
+                && (u.hostname() == "api.openai.com" || u.hostname() == "chatgpt.com")
+        }),
+    }
+}
+
+/// v1 `codexCustomEndpoint`: the origin of a custom endpoint Codex sends model requests to.
+fn custom_endpoint(config: &Value) -> Option<String> {
+    let base = route_base_url(config)??;
+    let url = Url::parse(&base)?;
+    (url.is_http() && !routes_to_native_openai(config)).then(|| url.origin())
+}
+
+/// v1 `codexEndpoint`: the configured endpoint, else the effective route's when it leaves OpenAI.
+fn codex_endpoint(config: Option<&Value>, effective_base_url: Option<&str>) -> Option<String> {
+    let custom = config.and_then(custom_endpoint);
+    if custom.is_some() || !routes_away_from_openai(effective_base_url) {
+        return custom;
+    }
+    Url::parse(effective_base_url?)
+        .filter(Url::is_http)
+        .map(|u| u.origin())
 }
 
 const REASONING_LABELS: [(&str, &str); 8] = [
@@ -485,10 +725,9 @@ fn model_family(slug: &str) -> &str {
 
 /// v1 `formatCodexModelName`: leading "gpt" -> "GPT", every "-x" -> "-X".
 pub fn format_model_name(name: &str) -> String {
-    let name = if name.len() >= 3 && name[..3].eq_ignore_ascii_case("gpt") {
-        format!("GPT{}", &name[3..])
-    } else {
-        name.to_string()
+    let name = match name.get(..3) {
+        Some(prefix) if prefix.eq_ignore_ascii_case("gpt") => format!("GPT{}", &name[3..]),
+        _ => name.to_string(),
     };
     let mut out = String::with_capacity(name.len());
     let mut after_dash = false;
@@ -902,7 +1141,7 @@ pub fn version_from_cli_output(stdout: &str) -> Option<String> {
     })
 }
 
-/// v1 `probeCodexCliVersion` then the failure result: `None` = no answer, `Err` = missing.
+/// v1 `probeCodexCliVersion` then the failure result.
 async fn failure_after_version(
     options: &CodexEngineOptions,
     program: &Path,
@@ -911,7 +1150,7 @@ async fn failure_after_version(
     binary_path: Option<String>,
     message: String,
 ) -> ProviderProbeResult {
-    match cli_version(options, program, cwd).await {
+    match cli_version(options, program, cwd, binary_path.as_deref()).await {
         Err(()) => failed(
             checked_at,
             false,
@@ -932,28 +1171,47 @@ async fn failure_after_version(
     }
 }
 
+/// `codex --version` in its own process group, ended on every outcome (v1 runs it scoped with
+/// a forced kill). `Err(())` = the command is missing; `Ok(None)` = no usable answer.
 async fn cli_version(
     options: &CodexEngineOptions,
     program: &Path,
     cwd: &Path,
+    binary_path: Option<&str>,
 ) -> Result<Option<String>, ()> {
-    let mut command = tokio::process::Command::new(program);
-    command.arg("--version").current_dir(cwd).kill_on_drop(true);
-    for (k, v) in &options.env_set {
-        command.env(k, v);
-    }
-    let output = match tokio::time::timeout(VERSION_TIMEOUT, command.output()).await {
+    let mut launch = Launch::new(program)
+        .without_host_identity()
+        .arg("--version");
+    launch.cwd = Some(cwd.to_path_buf());
+    launch.kill_grace = FORCE_KILL_AFTER;
+    launch.env_set.extend(options.env_set.iter().cloned());
+    let mut child = match ChildProcess::spawn(&launch) {
+        Ok(child) => child,
+        Err(error) if command_missing(&error, binary_path, cwd) => return Err(()),
         Err(_) => return Ok(None),
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return Err(()),
-        Ok(Err(_)) => return Ok(None),
-        Ok(Ok(output)) => output,
     };
-    if !output.status.success() {
+    // Nothing is written to it; a program waiting on stdin sees end of input at once.
+    drop(child.take_stdin());
+    let stdout = child.take_stdout();
+    let read = async move {
+        let mut out = Vec::new();
+        if let Some(mut stdout) = stdout {
+            let _ = stdout.read_to_end(&mut out).await;
+        }
+        out
+    };
+    let output = tokio::time::timeout(VERSION_TIMEOUT, read).await;
+    let summary = match output {
+        Ok(_) => child.shutdown().await,
+        Err(_) => child.terminate_group().await,
+    };
+    let Ok(output) = output else {
+        return Ok(None);
+    };
+    if !summary.status.is_some_and(|s| s.success()) {
         return Ok(None);
     }
-    Ok(version_from_cli_output(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
+    Ok(version_from_cli_output(&String::from_utf8_lossy(&output)))
 }
 
 fn could_not_start(program: &Path) -> String {
@@ -1048,7 +1306,8 @@ pub fn format_rfc3339_ms(ms: i64) -> String {
     )
 }
 
-/// `YYYY-MM-DDTHH:MM:SS[.fff…](Z|±HH:MM)` to epoch milliseconds.
+/// `YYYY-MM-DDTHH:MM:SS[.fff…](Z|±HH:MM)` to epoch milliseconds; anything else (impossible
+/// dates, bad offsets, trailing text) is None.
 pub fn parse_rfc3339_ms(text: &str) -> Option<i64> {
     let b = text.as_bytes();
     let num = |s: usize, n: usize| -> Option<i64> {
@@ -1061,7 +1320,7 @@ pub fn parse_rfc3339_ms(text: &str) -> Option<i64> {
     if b.len() < 20
         || b[4] != b'-'
         || b[7] != b'-'
-        || !matches!(b[10], b'T' | b't' | b' ')
+        || !matches!(b[10], b'T' | b't')
         || b[13] != b':'
         || b[16] != b':'
     {
@@ -1075,6 +1334,30 @@ pub fn parse_rfc3339_ms(text: &str) -> Option<i64> {
         num(14, 2)?,
         num(17, 2)?,
     );
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1..=12).contains(&mo)
+        || d < 1
+        || d > month_days[(mo - 1) as usize]
+        || h > 23
+        || mi > 59
+        || s > 59
+    {
+        return None;
+    }
     let mut i = 19;
     let mut millis = 0;
     if b.get(i) == Some(&b'.') {
@@ -1083,20 +1366,41 @@ pub fn parse_rfc3339_ms(text: &str) -> Option<i64> {
         while b.get(i).is_some_and(u8::is_ascii_digit) {
             i += 1;
         }
-        let frac = &text[start..i];
-        let padded: String = frac.chars().chain(std::iter::repeat('0')).take(3).collect();
+        if i == start {
+            return None;
+        }
+        let padded: String = text[start..i]
+            .chars()
+            .chain(std::iter::repeat('0'))
+            .take(3)
+            .collect();
         millis = padded.parse::<i64>().ok()?;
     }
-    let offset_min = match b.get(i)? {
-        b'Z' | b'z' => 0,
+    let offset_min = match *b.get(i)? {
+        b'Z' | b'z' => {
+            i += 1;
+            0
+        }
         sign @ (b'+' | b'-') => {
-            let oh = num(i + 1, 2)?;
-            let om = num(i + 4, 2)?;
-            let total = oh * 60 + om;
-            if *sign == b'+' { total } else { -total }
+            if b.get(i + 3) != Some(&b':') {
+                return None;
+            }
+            let (oh, om) = (num(i + 1, 2)?, num(i + 4, 2)?);
+            if oh > 23 || om > 59 {
+                return None;
+            }
+            i += 6;
+            if sign == b'+' {
+                oh * 60 + om
+            } else {
+                -(oh * 60 + om)
+            }
         }
         _ => return None,
     };
+    if i != b.len() {
+        return None;
+    }
     let days = days_from_civil(y, mo, d);
     Some(((days * 86_400 + h * 3600 + mi * 60 + s) - offset_min * 60) * 1000 + millis)
 }
@@ -1190,5 +1494,87 @@ mod tests {
             ),
             Some("https://x.example.com".into())
         );
+    }
+    #[test]
+    fn urls_follow_whatwg_origins() {
+        let u = Url::parse("HTTPS://API.Example.com:443/v1/").unwrap();
+        assert_eq!(u.origin(), "https://api.example.com");
+        assert_eq!(
+            Url::parse("http://127.0.0.1:80").unwrap().origin(),
+            "http://127.0.0.1"
+        );
+        assert_eq!(
+            Url::parse("http://[::1]:8080/x").unwrap().origin(),
+            "http://[::1]:8080"
+        );
+        assert_eq!(Url::parse("http://host:99999"), None);
+        assert_eq!(Url::parse("http://:80"), None);
+        assert_eq!(Url::parse("not a url"), None);
+        assert_eq!(Url::parse("http://[::1]x"), None);
+        assert!(Url::parse("https://u:p@h/").unwrap().has_credentials);
+    }
+
+    #[test]
+    fn effective_base_url_follows_v1() {
+        assert_eq!(
+            read_effective_base_url(&json!({}), None).as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(
+            read_effective_base_url(
+                &json!({"openai_base_url": "http://127.0.0.1:9999/v1/"}),
+                None
+            )
+            .as_deref(),
+            Some("http://127.0.0.1:9999/v1")
+        );
+        // An OPENAI_BASE_URL the config does not match makes the route unobservable.
+        assert_eq!(
+            read_effective_base_url(&json!({}), Some("http://x/v1")),
+            None
+        );
+        assert_eq!(
+            read_effective_base_url(&json!({"model_provider": "azure", "model_providers": {"azure": {"base_url": "https://a.example.com/o"}}}), None).as_deref(),
+            Some("https://a.example.com/o")
+        );
+        assert_eq!(
+            read_effective_base_url(&json!({"openai_base_url": "https://h/v1?k=1"}), None),
+            None
+        );
+        assert!(!routes_away_from_openai(Some("https://api.openai.com/v1")));
+        assert!(!routes_away_from_openai(Some("https://eu.chatgpt.com/x")));
+        assert!(routes_away_from_openai(Some("http://127.0.0.1:9999/v1")));
+        assert!(!routes_away_from_openai(None));
+        assert_eq!(
+            codex_endpoint(None, Some("http://127.0.0.1:9999/v1")).as_deref(),
+            Some("http://127.0.0.1:9999")
+        );
+        assert_eq!(
+            codex_endpoint(None, Some("https://api.openai.com/v1")),
+            None
+        );
+    }
+
+    #[test]
+    fn timestamps_are_validated() {
+        for bad in [
+            "2026-02-30T00:00:00Z",
+            "2026-11-28T25:00:00Z",
+            "2026-11-28T13:26:11Zjunk",
+            "2026-11-28T13:26:11+0900",
+            "2026-11-28T13:26:11+24:00",
+            "2026-11-28T13:26:11.Z",
+            "2026-13-01T00:00:00Z",
+        ] {
+            assert_eq!(parse_rfc3339_ms(bad), None, "{bad}");
+        }
+        assert!(parse_rfc3339_ms("2024-02-29T00:00:00Z").is_some());
+    }
+
+    #[test]
+    fn model_names_never_split_a_character() {
+        assert_eq!(format_model_name("éé-x"), "éé-X");
+        assert_eq!(format_model_name("Gé"), "Gé");
+        assert_eq!(format_model_name("GPT"), "GPT");
     }
 }
