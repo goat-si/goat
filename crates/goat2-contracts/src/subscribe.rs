@@ -177,7 +177,25 @@ pub enum ClientFrame {
         req_id: String,
         client_request_id: String,
         instance_id: ProviderInstanceId,
+        #[serde(with = "crate::serde_util::auth_operation_id")]
+        #[ts(as = "String")]
+        #[schemars(
+            with = "String",
+            length(min = 1, max = 128),
+            regex(
+                pattern = r"^[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff](?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+            )
+        )]
         flow_id: String,
+        #[serde(with = "crate::serde_util::auth_operation_id")]
+        #[ts(as = "String")]
+        #[schemars(
+            with = "String",
+            length(min = 1, max = 128),
+            regex(
+                pattern = r"^[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff](?:[\s\S]*[^\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff])?$"
+            )
+        )]
         interaction_id: String,
         response: ProviderAuthResponse,
     },
