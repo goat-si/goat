@@ -491,19 +491,68 @@ async fn monitors_hold_the_turn_unless_persistent() {
     assert_eq!(native_item(&events, "monitor-1").len(), 1);
 }
 
-/// v1 extractXAiKilledBackgroundTasks (xaiAcpExtension.ts:343-380): a finished kill ends the task.
+/// v1 extractXAiKilledBackgroundTasks (xaiAcpExtension.ts:343-380) on every v1 kill shape
+/// (acpMockGrokScenarios.ts): a finished kill ends the background command, so the turn is not
+/// held; a task that already failed stays failed.
 #[tokio::test]
-async fn kill_ends_the_background_command() {
-    let (events, outcome) = scenario("kill").await;
+async fn kill_ends_the_background_command_in_every_v1_shape() {
+    for (shape, status) in [
+        ("killed", TurnItemStatus::Completed),
+        ("already_exited", TurnItemStatus::Completed),
+        ("known_failure", TurnItemStatus::Failed),
+        ("output_only", TurnItemStatus::Completed),
+        ("variant_only", TurnItemStatus::Completed),
+    ] {
+        let (events, outcome) =
+            grok_turn_events(&[("GOAT_ACP_GROK_KILL_TASK_SHAPE", shape)], |_| None).await;
+        assert_eq!(outcome, TurnOutcome::Done, "{shape}");
+        let target = native_item(&events, "kill-target-command");
+        assert_eq!(target.len(), 1, "{shape}");
+        assert_eq!(target[0].status, status, "{shape}");
+        assert_eq!(
+            native_item(&events, "kill-command")[0].status,
+            TurnItemStatus::Completed
+        );
+    }
+}
+
+/// v1 GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL: a structured Monitor holds the turn after the
+/// prompt completes; its TaskOutput poll ends it and is not mistaken for a subagent (adapter.ts:
+/// 2618-2621).
+#[tokio::test]
+async fn monitor_poll_after_the_answer_ends_the_monitor() {
+    let (events, outcome) = grok_turn_events(
+        &[("GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL", "1")],
+        |_| None,
+    )
+    .await;
     assert_eq!(outcome, TurnOutcome::Done);
-    assert_eq!(
-        native_item(&events, "bg-1")[0].status,
-        TurnItemStatus::Completed
+    let monitor = native_item(&events, "call-monitor-1");
+    assert_eq!(monitor[0].status, TurnItemStatus::Completed);
+    assert_eq!(native_item(&events, "call-monitor-poll-1").len(), 1);
+    assert!(subagent_items(&events).is_empty());
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, EngineEvent::SubagentUpdate { .. }))
     );
-    assert_eq!(
-        native_item(&events, "kill-1")[0].status,
-        TurnItemStatus::Completed
-    );
+}
+
+/// v1 GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION=poll: the command's TaskOutput poll completes it and
+/// a `turn_completed` on `_x.ai/session/update` finishes the turn while `session/prompt` never
+/// answers (the Grok incident).
+#[tokio::test]
+async fn polled_background_command_completes_and_turn_completed_settles() {
+    let (events, outcome) = grok_turn_events(
+        &[("GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION", "poll")],
+        |_| None,
+    )
+    .await;
+    assert_eq!(outcome, TurnOutcome::Done);
+    assert!(answer_text(&events).contains("The background command finished."));
+    let command = native_item(&events, "call-fb9d0000-0000-0000-0000-000000000026-29");
+    assert_eq!(command[0].status, TurnItemStatus::Completed);
+    assert!(subagent_items(&events).is_empty());
 }
 
 /// v1 preserveRuntimeOnSettledInterrupt (adapter.ts:359-360, 7874-8082): stopping a turn whose
@@ -608,7 +657,7 @@ async fn effort_rides_on_set_model_and_is_skipped_when_refused() {
     let log = read_log(&session.log);
     let writes = logged(&log, "session/set_model");
     assert_eq!(writes.len(), 1);
-    assert_eq!(writes[0]["params"]["modelId"], "grok-4");
+    assert_eq!(writes[0]["params"]["modelId"], "grok-4.6");
     assert_eq!(
         writes[0]["params"]["_meta"],
         json!({"reasoningEffort": "high"})
@@ -711,4 +760,30 @@ async fn skill_mentions_become_slash_commands() {
         .collect();
     assert_eq!(sent, ["/deploy ship it", "$hidden now", "$25 please"]);
     let _ = TASK;
+}
+/// v1 xAI cancel (xaiAcpExtension.ts:1553-1560, abortPendingPromptCompletions :1323-1357): Stop
+/// settles a prompt Grok never answers as cancelled at once, instead of waiting out the 15 s
+/// cancel timeout.
+#[tokio::test]
+async fn stop_settles_a_wedged_prompt_at_once() {
+    let mut session = start(&[
+        ("GOAT_ACP_HANG_PROMPT_FOREVER", "1"),
+        ("GOAT_ACP_IGNORE_CANCEL", "1"),
+    ])
+    .await;
+    send(&session, "hello").await;
+    until_text(&mut session, "partial before stall").await;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        session
+            .handle
+            .session
+            .interrupt("acp-turn-mock-session-1-1"),
+    )
+    .await
+    .expect("interrupt returns without the cancel timeout")
+    .unwrap();
+    let (_, outcome) = until_finished(&mut session, |_| None).await;
+    session.handle.session.shutdown().await;
+    assert_eq!(outcome, TurnOutcome::Interrupted);
 }

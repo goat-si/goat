@@ -43,11 +43,18 @@
 //! - `GOAT_ACP_STDOUT_LINE=<text>` (GOAT 2): print this non-JSON line on stdout at start.
 //! - `GOAT_ACP_GROK_SCENARIO=<name>` (GOAT 2): xAI Grok flows that end with
 //!   `_x.ai/session/prompt_complete` and leave `session/prompt` open, as Grok does (frame shapes from
-//!   v1 `xaiAcpExtension.test.ts` and `acpMockGrokScenarios.ts`): `subagent-hydrate`,
-//!   `subagent-finished`, `subagent-notice`, `background`, `wake`, `monitor`, `monitor-persistent`,
-//!   `kill`, `hold`, `plan-file`, `tools`.
-//! - `GOAT_ACP_GROK_MODELS=1` (GOAT 2): session setup reports Grok session models (`grok-4`, efforts
-//!   low/high); `GOAT_ACP_REJECT_SET_MODEL_META=1` answers a `session/set_model` with `_meta` with an
+//!   v1 `xaiAcpExtension.test.ts`): `subagent-hydrate`, `subagent-finished`, `subagent-notice`,
+//!   `background`, `wake`, `monitor`, `monitor-persistent`, `hold`, `plan-file`, `tools`.
+//! - `GOAT_ACP_GROK_KILL_TASK_SHAPE=<shape>`: v1 `emitGrokKillTaskScenario` (`acpMockGrokScenarios.ts`),
+//!   shapes `killed`, `already_exited`, `known_failure`, `output_only`, `variant_only`.
+//! - `GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL=1`: v1's structured Monitor, prompt completion, then a
+//!   `TaskOutput` poll that ends it (v1 waits 120 ms before the poll; GOAT 2 sends it at once).
+//! - `GOAT_ACP_EMIT_GROK_BACKGROUND_TASK_STARTED=1` / `GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION=poll`:
+//!   v1's `BackgroundTaskStarted` command, optionally polled to completion and finished by a
+//!   `turn_completed` on `_x.ai/session/update`.
+//! - `GOAT_ACP_GROK_MODELS=1` (GOAT 2 switch for v1's `grokAcpModels`): session setup reports v1's Grok
+//!   models (`GOAT_ACP_GROK_MODEL`, default `grok-4.6`, efforts xhigh/high/low; `grok-mock-alt`);
+//!   `GOAT_ACP_REJECT_SET_MODEL_META=1` (GOAT 2) answers a `session/set_model` with `_meta` with an
 //!   error.
 //! - `inspect --json` arguments (GOAT 2): print `GOAT_ACP_GROK_INSPECT_JSON` (default no skills) and
 //!   exit, like `grok inspect --json`.
@@ -203,9 +210,23 @@ fn handle_request(agent: Arc<Agent>, id: Value, method: String, params: Value) {
                 "configOptions": agent.model_options()
             });
             if flag("GOAT_ACP_GROK_MODELS") {
-                result["models"] = json!({"currentModelId": "grok-4", "availableModels": [
-                    {"modelId": "grok-4", "name": "Grok 4", "_meta": {"reasoningEffort": "low",
-                        "reasoningEfforts": [{"value": "low"}, {"value": "high"}]}}
+                // v1 acp-mock-agent.ts:431-461 (grokAcpModels / modelState).
+                let model = env("GOAT_ACP_GROK_MODEL").unwrap_or_else(|| "grok-4.6".into());
+                let context: u64 = env("GOAT_ACP_GROK_CONTEXT_TOKENS")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(500_000);
+                let effort =
+                    env("GOAT_ACP_INITIAL_GROK_REASONING_EFFORT").unwrap_or_else(|| "high".into());
+                result["models"] = json!({"currentModelId": model, "availableModels": [
+                    {"modelId": model, "name": "Grok 4.6", "_meta": {
+                        "totalContextTokens": context, "contextWindows": [256000, 500000],
+                        "supportsReasoningEffort": true, "reasoningEffort": effort,
+                        "reasoningEfforts": [
+                            {"id": "xhigh", "value": "xhigh", "label": "Extra High Effort", "default": false},
+                            {"id": "high", "value": "high", "label": "High Effort", "default": true},
+                            {"id": "low", "value": "low", "label": "Low Effort", "default": false}
+                        ]}},
+                    {"modelId": "grok-mock-alt", "name": "Grok Mock Alt"}
                 ]});
             }
             agent.respond(&id, result);
@@ -362,13 +383,6 @@ fn grok_scenario(agent: &Agent, session: &str, prompt_id: Option<&str>, scenario
                 grok_task_completed(agent, session, GROK_TASK, "monitor done");
             }
         }
-        "kill" => {
-            grok_background_command(agent, session);
-            agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "kill-1", "title": "kill_command_or_subagent",
-                "status": "completed", "rawInput": {"variant": "KillTask", "task_ids": ["call-1-0"]},
-                "rawOutput": {"type": "KillTask", "Result": {"outcome": "killed"}}}));
-            grok_prompt_complete(agent, session, prompt_id);
-        }
         "hold" => {
             grok_background_command(agent, session);
             grok_prompt_complete(agent, session, prompt_id);
@@ -402,6 +416,88 @@ fn grok_scenario(agent: &Agent, session: &str, prompt_id: Option<&str>, scenario
         }
         other => text_chunk(agent, session, &format!("unknown grok scenario {other}")),
     }
+}
+
+/// v1 `emitGrokKillTaskScenario` (acpMockGrokScenarios.ts:6-69).
+fn grok_kill_task_scenario(agent: &Agent, session: &str, prompt_id: Option<&str>, shape: &str) {
+    let task_id = "call-fb9d0000-0000-0000-0000-000000000026-29";
+    let outcome = if shape == "already_exited" || shape == "known_failure" {
+        "already_exited"
+    } else {
+        "killed"
+    };
+    agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "kill-target-command",
+        "title": "run_terminal_command", "kind": "execute", "status": "in_progress", "rawInput": {"command": "sleep 40"}}));
+    agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "kill-target-command", "status": "completed",
+        "rawOutput": {"type": "BackgroundTaskStarted", "task_id": task_id, "task_type": "bash", "command": "sleep 40"}}));
+    if shape == "known_failure" {
+        agent.notify("_x.ai/task_completed", json!({"sessionId": session, "update": {"sessionUpdate": "task_completed",
+            "task_snapshot": {"task_id": task_id, "kind": "bash", "exit_code": 7, "output": "known failure\n"}}}));
+    }
+    let mut raw_input = json!({"task_id": task_id});
+    if shape != "output_only" {
+        raw_input["variant"] = json!("KillTask");
+    }
+    let mut update = json!({"sessionUpdate": "tool_call_update", "toolCallId": "kill-command",
+        "title": format!("kill {task_id} ({outcome})"), "kind": "other", "status": "completed", "rawInput": raw_input});
+    if shape != "variant_only" {
+        update["rawOutput"] = json!({"type": "KillTask", "outcome": outcome});
+    }
+    agent.update(session, update);
+    agent.notify(
+        "_x.ai/session/prompt_complete",
+        json!({"sessionId": session, "promptId": prompt_id,
+        "stopReason": "end_turn", "agentResult": null}),
+    );
+}
+
+/// v1 `emitGrokMonitorPostTurnPoll` (acp-mock-agent.ts:1836-1898).
+fn grok_monitor_post_turn_poll(agent: &Agent, session: &str, prompt_id: Option<&str>) {
+    let task_id = "01a05f41-5107-7550-821e-79e8d1cd7687";
+    let description = "Watch count-sheet Typst unit until done";
+    agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "call-monitor-1", "title": "monitor",
+        "kind": "other", "status": "pending", "rawInput": {"description": description},
+        "_meta": {"x.ai/tool": {"version": 1, "name": "monitor", "kind": "task", "namespace": "grok_build"}}}));
+    agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-monitor-1", "status": "completed",
+        "rawInput": {"description": description}, "rawOutput": {"type": "Monitor", "taskId": task_id, "timeoutMs": 36_000_000}}));
+    agent.notify("_x.ai/session/prompt_complete", json!({"sessionId": session,
+        "promptId": prompt_id.unwrap_or("mock-xai-prompt-1"), "stopReason": "end_turn", "agentResult": null}));
+    agent.update(session, json!({"sessionUpdate": "tool_call", "toolCallId": "call-monitor-poll-1",
+        "title": "get_command_or_subagent_output", "kind": "other", "status": "completed",
+        "rawInput": {"variant": "TaskOutput", "task_ids": [task_id], "timeout_ms": 0},
+        "rawOutput": {"type": "TaskOutput", "Result": {"task_id": task_id, "command": format!("[monitor] {description}"),
+            "status": "completed", "exit_code": 0, "output": "Monitor finished."}}}));
+}
+
+/// v1 `emitGrokBackgroundTaskStarted` / `emitGrokBackgroundTaskPoll` (acp-mock-agent.ts:1900-1980).
+fn grok_background_task_started(agent: &Agent, session: &str, prompt_id: Option<&str>, poll: bool) {
+    let tool_call_id = if poll {
+        "call-fb9d0000-0000-0000-0000-000000000026-29"
+    } else {
+        "call-fb9d0000-0000-0000-0000-000000000026"
+    };
+    let command = "sleep 40; echo done-a";
+    agent.update(session, json!({"sessionUpdate": if poll { "tool_call_update" } else { "tool_call" },
+        "toolCallId": tool_call_id, "title": "run_terminal_command", "kind": "execute", "status": "in_progress",
+        "rawInput": {"command": command}}));
+    agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": tool_call_id, "status": "completed",
+        "rawOutput": {"type": "BackgroundTaskStarted", "task_id": tool_call_id, "task_type": "bash", "status": "running", "command": command}}));
+    if poll {
+        agent.update(session, json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-background-poll",
+            "title": "get_command_or_subagent_output", "kind": "other", "status": "completed",
+            "rawOutput": {"type": "TaskOutput", "Result": {"task_id": tool_call_id, "command": command,
+                "status": "completed", "exit_code": 0, "output": "done-a"}}}));
+        text_chunk(agent, session, "The background command finished.");
+        // Neither the prompt RPC nor the process ends, matching the Grok incident.
+        agent.notify(
+            "_x.ai/session/update",
+            json!({"sessionId": session, "update": {"sessionUpdate": "turn_completed",
+            "prompt_id": prompt_id, "stop_reason": "end_turn"}}),
+        );
+        return;
+    }
+    agent.notify("_x.ai/session/prompt_complete", json!({"sessionId": session,
+        "promptId": prompt_id.unwrap_or("mock-xai-prompt-1"), "stopReason": "end_turn", "agentResult": null}));
 }
 
 fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
@@ -473,6 +569,23 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
     }
     if let Some(scenario) = env("GOAT_ACP_GROK_SCENARIO") {
         grok_scenario(&agent, &session, prompt_id.as_deref(), &scenario);
+        let _ = cancel_rx.recv();
+        return;
+    }
+    if let Some(shape) = env("GOAT_ACP_GROK_KILL_TASK_SHAPE") {
+        grok_kill_task_scenario(&agent, &session, prompt_id.as_deref(), &shape);
+        let _ = cancel_rx.recv();
+        return;
+    }
+    if flag("GOAT_ACP_EMIT_GROK_MONITOR_POST_TURN_POLL") {
+        grok_monitor_post_turn_poll(&agent, &session, prompt_id.as_deref());
+        let _ = cancel_rx.recv();
+        return;
+    }
+    let background_poll =
+        env("GOAT_ACP_GROK_BACKGROUND_TASK_COMPLETION").as_deref() == Some("poll");
+    if flag("GOAT_ACP_EMIT_GROK_BACKGROUND_TASK_STARTED") || background_poll {
+        grok_background_task_started(&agent, &session, prompt_id.as_deref(), background_poll);
         let _ = cancel_rx.recv();
         return;
     }
