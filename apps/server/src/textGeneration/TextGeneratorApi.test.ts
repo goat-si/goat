@@ -330,3 +330,23 @@ it.effect("times out and aborts a stalled model API request", () =>
     expect(aborted).toBe(true);
   }),
 );
+
+it.effect.each([
+  ["openaiCompatible", { choices: [{ message: { content: '{"title":"Repair login"}' } }] }],
+  ["anthropic", { content: [{ type: "text", text: '{"title":"Repair login"}' }] }],
+] as const)("accepts a %s response without a stop reason", ([kind, response]) =>
+  Effect.gen(function* () {
+    using _fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json(response));
+    const configured = {
+      ...settings,
+      textGenerators: { [instanceId]: { ...settings.textGenerators[instanceId], kind } },
+    };
+    const generation = yield* TextGeneration.make.pipe(
+      Effect.provideService(ServerSettings.ServerSettingsService, {
+        getSettings: Effect.succeed(configured),
+      } as never),
+      Effect.provide(services),
+    );
+    expect(yield* generation.generateThreadTitle(title)).toEqual({ title: "Repair login" });
+  }),
+);
