@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
-import type { Event, Part, PermissionRequest, QuestionRequest, Todo } from "@opencode-ai/sdk/v2";
+import type { Event, Part, PermissionRequest, PermissionRuleset, QuestionRequest, Todo } from "@opencode-ai/sdk/v2";
 import type { EngineHost, EngineSession } from "../../engine.ts";
 import { assistantMessage, item, reasoning, errorItem } from "../../items.ts";
 import { HelperError, type EngineInput, type InitializeParams, type RequestAnswer, type TurnSettings, type TurnOutcome } from "../../protocol.ts";
 import { goatRemoteMcpConfig } from "./goatMcpConfig.ts";
-import { childPermissionRules, permissionRules, questionId } from "./permissions.ts";
+import { childPermissionRules, ownsSubagentDeny, parentPermissionBases, permissionRules, questionId, resumePermissionRules } from "./permissions.ts";
 import { projectTool } from "./project.ts";
 import { safeHost } from "./redact.ts";
 import { client, startServer, verifyServerVersion, type Sdk, type Server } from "./runtime.ts";
@@ -12,7 +12,7 @@ import { promptParts } from "./attachments.ts";
 
 type Client = ReturnType<typeof client>;
 type Admission = { id: string; accepted: boolean; observed: boolean; idle: boolean; pending: boolean };
-type Turn = { id: string; settings: TurnSettings; interrupted: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
+type Turn = { id: string; settings: TurnSettings; interrupted: boolean; stopPending: boolean; stopIdle: boolean; controller: AbortController; admission: Admission; parts: Map<string, Part>; roles: Map<string, string>; emitted: Set<string>; sentText: Map<string, string>; earlyDeltas: Map<string, { messageId: string; text: string }>; earlyDeltaBytes: number; reconciling: boolean; admitted: boolean; draining: boolean; queued: Array<{ event: Event; bytes: number }>; queuedBytes: number; todos?: Todo[]; overflow?: boolean };
 type Pending = { type: "permission"; value: PermissionRequest } | { type: "question"; value: QuestionRequest };
 let lastTime = 0, counter = 0;
 // Adapted from promptAdmission.ts:9-27.
@@ -47,6 +47,7 @@ export class OpenCodeSession implements EngineSession {
   private readonly detachedChildren = new Map<string, Extract<Part, { type: "tool" }>>();
   private readonly ownedMessages = new Set<string>();
   private backgroundPrompt = false;
+  private subagentsDenied = false;
   private readonly abortEvents: AbortController;
   private readonly api: Client;
   private readonly server: Server;
@@ -60,22 +61,42 @@ export class OpenCodeSession implements EngineSession {
   }
   static async create(module: Sdk, params: InitializeParams, host: EngineHost): Promise<OpenCodeSession> {
     const server = await startServer(module, params.cwd, params.launch);
+    const abortEvents = new AbortController();
     try {
       const api = client(module, server, params.cwd);
       await verifyServerVersion(api);
-      const abortEvents = new AbortController();
       const events = await api.event.subscribe(undefined, { signal: abortEvents.signal });
       if (params.mcp) await api.mcp.add({ name: "goat", config: goatRemoteMcpConfig(params.mcp.url, `Bearer ${params.mcp.bearerToken}`) }, { throwOnError: true });
+      const initialPermission = permissionRules(params.runtimeMode);
       const response = params.resume
         ? await api.session.get({ sessionID: params.resume }, { throwOnError: true })
-        : await api.session.create({ permission: permissionRules(params.runtimeMode) }, { throwOnError: true });
+        : await api.session.create({ permission: initialPermission, metadata: { goatPermissionBase: initialPermission, goatSubagentDeny: false } }, { throwOnError: true });
       if (!response.data?.id) throw new Error("session missing");
-      if (params.resume) await api.session.update({ sessionID: response.data.id, permission: permissionRules(params.runtimeMode) }, { throwOnError: true });
+      if (params.resume) await api.session.update({ sessionID: response.data.id, ...resumePermissionRules(params.runtimeMode, response.data.permission ?? [], response.data.metadata) }, { throwOnError: true });
       const session = new OpenCodeSession(api, server, params, safeHost(host, params), response.data.id, abortEvents);
+      if (params.resume) session.subagentsDenied = ownsSubagentDeny(response.data.permission ?? [], response.data.metadata);
       server.onExit(() => { if (!session.closed) session.broken("OpenCode server exited"); });
+      if (params.resume) await session.restoreChildren(parentPermissionBases(response.data.permission ?? [], response.data.metadata));
       void session.consume(events.stream);
       return session;
-    } catch (error) { await server.close(); if (error instanceof HelperError) throw error; throw new HelperError("start_failed", "OpenCode session initialization failed"); }
+    } catch (error) { abortEvents.abort(); await server.close(); if (error instanceof HelperError) throw error; throw new HelperError("start_failed", "OpenCode session initialization failed"); }
+  }
+  private async restoreChildren(rootBases: PermissionRuleset[]) {
+    const seen = new Set([this.engineRef]); const pending = [{ id: this.engineRef, bases: rootBases }];
+    const signal = AbortSignal.timeout(10_000);
+    while (pending.length) {
+      const parent = pending.shift()!;
+      const response = await this.api.session.children({ sessionID: parent.id }, { throwOnError: true, signal });
+      if (!response.data) throw new Error("missing children");
+      for (const child of response.data) {
+        if (seen.has(child.id)) continue;
+        if (seen.size >= 1024) throw new Error("too many children");
+        seen.add(child.id); this.childSessions.add(child.id); this.childPolicies.add(child.id);
+        const native = child.permission ?? [];
+        await this.api.session.update({ sessionID: child.id, permission: childPermissionRules(this.config.runtimeMode, native, parent.bases, this.subagentsDenied, child.metadata), metadata: { ...child.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } }, { throwOnError: true, signal });
+        pending.push({ id: child.id, bases: parentPermissionBases(native, child.metadata) });
+      }
+    }
   }
   private broken(reason: string) {
     if (this.closed) return;
@@ -171,7 +192,7 @@ export class OpenCodeSession implements EngineSession {
       this.childSessions.add(info.id);
       if (!this.childPolicies.has(info.id)) {
         this.childPolicies.add(info.id);
-        try { await this.api.session.update({ sessionID: info.id, permission: childPermissionRules(this.config.runtimeMode, info.permission ?? []) }, { throwOnError: true }); }
+        try { await this.api.session.update({ sessionID: info.id, permission: childPermissionRules(this.config.runtimeMode, info.permission ?? [], [], this.subagentsDenied, info.metadata), metadata: { ...info.metadata, goatPermissionBase: permissionRules(this.config.runtimeMode), goatSubagentDeny: this.subagentsDenied } }, { throwOnError: true }); }
         catch { this.broken("OpenCode could not apply the child session policy"); return; }
       }
     }
@@ -262,11 +283,11 @@ export class OpenCodeSession implements EngineSession {
         return;
       }
       case "session.status":
-        if (event.properties.status.type === "idle") { if (turn.interrupted) this.finish(turn, { type: "interrupted" }); else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
+        if (event.properties.status.type === "idle") { if (turn.interrupted) { if (turn.stopPending) turn.stopIdle = true; else this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" }); }
         else await this.admission(turn, "observed");
         return;
       case "session.idle":
-        if (turn.interrupted) this.finish(turn, { type: "interrupted" }); else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
+        if (turn.interrupted) { if (turn.stopPending) turn.stopIdle = true; else this.finish(turn, { type: "interrupted" }); } else if (turn.admission.pending) await this.admission(turn, "idle"); else this.finish(turn, turn.overflow ? { type: "failed", reason: "OpenCode context limit reached" } : { type: "done" });
         return;
       case "session.compacted": turn.overflow = false; return;
       case "session.error": {
@@ -333,7 +354,7 @@ export class OpenCodeSession implements EngineSession {
     if (this.active) return { status: "declined" as const, reason: "a turn is already running" };
     if (!parsedModel(settings.modelSelection.model)) return { status: "declined" as const, reason: "OpenCode model must use provider/model format" };
     if (!promptParts(inputs).length) return { status: "declined" as const, reason: "OpenCode requires text or an attachment" };
-    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
+    const turn: Turn = { id: `${this.engineRef}:attempt:${randomUUID()}`, settings, interrupted: false, stopPending: false, stopIdle: false, controller: new AbortController(), admission: { id: messageId(), accepted: false, observed: false, idle: false, pending: true }, parts: new Map(), roles: new Map(), emitted: new Set(), sentText: new Map(), earlyDeltas: new Map(), earlyDeltaBytes: 0, reconciling: false, admitted: false, draining: true, queued: [], queuedBytes: 0 };
     this.active = turn;
     this.ownedMessages.add(turn.admission.id);
     try { await this.submit(turn, inputs, this.first); }
@@ -378,10 +399,28 @@ export class OpenCodeSession implements EngineSession {
   }
   async interrupt(turnId: string) {
     const turn = this.active; if (!turn || turn.id !== turnId) return;
-    turn.interrupted = true;
+    turn.interrupted = true; turn.stopPending = true;
     turn.controller.abort();
-    try { await this.api.session.abort({ sessionID: this.engineRef }, { throwOnError: true }); }
-    catch { throw new HelperError("transport", "OpenCode interrupt failed"); }
+    let failed = false;
+    const signal = AbortSignal.timeout(10_000);
+    try { await this.api.session.abort({ sessionID: this.engineRef }, { throwOnError: true, signal }); } catch { failed = true; }
+    try {
+      const seen = new Set([this.engineRef]); const pending = [this.engineRef];
+      while (pending.length) {
+        const parent = pending.shift()!;
+        const children = await this.api.session.children({ sessionID: parent }, { throwOnError: true, signal });
+        if (!children.data) throw new Error("missing children");
+        for (const child of children.data) {
+          if (seen.has(child.id)) continue;
+          if (seen.size >= 2048) throw new Error("too many descendants");
+          seen.add(child.id); pending.push(child.id);
+          await this.api.session.abort({ sessionID: child.id }, { throwOnError: true, signal });
+        }
+      }
+    } catch { failed = true; }
+    turn.stopPending = false;
+    if (failed) { this.broken("OpenCode interrupt could not be confirmed"); throw new HelperError("transport", "OpenCode interrupt failed"); }
+    if (this.active === turn && turn.stopIdle) this.finish(turn, { type: "interrupted" });
   }
   async answerRequest(key: string, answer: RequestAnswer) {
     const request = this.requests.get(key); if (!request) throw new HelperError("bad_request", "No open OpenCode request");

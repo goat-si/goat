@@ -6,8 +6,8 @@ use goat2_contracts::{
     ProviderInstanceId, RuntimeMode, ThreadId, TurnItemBody,
 };
 use goat2_engine_api::{
-    EngineEvent, EngineFactory, EngineInput, McpEndpoint, SessionSpec, TurnOutcome, TurnSettings,
-    TurnStartResult,
+    EngineError, EngineEvent, EngineFactory, EngineInput, McpEndpoint, SessionSpec, TurnOutcome,
+    TurnSettings, TurnStartResult,
 };
 use goat2_engine_sdk::{HelperFactory, HelperLaunch};
 
@@ -47,6 +47,28 @@ async fn resolved_and_missing_attachment_paths_reach_opencode() {
         launch: None,
     };
     let mut handle = factory.start(spec).await.expect("session starts");
+    let mut model_b = model.clone();
+    model_b.model = "test/model-b".into();
+    handle
+        .session
+        .set_config(&TurnSettings {
+            model_selection: model_b.clone(),
+            runtime_mode: RuntimeMode::FullAccess,
+        })
+        .await
+        .expect("model-only update");
+    let mut model_c = model.clone();
+    model_c.model = "test/model-c".into();
+    assert!(matches!(
+        handle
+            .session
+            .set_config(&TurnSettings {
+                model_selection: model_c,
+                runtime_mode: RuntimeMode::ApprovalRequired
+            })
+            .await,
+        Err(EngineError::Unsupported(_))
+    ));
     let attachment = |id: &str, name: &str| ChatAttachment {
         kind: ChatAttachmentType::File,
         id: id.into(),
@@ -67,7 +89,7 @@ async fn resolved_and_missing_attachment_paths_reach_opencode() {
                 ],
             }],
             &TurnSettings {
-                model_selection: model,
+                model_selection: model_b,
                 runtime_mode: RuntimeMode::FullAccess,
             },
         )
@@ -93,5 +115,6 @@ async fn resolved_and_missing_attachment_paths_reach_opencode() {
     assert!(message.contains("[Attached file \"notes.txt\" is saved at: /tmp/has space.txt]"));
     assert!(message.contains("[Attached file \"missing.txt\" is unavailable: could not resolve a saved path for attachment 'missing'.]"));
     assert!(message.contains("FILE:file:///tmp/has%20space.txt"));
+    assert!(message.contains("MODEL:test/model-b"));
     handle.session.shutdown().await;
 }

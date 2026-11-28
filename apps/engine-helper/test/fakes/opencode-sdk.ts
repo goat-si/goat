@@ -6,12 +6,27 @@ let statusGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let statusReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
 let promptReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let abortGate: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let abortReached: ReturnType<typeof Promise.withResolvers<void>> | undefined;
+let abortTarget: string | undefined;
+let abortFailure: string | undefined;
 let history: Array<{ info: { id: string; role: "user" | "assistant" } }> = [];
 let health = { healthy: true, version: "1.15.13" };
 const servers: Array<{ exit?: () => void }> = [];
-export function reset() { calls.length = 0; servers.length = 0; statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
+const children = new Map<string, string[]>();
+const nativePermissions = new Map<string, Array<{ permission: string; pattern: string; action: "allow" | "ask" | "deny" }>>();
+const nativeMetadata = new Map<string, Record<string, unknown>>();
+export function reset() { calls.length = 0; servers.length = 0; children.clear(); nativePermissions.clear(); nativeMetadata.clear(); statusGate = undefined; statusReached = undefined; promptGate = undefined; promptReached = undefined; abortGate = undefined; abortReached = undefined; abortTarget = undefined; abortFailure = undefined; history = []; health = { healthy: true, version: "1.15.13" }; }
 export function setHistory(value: typeof history) { history = value; }
 export function setHealth(value: typeof health) { health = value; }
+export function setChildren(parent: string, ids: string[]) { children.set(parent, ids); }
+export function setNativePermission(id: string, rules: Array<{ permission: string; pattern: string; action: "allow" | "ask" | "deny" }>) { nativePermissions.set(id, rules); }
+export function setNativeMetadata(id: string, metadata: Record<string, unknown>) { nativeMetadata.set(id, metadata); }
+export function failAbort(sessionID: string) { abortFailure = sessionID; }
+export function holdAbort(sessionID: string) {
+  abortTarget = sessionID; abortGate = Promise.withResolvers<void>(); abortReached = Promise.withResolvers<void>();
+  return { reached: abortReached.promise, release: () => abortGate?.resolve() };
+}
 export function holdStatus() {
   statusGate = Promise.withResolvers<void>(); statusReached = Promise.withResolvers<void>();
   return { reached: statusReached.promise, release: () => statusGate?.resolve() };
@@ -54,11 +69,12 @@ export function createOpencodeClient() {
     event: { async subscribe(_p: unknown, options: { signal?: AbortSignal }) { options.signal?.addEventListener("abort", () => { stopped = true; wake?.(); }); return { stream: stream() }; } },
     session: {
       async create(args: unknown) { calls.push({ method: "create", args }); return data({ id: "session-fake" }); },
-      async get(args: { sessionID: string }) { calls.push({ method: "get", args }); return data({ id: args.sessionID }); },
+      async get(args: { sessionID: string }) { calls.push({ method: "get", args }); return data({ id: args.sessionID, permission: nativePermissions.get(args.sessionID) ?? [], metadata: nativeMetadata.get(args.sessionID) }); },
       async messages() { calls.push({ method: "messages", args: {} }); return data(history); },
+      async children(args: { sessionID: string }) { calls.push({ method: "children", args }); return data((children.get(args.sessionID) ?? []).map((id) => ({ id, permission: nativePermissions.get(id) ?? [], metadata: nativeMetadata.get(id) }))); },
       async update(args: unknown) { calls.push({ method: "update", args }); return data({}); },
       async status() { statusReached?.resolve(); if (statusGate) await statusGate.promise; return data({ "session-fake": { type: active ? "busy" : "idle" } }); },
-      async promptAsync(args: { sessionID: string; messageID: string; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
+      async promptAsync(args: { sessionID: string; messageID: string; model?: { providerID: string; modelID: string }; parts: Array<{ type?: string; text?: string; url?: string }> }, options?: { signal?: AbortSignal; throwOnError?: boolean }) {
         calls.push({ method: "prompt", args }); promptReached?.resolve(); if (promptGate) await promptGate.promise;
         if (options?.signal?.aborted) throw new Error("fake prompt aborted");
         const { sessionID, messageID } = args; const text = args.parts[0]?.text ?? "";
@@ -71,11 +87,11 @@ export function createOpencodeClient() {
           push("session.status", { sessionID, status: { type: "busy" } });
           if (text.includes("approve")) push("permission.asked", { id: "request-1", sessionID, permission: "bash", patterns: ["*"], metadata: {}, always: [] });
           else if (text.includes("question")) push("question.asked", { id: "question-1", sessionID, questions: [{ header: "Color", question: "Choose", options: [{ label: "Blue", description: "Color" }] }] });
-          else if (!text.includes("hold")) emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}` : undefined);
+          else if (!text.includes("hold")) emitFinish(sessionID, messageID, text.includes("echo-attachment") ? `${text}\nFILE:${args.parts.find((part) => part.type === "file")?.url ?? "none"}\nMODEL:${args.model?.providerID}/${args.model?.modelID}` : undefined);
         });
         return data(undefined);
       },
-      async abort(args: { sessionID: string }) { calls.push({ method: "abort", args }); active = false; setImmediate(() => push("session.idle", args)); return data(true); },
+      async abort(args: { sessionID: string }) { calls.push({ method: "abort", args }); if (args.sessionID === abortTarget) { abortReached?.resolve(); if (abortGate) await abortGate.promise; } if (args.sessionID === abortFailure) throw new Error("fake abort failure"); active = false; setImmediate(() => push("session.idle", args)); return data(true); },
     },
     mcp: { async add(args: unknown) { calls.push({ method: "mcp.add", args }); return data({}); } },
     permission: { async reply(args: { requestID: string }) { calls.push({ method: "permission.reply", args }); emitFinish("session-fake", "answer"); return data(true); } },

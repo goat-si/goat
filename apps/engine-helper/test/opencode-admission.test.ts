@@ -220,11 +220,107 @@ test("native child sessions retain their restrictions while receiving the parent
   const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
   const session = await opencodeEngine.start({ ...params, runtimeMode: "approval-required" }, host);
   try {
-    await fake.sendEvent("session.created", { sessionID: "child-1", info: { id: "child-1", parentID: session.engineRef, permission: [{ permission: "edit", pattern: "/private/*", action: "deny" }] } });
+    await fake.sendEvent("session.created", { sessionID: "child-1", info: { id: "child-1", parentID: session.engineRef, permission: [{ permission: "bash", pattern: "*", action: "allow" }, { permission: "edit", pattern: "/private/*", action: "deny" }] } });
     const update = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "child-1")?.args as { permission: Array<{ permission: string; action: string }> } | undefined;
     assert.ok(update);
     assert.ok(update.permission.some((rule) => rule.permission === "read" && rule.action === "allow"));
+    assert.ok(!update.permission.some((rule) => rule.permission === "bash" && rule.action === "allow"));
     assert.deepEqual(update.permission.at(-1), { permission: "edit", pattern: "/private/*", action: "deny" });
+  } finally { await session.shutdown(); }
+});
+
+test("new sessions record the installed permission base for a later resume", async () => {
+  fake.reset();
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, runtimeMode: "approval-required" }, host);
+  try {
+    const created = fake.calls.find((call) => call.method === "create")?.args as { permission: unknown; metadata?: { goatPermissionBase?: unknown; goatSubagentDeny?: unknown } };
+    assert.deepEqual(created.metadata?.goatPermissionBase, created.permission);
+    assert.equal(created.metadata?.goatSubagentDeny, false);
+  } finally { await session.shutdown(); }
+});
+
+test("resumed sessions restore policies for existing native children", async () => {
+  fake.reset(); fake.setChildren("session-fake", ["existing-child"]); fake.setNativePermission("session-fake", [{ permission: "edit", pattern: "/protected/*", action: "deny" }]);
+  fake.setNativePermission("existing-child", [{ permission: "bash", pattern: "*", action: "allow" }, { permission: "edit", pattern: "/child-private/*", action: "deny" }]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake", runtimeMode: "approval-required" }, host);
+  try {
+    assert.ok(fake.calls.some((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "existing-child"));
+    const root = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(root.permission.some((rule) => rule.permission === "edit" && rule.pattern === "/protected/*" && rule.action === "deny"));
+    const child = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "existing-child")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(!child.permission.some((rule) => rule.permission === "bash" && rule.action === "allow"));
+    assert.ok(child.permission.some((rule) => rule.pattern === "/child-private/*" && rule.action === "deny"));
+  } finally { await session.shutdown(); }
+});
+
+test("resume removes recorded inherited child policy from an earlier parent mode", async () => {
+  fake.reset();
+  const prior = [{ permission: "*", pattern: "*", action: "deny" as const }, { permission: "bash", pattern: "*", action: "deny" as const }];
+  const current = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  fake.setNativePermission("session-fake", current);
+  fake.setNativeMetadata("session-fake", { goatPermissionBase: current, goatPreviousPermissionBases: [prior] });
+  fake.setChildren("session-fake", ["child-1"]);
+  fake.setNativePermission("child-1", [...prior, { permission: "edit", pattern: "/private/*", action: "deny" }]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try {
+    const child = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "child-1")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(!child.permission.some((rule) => rule.permission === "*" && rule.action === "deny"));
+    assert.ok(child.permission.some((rule) => rule.pattern === "/private/*" && rule.action === "deny"));
+  } finally { await session.shutdown(); }
+});
+
+test("resume replaces a child's own recorded base without discarding its native deny", async () => {
+  fake.reset(); const oldBase = [{ permission: "*", pattern: "*", action: "deny" as const }, { permission: "bash", pattern: "*", action: "deny" as const }];
+  fake.setChildren("session-fake", ["child-1"]); fake.setNativePermission("child-1", [...oldBase, { permission: "edit", pattern: "/child-private/*", action: "deny" }]);
+  fake.setNativeMetadata("child-1", { goatPermissionBase: oldBase });
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try {
+    const child = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "child-1")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(!child.permission.some((rule) => rule.permission === "*" && rule.action === "deny"));
+    assert.ok(child.permission.some((rule) => rule.pattern === "/child-private/*" && rule.action === "deny"));
+  } finally { await session.shutdown(); }
+});
+
+test("resume records the previous permission base for later child reconciliation", async () => {
+  fake.reset();
+  const oldBase = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  fake.setNativePermission("session-fake", oldBase); fake.setNativeMetadata("session-fake", { goatPermissionBase: oldBase }); fake.setChildren("session-fake", ["child-1"]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake", runtimeMode: "approval-required" }, host);
+  try {
+    const root = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { metadata: { goatPreviousPermissionBases?: unknown } };
+    assert.deepEqual(root.metadata.goatPreviousPermissionBases, [oldBase]);
+  } finally { await session.shutdown(); }
+});
+
+test("resume preserves a GOAT-owned subagent deny for existing children", async () => {
+  fake.reset();
+  const base = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  const deny = { permission: "task", pattern: "*", action: "deny" as const };
+  fake.setNativePermission("session-fake", [...base, deny]); fake.setNativeMetadata("session-fake", { goatPermissionBase: base, goatSubagentDeny: true }); fake.setChildren("session-fake", ["child-1"]);
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake" }, host);
+  try {
+    const child = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "child-1")?.args as { permission: unknown[] };
+    assert.deepEqual(child.permission.at(-1), deny);
+  } finally { await session.shutdown(); }
+});
+
+test("resume recognizes a previous permission base appended by the native server", async () => {
+  fake.reset();
+  const oldBase = [{ permission: "*", pattern: "*", action: "allow" as const }, { permission: "external_directory", pattern: "*", action: "allow" as const }];
+  fake.setNativePermission("session-fake", [{ permission: "old-prefix", pattern: "*", action: "allow" }, ...oldBase, { permission: "edit", pattern: "/protected/*", action: "deny" }]);
+  fake.setNativeMetadata("session-fake", { goatPermissionBase: [{ permission: "unmatched", pattern: "*", action: "ask" }], goatPreviousPermissionBases: [oldBase] });
+  const host = { emit(_event: EngineEvent) {}, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start({ ...params, resume: "session-fake", runtimeMode: "approval-required" }, host);
+  try {
+    const root = fake.calls.find((call) => call.method === "update" && (call.args as { sessionID?: string }).sessionID === "session-fake")?.args as { permission: Array<{ permission: string; pattern: string; action: string }> };
+    assert.ok(!root.permission.some((rule) => rule.permission === "old-prefix" || (rule.permission === "*" && rule.action === "allow")));
+    assert.ok(root.permission.some((rule) => rule.pattern === "/protected/*" && rule.action === "deny"));
   } finally { await session.shutdown(); }
 });
 
@@ -280,4 +376,38 @@ test("one OpenCode server crash does not fail another session", async () => {
     assert.deepEqual(secondFailures, []);
     assert.equal((await second.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings)).status, "accepted");
   } finally { await first.shutdown(); await second.shutdown(); }
+});
+
+test("interrupt stops native descendants before reporting completion", async () => {
+  fake.reset(); const finished = Promise.withResolvers<void>(); const events: EngineEvent[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); if (event.type === "turn_finished") finished.resolve(); }, log() {}, fail(reason: string) { throw new Error(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host);
+  fake.setChildren(session.engineRef, ["child-1"]); fake.setChildren("child-1", ["grandchild-1"]);
+  const childAbort = fake.holdAbort("child-1");
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const stopping = session.interrupt(turn.turnId); await childAbort.reached;
+    await fake.sendEvent("session.idle", { sessionID: session.engineRef });
+    assert.equal(events.filter((event) => event.type === "turn_finished").length, 0);
+    childAbort.release(); await stopping; await finished.promise;
+    const aborted = fake.calls.filter((call) => call.method === "abort").map((call) => (call.args as { sessionID: string }).sessionID);
+    assert.deepEqual(aborted, [session.engineRef, "child-1", "grandchild-1"]);
+  } finally { childAbort.release(); await session.shutdown(); }
+});
+
+test("a descendant abort failure fails the session rather than claiming interruption", async () => {
+  fake.reset(); const events: EngineEvent[] = []; const failures: string[] = [];
+  const host = { emit(event: EngineEvent) { events.push(event); }, log() {}, fail(reason: string) { failures.push(reason); }, now: () => "2026-01-01T00:00:00Z" };
+  const session = await opencodeEngine.start(params, host); fake.setChildren(session.engineRef, ["child-1"]); fake.failAbort("child-1");
+  try {
+    const turn = await session.startTurn([{ inputId: "i", text: "hold", attachments: [] }], settings);
+    assert.equal(turn.status, "accepted"); if (turn.status !== "accepted") throw new Error("turn not admitted");
+    await assert.rejects(session.interrupt(turn.turnId), /OpenCode interrupt failed/);
+    assert.deepEqual(failures, ["OpenCode interrupt could not be confirmed"]);
+    const outcomes = events.filter((event) => event.type === "turn_finished");
+    assert.equal(outcomes.length, 1);
+    assert.equal(outcomes[0]?.type === "turn_finished" && outcomes[0].outcome.type, "failed");
+  } finally { await session.shutdown(); }
 });

@@ -22,12 +22,71 @@ export function permissionRules(mode: RuntimeMode): PermissionRuleset {
   ];
 }
 
-// permissionRules.ts:175-189: preserve child-specific rules after restoring the parent policy.
-export function childPermissionRules(mode: RuntimeMode, native: PermissionRuleset): PermissionRuleset {
+// permissionRules.ts:500-532: preserve child denies, never broaden the parent policy with child allows.
+export function ownsSubagentDeny(native: PermissionRuleset, metadata?: Record<string, unknown>): boolean {
+  const last = native.at(-1);
+  return metadata?.goatSubagentDeny === true && last?.permission === "task" && last.pattern === "*" && last.action === "deny";
+}
+export function childPermissionRules(mode: RuntimeMode, native: PermissionRuleset, previousParents: ReadonlyArray<PermissionRuleset> = [], subagentsDenied = false, metadata?: Record<string, unknown>): PermissionRuleset {
   const parent = permissionRules(mode);
+  if (ownsSubagentDeny(native, metadata)) native = native.slice(0, -1);
   const inherited = parent.filter((rule) => rule.permission === "external_directory" || rule.action === "deny");
-  const child = native.filter((rule) => !inherited.some((base) => base.permission === rule.permission && base.pattern === rule.pattern && base.action === rule.action));
-  return [...parent, ...child];
+  const blocks = [...previousParents, ...parentPermissionBases([], metadata), parent].flatMap((rules) => [rules, rules.filter((rule) => rule.permission === "external_directory" || rule.action === "deny")]).filter((rules) => rules.length > 0).sort((a, b) => b.length - a.length);
+  const local: PermissionRuleset = [];
+  for (let offset = 0; offset < native.length;) {
+    const inheritedBlock = blocks.find((rules) => startsWith(native, rules, offset));
+    if (inheritedBlock) offset += inheritedBlock.length;
+    else local.push(native[offset++]!);
+  }
+  const child = local.filter((rule) => rule.action === "deny" && !inherited.some((base) => base.permission === rule.permission && base.pattern === rule.pattern && base.action === rule.action));
+  return [...parent, ...child, ...(subagentsDenied ? [{ permission: "task", pattern: "*", action: "deny" as const }] : [])];
+}
+
+const equalRule = (a: PermissionRuleset[number], b: PermissionRuleset[number]) => a.permission === b.permission && a.pattern === b.pattern && a.action === b.action;
+const startsWith = (rules: PermissionRuleset, prefix: PermissionRuleset, offset = 0) => prefix.every((rule, index) => rules[offset + index] !== undefined && equalRule(rules[offset + index]!, rule));
+function parseBase(value: unknown): PermissionRuleset | undefined {
+  if (!Array.isArray(value) || !value.length || !value.every((rule: unknown) => typeof rule === "object" && rule !== null && "permission" in rule && typeof rule.permission === "string" && "pattern" in rule && typeof rule.pattern === "string" && "action" in rule && ["allow", "ask", "deny"].includes(String(rule.action)))) return undefined;
+  return value as PermissionRuleset;
+}
+function recordedBase(metadata: Record<string, unknown> | undefined): PermissionRuleset | undefined { return parseBase(metadata?.goatPermissionBase); }
+export function parentPermissionBases(native: PermissionRuleset, metadata?: Record<string, unknown>): PermissionRuleset[] {
+  const previous = Array.isArray(metadata?.goatPreviousPermissionBases) ? metadata.goatPreviousPermissionBases : [];
+  const history = Array.isArray(metadata?.goatPermissionBaseHistory) ? metadata.goatPermissionBaseHistory : [];
+  return [...previous, ...history, metadata?.goatPermissionBase].slice(-16).flatMap((value) => { const base = parseBase(value); return base ? [base] : []; }).concat(native.length ? [native] : []);
+}
+function goatShaped(rule: PermissionRuleset[number]): boolean {
+  const restricted = ["bash", "edit", "webfetch", "websearch", "codesearch", "external_directory", "doom_loop"];
+  const allowed = ["question", "read", "glob", "grep", "lsp", "todowrite", "task", "skill"];
+  return (rule.permission === "*" && rule.pattern === "*") ||
+    (restricted.includes(rule.permission) && rule.pattern === "*" && (rule.action === "deny" || rule.action === "ask")) ||
+    (allowed.includes(rule.permission) && rule.pattern === "*" && rule.action === "allow") ||
+    (rule.permission === "read" && ["*.env", "*.env.*", "*.env.example"].includes(rule.pattern)) ||
+    (rule.permission === "edit" && rule.pattern === "*" && rule.action === "allow") ||
+    (["webfetch", "websearch", "codesearch"].includes(rule.permission) && rule.pattern === "*" && rule.action === "allow") ||
+    (rule.permission === "external_directory" && rule.action === "allow" && (rule.pattern === "*" || (rule.pattern.endsWith("/*") && !rule.pattern.slice(0, -2).includes("*"))));
+}
+
+// permissionRules.ts:300-340, 539-572: replace GOAT's base while retaining native rules and metadata.
+export function resumePermissionRules(mode: RuntimeMode, native: PermissionRuleset, metadata?: Record<string, unknown>) {
+  const base = permissionRules(mode);
+  const previous = Array.isArray(metadata?.goatPreviousPermissionBases) ? metadata.goatPreviousPermissionBases.flatMap((value) => { const parsed = parseBase(value); return parsed ? [parsed] : []; }) : [];
+  const current = recordedBase(metadata);
+  const candidates = [...previous, ...(current ? [current] : [])].sort((a, b) => b.length - a.length);
+  let recorded: PermissionRuleset | undefined;
+  let kept = native;
+  let found = false;
+  for (let offset = native.length - 1; offset >= 0; offset--) {
+    const match = candidates.find((candidate) => startsWith(native, candidate, offset));
+    if (match) { recorded = match; kept = native.slice(offset + match.length); found = true; break; }
+  }
+  if (!found && startsWith(native, base)) kept = native.slice(base.length);
+  else if (!found && native[0]?.permission === "*" && native[0].pattern === "*" && ["allow", "deny"].includes(native[0].action)) {
+    let index = 0; while (index < native.length && goatShaped(native[index]!)) index++;
+    kept = native.slice(index);
+  }
+  if (found && recorded && (recorded.length !== base.length || !startsWith(recorded, base)) && !previous.some((item) => item.length === recorded.length && startsWith(item, recorded))) previous.push(recorded);
+  const ownsDeny = ownsSubagentDeny(native, metadata);
+  return { permission: [...base, ...kept], metadata: { ...metadata, ...(previous.length ? { goatPreviousPermissionBases: previous.slice(-16) } : {}), goatPermissionBase: base, goatSubagentDeny: ownsDeny } };
 }
 
 // openCodePermissions.ts:7-16
