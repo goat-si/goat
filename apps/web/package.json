@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:fake": "vite --open '/?fake=2R-1'",
+    "dev": "VITE_GOAT2_MODE=prototype vite",
     "build": "vite build",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "shots": "playwright test"
+    "shots": "playwright test",
+    "dev:host": "vite",
+    "build:prototype": "VITE_GOAT2_MODE=prototype vite build --base=./"
   },
   "dependencies": {
     "@goat2/bot-face": "workspace:*",

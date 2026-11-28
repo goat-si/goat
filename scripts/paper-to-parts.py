@@ -1,74 +1,149 @@
 #!/usr/bin/env python3
-"""Slice the Paper SSOT JSX export (get_jsx, includeNodeIds:false) into React parts.
+"""Paper export (get_jsx, includeNodeIds:false) -> React parts.
 
-Usage: scripts/paper-to-parts.py <ssot-2R-1.jsx> <thread-panel-25E-0.jsx> > apps/web/src/bot-home/ssotParts.tsx
+  scripts/paper-to-parts.py design/paper/part1 > apps/web/src/paper/parts.tsx   generate every part
+  scripts/paper-to-parts.py --tree design/paper/part1/2R-1.jsx [maxDepth]       print the element tree with paths
 
-Line numbers are 1-based against the 2026-11-28 (single picker, chat = messages + decisions) export of artboard "봇 홈 — SSOT".
-Re-export from Paper and re-check the ranges when the artboard changes (docs/PAPER.md).
+Paper exports one element per line, indented by depth. The script parses that into a tree and picks
+parts by child-index path (e.g. "0.1.2"), each checked by an anchor string that must occur inside the
+part, so a board change fails loudly instead of slicing the wrong lines. Parts can replace text lines,
+replace whole subtrees with an expression (slots), drop subtrees and add attributes to elements.
+Change Paper first, re-export, then fix PARTS below when a board's structure changes (docs/PAPER.md).
 """
-import re, sys
+import os, re, sys
 
-L = open(sys.argv[1]).read().split("\n")
-TH = open(sys.argv[2]).read().split("\n") if len(sys.argv) > 2 else None
-def seg(a, b, repl=None):
-    out = []
-    for n in range(a, b + 1):
-        if repl and n in repl:
-            r = repl[n]
-            if r is not None:
-                out.append(r)
-        else:
-            out.append(L[n - 1])
+class Node:
+    def __init__(self, start, indent, line):
+        self.start = start; self.end = start; self.indent = indent; self.line = line
+        self.children = []; self.text = None
+    def tag(self):
+        m = re.match(r"\s*<(\w+)", self.line)
+        return m.group(1) if m else "#text"
+
+def parse(path):
+    lines = open(path).read().split("\n")
+    root = Node(0, -1, ""); stack = [root]
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if not s or s in ("(", ")"):
+            continue
+        ind = len(raw) - len(raw.lstrip())
+        if s.startswith("</"):
+            while len(stack) > 1 and stack[-1].indent > ind:
+                stack.pop()
+            if len(stack) > 1 and stack[-1].indent == ind:
+                stack[-1].end = i; stack.pop()
+            continue
+        while len(stack) > 1 and stack[-1].indent >= ind and stack[-1].end != -2:
+            if stack[-1].indent >= ind:
+                stack.pop()
+            else:
+                break
+        n = Node(i, ind, raw)
+        stack[-1].children.append(n)
+        if s.startswith("<") and not s.endswith("/>") and not re.match(r"^<(\w+)[^>]*>.*</\1>$", s):
+            n.end = -2  # open until its closing line
+            stack.append(n)
+        elif not s.startswith("<"):
+            n.text = s
+    return lines, root
+
+def find(root, path):
+    n = root
+    for k in [int(x) for x in path.split(".")] if path else []:
+        n = n.children[k]
+    return n
+
+def outline(path, maxd=6):
+    lines, root = parse(path)
+    def walk(n, p, d):
+        if d > maxd: return
+        for i, c in enumerate(n.children):
+            q = f"{p}.{i}" if p else str(i)
+            label = c.text if c.text else re.sub(r"style=\{\{.*?\}\}", "", c.line.strip())[:60]
+            texts = " | ".join(t for t in subtree_texts(c)[:3])
+            print(f"{'  '*d}{q} L{c.start+1}-{c.end+1} {label}  «{texts[:70]}»")
+            walk(c, q, d + 1)
+    walk(root, "", 0)
+
+def subtree_texts(n):
+    out = [n.text] if n.text else []
+    for c in n.children: out += subtree_texts(c)
+    return out
+
+def block(lines, n):
+    return lines[n.start:n.end + 1]
+
+def render(lines, node, *, texts=None, slots=None, drop=(), attrs=None, before=None, after=None, extra_props=None):
+    """Return the part's JSX with substitutions. Paths are relative to node ("" = node itself)."""
+    texts = texts or {}; slots = slots or {}; attrs = attrs or {}; before = before or {}; after = after or {}
+    content = {i: lines[i] for i in range(node.start, node.end + 1)}
+    for rel, a in attrs.items():
+        n = find(node, rel)
+        content[n.start] = re.sub(r"<(\w+)(\s|>|/)", lambda m: f"<{m.group(1)} {a}{m.group(2)}", content[n.start], count=1)
+    ranges = {}
+    for rel, expr in slots.items():
+        n = find(node, rel); ranges[n.start] = (n.end, [" " * n.indent + expr])
+    for rel in drop:
+        n = find(node, rel); ranges[n.start] = (n.end, [])
+    pre = {find(node, rel).start: expr for rel, expr in before.items()}
+    post = {find(node, rel).end: expr for rel, expr in after.items()}
+    out = []; i = node.start
+    while i <= node.end:
+        if i in pre: out.append(" " * (len(lines[i]) - len(lines[i].lstrip())) + pre[i])
+        if i in ranges:
+            end, repl = ranges[i]; out += repl
+            if end in post: out.append(" " * (len(lines[i]) - len(lines[i].lstrip())) + post[end])
+            i = end + 1; continue
+        ln = content[i]
+        st = ln.strip()
+        if st in texts:
+            ln = ln[:len(ln) - len(ln.lstrip())] + texts[st]
+        out.append(ln)
+        if i in post: out.append(" " * (len(lines[i]) - len(lines[i].lstrip())) + post[i])
+        i += 1
     return "\n".join(out)
 
-def drop(a, b): return {n: None for n in range(a, b + 1)}
 
-# avatar bodies: the first 40x40 svg of each roster row, in roster order
-roster = "\n".join(L[20:197])
-bodies = re.findall(r'(<svg width="40" height="40" viewBox="0 0 40 40".*?</svg>)', roster, re.S)
-ids = ["main", "reviewer", "ci", "browser", "standup", "release"]
-assert len(bodies) == 6, len(bodies)
+# ---------------------------------------------------------------- parts
+# (name, board, path, anchor, props, options)
+EXPORTS = sys.argv[-1] if len(sys.argv) > 1 else "design/paper/part1"
+PARTS = []
+def part(name, board, path, anchor, props="", **opts):
+    PARTS.append((name, board, path, anchor, props, opts))
 
-print("// GENERATED by scripts/paper-to-parts.py from the Paper SSOT export. Do not edit by hand;")
-print("// change the Paper artboard, re-export, and re-run (see docs/PAPER.md).")
-print("/* eslint-disable */")
-print('import type { ReactNode } from "react";\n')
-print("const BODY_SVGS: Record<string, (size: number) => ReactNode> = {")
-for i, b in zip(ids, bodies):
-    b = b.replace('width="40" height="40"', 'width={size} height={size}', 1)
-    b = re.sub(r"style=\{\{[^}]*\}\}", "", b, count=1)
-    print(f"  {i}: (size) => (\n{b}\n  ),")
-print("};\n")
-print("export function BotBody({ id, size = 40 }: { id: string; size?: number }) {\n  return <>{(BODY_SVGS[id] ?? BODY_SVGS.main!)(size)}</>;\n}\n")
+def generate(d):
+    boards = {}
+    out = ["// GENERATED by scripts/paper-to-parts.py from design/paper/part1/*.jsx (parts listed in scripts/paper-parts.py).",
+           "// Do not edit by hand; change the Paper board, re-export, and re-run (docs/PAPER.md).",
+           "/* eslint-disable */",
+           'import type { AriaAttributes, DOMAttributes, ReactNode } from "react";', "",
+           "/** Props spread onto a board element: handlers, aria, data-*, title. */",
+           "export type El = DOMAttributes<Element> & AriaAttributes & { title?: string; role?: string; tabIndex?: number; className?: string; [key: `data-${string}`]: string | number | boolean | undefined };", ""]
+    for name, board, path, anchor, props, opts in PARTS:
+        if board not in boards: boards[board] = parse(os.path.join(d, board + ".jsx"))
+        lines, root = boards[board]
+        node = find(root, path)
+        body = "\n".join(block(lines, node))
+        if anchor not in body:
+            sys.exit(f"paper-to-parts: anchor {anchor!r} not found in {board} {path} ({name}); the board changed, fix scripts/paper-parts.py")
+        extra = opts.pop("extra_props", None)
+        jsx = render(lines, node, **opts)
+        if extra: props = (props + "; " if props else "") + extra
+        ind = node.indent
+        jsx = "\n".join(l[ind:] if l[:ind].strip() == "" else l for l in jsx.split("\n"))
+        jsx = "\n".join("    " + l for l in jsx.split("\n"))
+        plist = [p.strip() for p in props.split(";") if p.strip()]
+        plist = [p.replace(": object", ": El") for p in plist]
+        sig = f"{{ {', '.join(p.split(':')[0].strip() for p in plist)} }}: {{ {'; '.join(plist)} }}" if plist else ""
+        out.append(f"/** {board} {path} */")
+        out.append(f"export function {name}({sig}) {{\n  return (\n{jsx}\n  );\n}}\n")
+    return "\n".join(out)
 
-def comp(name, props, body):
-    print(f"export function {name}({props}) {{\n  return (\n{body}\n  );\n}}\n")
 
-comp("RosterTop", "{ onFold }: { onFold: () => void }",
-     seg(4, 20, {14: L[13].replace("<div ", "<div role=\"button\" aria-label=\"Fold roster\" onClick={onFold} ", 1)}))
-comp("RosterFooter", "", seg(198, 228))
-r = {**drop(234, 238), 234: '<BotBody id={botId} size={24} />', 240: "{botName}"}
-comp("ChatHeader", "{ botId, botName }: { botId: string; botName: string }", seg(231, 250, r))
-comp("RoutineEvent", "", seg(253, 261))
-comp("BotBubble", "", seg(262, 266))
-comp("ApprovalCard", "", seg(267, 293))
-r = {**drop(301, 313), 299: "{`Message ${botName}`}", 301: "{picker}"}
-comp("Composer", "{ botName, picker }: { botName: string; picker: ReactNode }", seg(296, 320, r))
-r = {**drop(325, 329), 325: '<BotBody id={botId} size={44} />', 332: "{botName}",
-     339: L[338].replace("<div ", "<div role=\"button\" aria-label=\"Fold overview\" onClick={onFold} ", 1)}
-comp("OverviewHeader", "{ botId, botName, onFold }: { botId: string; botName: string; onFold: () => void }", seg(323, 345, r))
-def clickable(n, handler, label):
-    line = L[n - 1]
-    return line.replace("<div ", f'<div role="button" tabIndex={{0}} aria-label="{label}" onClick={{{handler}}} ', 1)
-r = {415: clickable(415, "() => onOpen(\"7712\")", "Open thread Review #7712"),
-     423: clickable(423, "() => onOpen(\"7709\")", "Open thread Review #7709"),
-     431: clickable(431, "() => onOpen(\"fix\")", "Open thread Fix empty list fallback")}
-comp("ThreadsBody", "{ onOpen }: { onOpen: (id: string) => void }", "<>\n" + seg(415, 443, r) + "\n</>")
-
-# Thread panel (Paper state board 25D-0, panel 25E-0): replaces the Overview when a thread is open.
-if TH:
-    t = TH[1:190]   # lines 2..190 of the panel export (outer div closed)
-    t[3] = t[3].replace("<div ", '<div role="button" tabIndex={0} aria-label="Back to Overview" onClick={onBack} ', 1)   # line 5
-    t[11] = t[11].replace("<div ", '<div role="button" tabIndex={0} aria-label="Close thread" onClick={onClose} ', 1)    # line 13
-    t[106] = t[106].replace("<div ", '<div role="button" tabIndex={0} aria-label="Show all steps" onClick={onShowAll} ', 1) # line 108
-    comp("ThreadPanel", "{ onBack, onClose, onShowAll }: { onBack: () => void; onClose: () => void; onShowAll: () => void }", "\n".join(t))
+if __name__ == "__main__":
+    if sys.argv[1] == "--tree":
+        outline(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 6)
+    else:
+        exec(open(os.path.join(os.path.dirname(__file__), "paper-parts.py")).read())
+        print(generate(sys.argv[1]))

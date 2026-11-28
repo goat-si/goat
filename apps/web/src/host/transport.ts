@@ -67,3 +67,12 @@ export class WebSocketTransport implements Transport {
     this.ws?.close();
   }
 }
+
+/** No host configured: always closed, sends nothing. */
+export class OfflineTransport implements Transport {
+  readonly state: ConnectionState = "closed";
+  send() { /* nowhere to send */ }
+  onFrame() { return () => {}; }
+  onState() { return () => {}; }
+  close() { /* nothing open */ }
+}

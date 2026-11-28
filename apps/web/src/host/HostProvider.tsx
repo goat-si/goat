@@ -4,7 +4,7 @@
 import { createContext, useContext, useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { HostClient, localStorageCache, type HostSnapshot } from "./client.ts";
 import { localStorageOutbox, memoryStorage } from "./outbox.ts";
-import { WebSocketTransport } from "./transport.ts";
+import { OfflineTransport, WebSocketTransport } from "./transport.ts";
 import { FakeHost } from "./fakeHost.ts";
 import { DEMO_NOW, demoWorld, withQueue } from "./demoWorld.ts";
 import { deriveThread, type DerivedThread } from "./store.ts";
@@ -25,12 +25,24 @@ export function createHostFromLocation(loc: Location = window.location): HostCon
     const client = new HostClient(new WebSocketTransport(url, token), { outbox: localStorageOutbox(), cache: localStorageCache(), demo: null });
     return { client, now: () => new Date(), desktop: injected !== undefined, build: injected?.build ?? null };
   }
-  const scene = params.get("fake") ?? "demo";
+  const fakeScene = params.get("fake");
+  if (fakeScene === null && import.meta.env.VITE_GOAT2_MODE !== "prototype") {
+    // No host configured (e.g. a desktop build whose preload failed): show the real disconnected
+    // state with whatever the last session cached. Never a fake host here.
+    const client = new HostClient(new OfflineTransport(), { outbox: localStorageOutbox(), cache: localStorageCache(), demo: null });
+    return { client, now: () => new Date(), desktop: false, build: null };
+  }
+  const scene = fakeScene ?? "demo";
   const world = scene === "1MFK-1" ? withQueue(demoWorld()) : demoWorld();
-  // Scenes freeze the boards' clock so times read as on the boards; the demo keeps real time.
-  const frozen = params.has("fake");
+  // Scenes freeze the boards' clock so times read as on the boards; the prototype demo keeps real time.
+  const frozen = fakeScene !== null;
   const fake = new FakeHost(world, { connect: scene === "12P-1" ? "never" : "open", now: () => (frozen ? DEMO_NOW : new Date()).toISOString() });
-  const client = new HostClient(fake, { outbox: frozen ? memoryStorage() : localStorageOutbox("goat2.demo.outbox.v1"), cache: null, demo: scene });
+  // 12P-1 is a cold start: the host is not up yet, the UI draws the last session's cache.
+  const cache = scene === "12P-1" ? {
+    load: () => ({ cards: Object.fromEntries(Object.values(world.threads).map((t) => [t.card.id, t.card])), bots: Object.fromEntries(world.bots.map((b) => [b.botId, b])), lines: { "t-reviewer": world.threads["t-reviewer"]!.lines } }),
+    save: () => {},
+  } : null;
+  const client = new HostClient(fake, { outbox: frozen ? memoryStorage() : localStorageOutbox("goat2.demo.outbox.v1"), cache, demo: scene });
   return { client, now: frozen ? () => DEMO_NOW : () => new Date(), desktop: false, build: null };
 }
 

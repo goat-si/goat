@@ -4,10 +4,15 @@ import { Outbox, type OutboxStorage, type OutboxTarget } from "./outbox.ts";
 import type { ConnectionState, Transport } from "./transport.ts";
 import type { ClientFrame, CommandBody, CommandResult, HostFrame, InputMode, LogLine } from "./wire.ts";
 
-export interface CacheStorage {
-  load(): Pick<HostState, "cards" | "bots"> | null;
-  save(snapshot: Pick<HostState, "cards" | "bots">): void;
+export interface CacheSnapshot extends Pick<HostState, "cards" | "bots"> {
+  /** Last lines of recently shown threads, so a cold start draws them at once. */
+  lines?: Record<string, LogLine[]>;
 }
+export interface CacheStorage {
+  load(): CacheSnapshot | null;
+  save(snapshot: CacheSnapshot): void;
+}
+const CACHE_LINES = 60;
 
 export const localStorageCache = (key = "goat2.cards.v1"): CacheStorage => ({
   load() { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch { return null; } },
@@ -36,6 +41,7 @@ export class HostClient {
   private subCounter = 0;
   readonly outbox: Outbox;
   private readonly cache: CacheStorage | null;
+  commandTimeoutMs = 15000;
 
   constructor(transport: Transport, opts: { outbox: OutboxStorage; cache: CacheStorage | null; demo: string | null }) {
     this.transport = transport;
@@ -43,7 +49,15 @@ export class HostClient {
     this.outbox = new Outbox(opts.outbox, newId);
     const cached = opts.cache?.load() ?? null;
     const state = emptyState();
-    if (cached) { state.cards = cached.cards; state.bots = cached.bots; }
+    if (cached) {
+      state.cards = cached.cards; state.bots = cached.bots;
+      for (const [threadId, lines] of Object.entries(cached.lines ?? {})) {
+        const card = cached.cards[threadId];
+        const last = lines.at(-1);
+        state.threads[threadId] = { ...emptyThread(threadId, null), lines, hasOlder: (lines[0]?.seq ?? 1) > 1,
+          cursor: card && last ? { epoch: card.epoch, seq: last.seq } : null };
+      }
+    }
     this.snapshot = { state, connection: transport.state, fromCache: cached !== null, outbox: this.outbox.list(), demo: opts.demo };
     this.outbox.subscribe(() => this.set({ outbox: this.outbox.list() }));
     transport.onState((s) => this.onState(s));
@@ -104,11 +118,19 @@ export class HostClient {
     if (frame.type === "thread_event" && frame.line.type === "input.accepted") {
       this.outbox.onAccepted(new Set([(frame.line as Extract<LogLine, { type: "input.accepted" }>).clientRequestId]));
     }
+    if (frame.type === "thread_caught_up") this.saveCache();
     if (frame.type === "cards_caught_up" && frame.subId === this.snapshot.state.cardsSubId) {
       this.set({ fromCache: false });
-      this.cache?.save({ cards: this.snapshot.state.cards, bots: this.snapshot.state.bots });
+      this.saveCache();
       this.flushOutbox();
     }
+  }
+
+  private saveCache() {
+    if (!this.cache) return;
+    const lines: Record<string, LogLine[]> = {};
+    for (const t of Object.values(this.snapshot.state.threads)) if (t.lines.length) lines[t.threadId] = t.lines.slice(-CACHE_LINES);
+    this.cache.save({ cards: this.snapshot.state.cards, bots: this.snapshot.state.bots, lines });
   }
 
   resolveTarget = (t: OutboxTarget): string | null => {
@@ -145,7 +167,12 @@ export class HostClient {
       return Promise.resolve({ type: "command_result", reqId, ok: false, error: { code: "internal", message: "Not connected to the host.", retryable: true } });
     }
     return new Promise((resolve) => {
-      this.pending.set(reqId, resolve);
+      // An open socket with no answer: report an unknown outcome after a bound; never retry by itself.
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(reqId)) return;
+        resolve({ type: "command_result", reqId, ok: false, error: { code: "internal", message: "No answer from the host yet; it may still apply. Check before trying again.", retryable: false } });
+      }, this.commandTimeoutMs);
+      this.pending.set(reqId, (r) => { clearTimeout(timer); resolve(r); });
       this.send({ ...body, reqId, clientRequestId } as unknown as ClientFrame);
     });
   }

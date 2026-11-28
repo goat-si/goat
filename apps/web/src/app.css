@@ -1,0 +1,21 @@
+/* Global rules for generated board parts (apps/web/src/paper/parts.tsx). Values come from the boards;
+   these only switch states the static export draws once (active/selected) and fit the 1440×900 frame
+   to the window. */
+html, body, #root { margin: 0; height: 100%; }
+body { overflow: hidden; }
+[data-frame] { width: 100vw !important; height: 100vh !important; }
+[data-frame] > div { width: 100% !important; height: 100% !important; }
+[data-active="false"] { background-color: transparent !important; box-shadow: none !important; }
+[data-selected="true"] { background-color: #E8E8E8 !important; box-shadow: #ECECECB3 0px 0px 0px 1px inset, #0000000D 0px 1px 2px !important; }
+[role="button"]:not([aria-disabled="true"]) { cursor: default; }
+[data-planned] { cursor: default; }
+[data-planned] svg { opacity: 0.55; }
+[data-spin] { animation: goat2-spin 0.9s linear infinite; transform-origin: 50% 50%; }
+@keyframes goat2-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { [data-spin] { animation: none; } }
+/* Desktop shell (hiddenInset): the top bar moves the window; controls stay clickable. */
+[data-desktop] [data-topbar] { -webkit-app-region: drag; }
+[data-desktop] [data-topbar] [role="button"], [data-desktop] [data-topbar] button, [data-desktop] [data-topbar] input,
+[data-desktop] [data-topbar] [data-planned], [data-desktop] [data-topbar] [data-no-drag] { -webkit-app-region: no-drag; }
+textarea.goat2-input { all: unset; display: block; width: 100%; box-sizing: border-box; resize: none; white-space: pre-wrap; }
+textarea.goat2-input::placeholder { color: #5D5D5D; opacity: 1; }
