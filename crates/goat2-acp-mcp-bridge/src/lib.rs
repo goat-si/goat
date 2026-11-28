@@ -4,7 +4,9 @@
 
 use serde_json::{Value, json};
 use std::{
-    fmt, io,
+    fmt,
+    future::{Future, Ready, ready},
+    io,
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -15,6 +17,18 @@ use tokio::{
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_SSE_EVENT_SIZE: usize = 8 * 1024 * 1024;
+/// A plain JSON response body is bounded like an input line (v1 reads it whole,
+/// mcpResponsePayloads.ts:50-58; GOAT 2 bounds it, final review finding 18).
+const MAX_RESPONSE_BYTES: usize = MAX_MESSAGE_BYTES;
+/// Requests and notifications in flight at once; one more request is refused at once, a
+/// notification beyond it is dropped. Reading input never waits for a slot, so an agent reply
+/// that an open request needs is always read (v1 AcpMcpStdioBridge.ts:496-556 forks each line
+/// without a bound).
+pub const MAX_CONCURRENT_REQUESTS: usize = 64;
+/// Replies to the server's requests in flight at once, on top of [MAX_CONCURRENT_REQUESTS].
+pub const MAX_CONCURRENT_REPLIES: usize = 64;
+/// Messages waiting for stdout; a full queue makes the requests producing them wait.
+pub const OUTPUT_QUEUE_CAPACITY: usize = 256;
 
 /// v1 AcpMcpStdioBridge.ts:18-65.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +143,18 @@ impl HttpRelay {
         line: &str,
         mut emit: F,
     ) -> Result<(), BridgeError> {
+        self.send_raw_with(line, |value| -> Ready<()> {
+            emit(value);
+            ready(())
+        })
+        .await
+    }
+    /// [Self::send_raw] waiting on `emit` for each payload, so a slow consumer slows the read.
+    pub async fn send_raw_with<F, Fut>(&self, line: &str, mut emit: F) -> Result<(), BridgeError>
+    where
+        F: FnMut(Value) -> Fut,
+        Fut: Future<Output = ()>,
+    {
         let req = self
             .headers(self.client.post(&self.endpoint))
             .header("content-type", "application/json")
@@ -176,6 +202,12 @@ impl HttpRelay {
             .map_err(|e| BridgeError::new(ErrorKind::Transport, e.to_string()))?
         {
             if !sse {
+                if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+                    return Err(BridgeError::new(
+                        ErrorKind::Transport,
+                        "GOAT MCP endpoint response exceeds the maximum size",
+                    ));
+                }
                 bytes.extend_from_slice(&chunk);
                 continue;
             }
@@ -201,7 +233,7 @@ impl HttpRelay {
                                 BridgeError::new(ErrorKind::Transport, e.to_string())
                             })?;
                             self.observe(&value);
-                            emit(value);
+                            emit(value).await;
                         }
                     } else if let Some(value) = line.strip_prefix("data:") {
                         data.push(value.trim_start().to_owned());
@@ -222,7 +254,7 @@ impl HttpRelay {
             let value = serde_json::from_slice(&bytes)
                 .map_err(|e| BridgeError::new(ErrorKind::Transport, e.to_string()))?;
             self.observe(&value);
-            emit(value);
+            emit(value).await;
         }
         Ok(())
     }
@@ -336,6 +368,26 @@ pub fn request_result(
 fn error(id: Value, code: i32, message: &str) -> Value {
     json!({"jsonrpc":"2.0","id":id,"error":{"code":code,"message":message}})
 }
+
+/// The bridge's work in flight: forwarded requests and notifications, and forwarded replies.
+#[derive(Default)]
+struct InFlight {
+    requests: JoinSet<()>,
+    replies: JoinSet<()>,
+}
+impl InFlight {
+    /// Drop finished work so its slot is free again (v1 AcpMcpStdioBridge.ts:500-510 removes a
+    /// fiber when it ends, not at end of input; final review finding 18).
+    fn reap(&mut self) {
+        while self.requests.try_join_next().is_some() {}
+        while self.replies.try_join_next().is_some() {}
+    }
+    async fn drain(&mut self) {
+        while self.requests.join_next().await.is_some() {}
+        while self.replies.join_next().await.is_some() {}
+    }
+}
+
 /// Stdio bridge, preserving input lines and allowing server responses through the handshake barrier.
 /// v1 AcpMcpStdioBridge.ts:419-563; AcpMcpLineReader.ts:1-42.
 pub async fn run_stdio_bridge<R, W>(
@@ -349,7 +401,7 @@ where
     W: AsyncWrite + Unpin + Send + 'static,
 {
     let relay = HttpRelay::new(endpoint, authorization);
-    let (output, mut rx) = mpsc::unbounded_channel::<Value>();
+    let (output, mut rx) = mpsc::channel::<Value>(OUTPUT_QUEUE_CAPACITY);
     let writer_task = tokio::spawn(async move {
         while let Some(value) = rx.recv().await {
             let mut line = value.to_string();
@@ -372,7 +424,7 @@ where
     let mut reader = BufReader::new(reader);
     let mut buffer = Vec::new();
     let mut oversized = false;
-    let mut tasks = JoinSet::new();
+    let mut tasks = InFlight::default();
     let (initial, _) = watch::channel(true);
     let mut barrier = initial.subscribe();
     while let Ok(chunk) = reader.fill_buf().await {
@@ -385,7 +437,8 @@ where
                     &mut barrier,
                     &buffer,
                     oversized,
-                );
+                )
+                .await;
             }
             break;
         }
@@ -407,28 +460,31 @@ where
                 &mut barrier,
                 &buffer,
                 oversized,
-            );
+            )
+            .await;
             buffer.clear();
             oversized = false;
         }
     }
-    while tasks.join_next().await.is_some() {}
+    tasks.drain().await;
     drop(output);
     match writer_task.await {
         Ok(result) => result,
         Err(e) => Err(io::Error::other(e)),
     }
 }
-fn dispatch(
-    tasks: &mut JoinSet<()>,
+async fn dispatch(
+    tasks: &mut InFlight,
     relay: &HttpRelay,
-    output: &mpsc::UnboundedSender<Value>,
+    output: &mpsc::Sender<Value>,
     barrier: &mut watch::Receiver<bool>,
     bytes: &[u8],
     oversized: bool,
 ) {
     if oversized {
-        let _ = output.send(error(Value::Null, -32600, "Message too large"));
+        let _ = output
+            .send(error(Value::Null, -32600, "Message too large"))
+            .await;
         return;
     }
     let line = String::from_utf8_lossy(bytes)
@@ -438,7 +494,7 @@ fn dispatch(
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(&line) else {
-        let _ = output.send(error(Value::Null, -32700, "Parse error"));
+        let _ = output.send(error(Value::Null, -32700, "Parse error")).await;
         return;
     };
     if !value.is_object() && !value.is_array() {
@@ -450,6 +506,27 @@ fn dispatch(
         value.get("method").and_then(Value::as_str),
         Some("initialize" | "notifications/initialized")
     );
+    tasks.reap();
+    let full = if response {
+        tasks.replies.len() >= MAX_CONCURRENT_REPLIES
+    } else {
+        tasks.requests.len() >= MAX_CONCURRENT_REQUESTS
+    };
+    if full {
+        match id {
+            Some(id) if !response => {
+                let _ = output
+                    .send(error(
+                        id,
+                        -32603,
+                        "GOAT MCP bridge is busy: too many requests are in flight.",
+                    ))
+                    .await;
+            }
+            _ => eprintln!("acp-mcp-bridge: too many messages in flight; one was dropped."),
+        }
+        return;
+    }
     let mut prior = barrier.clone();
     let finish = if handshake {
         let (tx, rx) = watch::channel(false);
@@ -460,7 +537,7 @@ fn dispatch(
     };
     let relay = relay.clone();
     let output = output.clone();
-    tasks.spawn(async move {
+    let work = async move {
         if !response {
             while !*prior.borrow_and_update() {
                 if prior.changed().await.is_err() {
@@ -469,13 +546,16 @@ fn dispatch(
             }
         }
         let result = relay
-            .send_raw(&line, |payload| {
-                for entry in payload
-                    .as_array()
-                    .map(Vec::as_slice)
-                    .unwrap_or(std::slice::from_ref(&payload))
-                {
-                    let _ = output.send(entry.clone());
+            .send_raw_with(&line, |payload| {
+                let output = output.clone();
+                async move {
+                    let entries = match payload {
+                        Value::Array(entries) => entries,
+                        other => vec![other],
+                    };
+                    for entry in entries {
+                        let _ = output.send(entry).await;
+                    }
                 }
             })
             .await;
@@ -485,10 +565,15 @@ fn dispatch(
             } else {
                 format!("GOAT MCP bridge request failed: {e}")
             };
-            let _ = output.send(error(id, -32603, &message));
+            let _ = output.send(error(id, -32603, &message)).await;
         }
         if let Some(tx) = finish {
             let _ = tx.send(true);
         }
-    });
+    };
+    if response {
+        tasks.replies.spawn(work);
+    } else {
+        tasks.requests.spawn(work);
+    }
 }
