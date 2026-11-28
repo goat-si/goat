@@ -312,6 +312,8 @@ export function clientRpcRequiredScopes(
     input.reloadSecrets === true
   )
     return [AuthOrchestrationReadScope, AuthProvidersManageScope];
+  if (method === WS_METHODS.guestShareCreate)
+    return [AuthAccessWriteScope, AuthOrchestrationReadScope];
   if (method === WS_METHODS.memoryTurnInspect || method === WS_METHODS.memoryThreadPreference)
     return [AuthMemoryReadScope, AuthOrchestrationReadScope];
   if (method === WS_METHODS.browserClaimsClaim)
