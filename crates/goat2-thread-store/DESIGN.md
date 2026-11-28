@@ -67,6 +67,10 @@ non-item event over 64 KB are refused (`PayloadTooLarge`; the host stores large 
    of the file, then one `F_FULLFSYNC` that started after it); elsewhere `sync_data`. Measured with
    `examples/append_bench.rs` on an M5 Max: 3.8 ms per append for one thread; 20 threads appending at
    once 8.0 ms median, about 2,300 appends/s (one `F_FULLFSYNC` per append: 28 ms, 625/s).
+   An `item.completed` may arrive after its run's `run.finished` (a background subagent finishing
+   late): it is appended with its origin `runId`, counted, and placed by seq like any line, but only an
+   assistant message of the active run changes `latestAnswerExcerpt` or the restart evidence, so a
+   late item never replaces a newer answer.
 3. Not in a run, or when the status changes, or when a run ends, the card is published, card.json and
    the index row are written through, and then thread subscribers are notified. A failed log sync returns the
    error and poisons the thread: nothing is published, and the outcome stays uncertain until a reopen
