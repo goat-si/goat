@@ -345,7 +345,7 @@ settings. Agents hear about a full disk the way they hear about load and keep ne
 in the server’s <code>settings.json</code>. While history is larger, GOAT trims long command output, tool
 output, and reasoning in threads untouched for a week, oldest first. Each trimmed field keeps its
 start and end with an <em>output trimmed</em> note. Messages are never trimmed.</p>
-<p>Threads untouched for 30 days move their tool calls, output, and reasoning to a compressed archive
+<p>Threads settled for 30 days move their tool calls, output, and reasoning to a compressed archive
 next to the database; messages stay. Opening the thread, or an agent reading it, restores
 everything first, usually in well under a second. Change the window with
 <code>storageCleanup.historyArchiveAfterDays</code>, or set it to <code>null</code> to keep every thread in the
