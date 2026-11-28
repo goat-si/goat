@@ -110,11 +110,14 @@ test("catalog: Add an installed provider, Install and add a missing one, install
   await expect(item("devinCloud").getByRole("button", { name: "Add" })).toBeDisabled();
 });
 
-test("another account waits for driver support; repair is one provider command", async ({ page }) => {
+test("another account: a separate Codex instance (own home on the host); other drivers wait; repair is one provider command", async ({ page }) => {
   await page.goto("/?fake=1PBB-2");
-  // The host gives each instance its own home, but Codex does not use it yet (lane B): no second row that is the same account.
+  await main(page).getByRole("button", { name: "Add another account" }).click();
+  await expect(row(page, "codex-3")).toContainText("Codex · Account 3");
+  expect(await sent(page, "set_provider_instance")).toEqual([expect.objectContaining({ instanceId: "codex-3", driver: "codex", enabled: true, displayName: "Account 3" })]);
+  await row(page, "claudeAgent").click();
   await expect(main(page).getByRole("button", { name: "Add another account" })).toBeDisabled();
-  await expect(main(page)).toContainText("Separate Codex accounts come with a later GOAT 2 update.");
+  await expect(main(page)).toContainText("Separate Claude accounts come with a later GOAT 2 update.");
   await row(page, "omo").click();
   await expect(main(page)).toContainText("OmO can’t start: runtime target missing.");
   await main(page).getByRole("button", { name: "Reinstall" }).click();

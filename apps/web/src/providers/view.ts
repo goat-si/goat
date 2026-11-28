@@ -171,15 +171,21 @@ export function catalog(entries: ReadonlyArray<ServerProviderEntry>, keptOff: Re
       section: have ? "mac" : "more", icon: a.icon ? { url: a.icon } : { driver: "acpRegistry" },
       action: have ? { kind: "none", reason: "" } : { kind: "registry", agentId: a.id, name: a.name }, cloud: false, installed: have });
   }
+  const q = query.trim().toLowerCase();
   for (const [driver, c] of Object.entries(CLOUD)) {
-    if (!c.platform && filter !== "cloud") continue; // counterparts live on their local provider (principle 9)
+    // Counterparts live on their local provider (principle 9) and show under Cloud or when searched for (brief).
+    if (!c.platform && filter !== "cloud" && !q) continue;
     items.push({ key: driver, name: c.label, blurb: c.blurb, badge: "Cloud", section: "more", icon: { driver },
       action: { kind: "none", reason: "Cloud runs come in a later GOAT 2 release." }, cloud: true, installed: false });
   }
-  const q = query.trim().toLowerCase();
   return items.filter((i) => (filter === "all" || (filter === "ready" ? i.installed : i.cloud))
     && (!q || `${i.name} ${i.blurb}`.toLowerCase().includes(q)))
     .sort((a, b) => (a.section === b.section ? Number(a.badge === "Added") - Number(b.badge === "Added") : a.section === "mac" ? -1 : 1));
+}
+
+/** Not added, switched off, not checked yet: GOAT learns whether they are installed once they are added. */
+export function unchecked(entries: ReadonlyArray<ServerProviderEntry>, keptOff: ReadonlyArray<string>, hidden: ReadonlyArray<string> = []): ServerProviderEntry[] {
+  return entries.filter((e) => e.driver !== "acpRegistry" && !CLOUD[e.driver] && !isAdded(e, keptOff, hidden) && !isUnserved(e) && !installKnown(e) && e.instanceId === e.driver);
 }
 
 /** First run (board 2LEV-2): providers found on this Mac that are not added yet. */
@@ -200,7 +206,7 @@ export function detectedLine(e: ServerProviderEntry): string {
  * (goat2 6919a56); a driver must use it (Codex: v1's shadow-home overlay, lane B) before a second instance is a second
  * account. Until then "Add another account" is offered disabled with the reason.
  */
-export const SEPARATE_ACCOUNT_DRIVERS: ReadonlySet<string> = new Set<string>();
+export const SEPARATE_ACCOUNT_DRIVERS: ReadonlySet<string> = new Set<string>(["codex"]); // Codex homes: goat2 0005ccb (lanes E + B)
 
 /** set_provider_instance turning an instance on with what the host already stores for it (it replaces the whole instance). */
 export function enableBody(e: ServerProviderEntry) {

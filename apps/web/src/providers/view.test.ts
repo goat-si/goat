@@ -2,7 +2,7 @@
 // dot and next step, the catalog's sections and actions, the first-run list.
 import { describe, expect, it } from "vitest";
 import { DEMO_REGISTRY, demoProviderEntries, firstRunProviderEntries } from "../host/fakeProviders.ts";
-import { addedProviders, catalog, detected, enableBody, nextInstanceId, providerState, rowLine } from "./view.ts";
+import { addedProviders, catalog, detected, enableBody, nextInstanceId, providerState, rowLine, unchecked } from "./view.ts";
 import type { ServerProviderEntry } from "./wire.ts";
 
 const AT = "2026-11-29T00:00:00.000Z";
@@ -59,6 +59,7 @@ describe("catalog", () => {
     expect(cloud.every((i) => i.action.kind === "none")).toBe(true);
     expect(catalog(demo(), [], DEMO_REGISTRY, "ready", "").every((i) => i.installed)).toBe(true);
     expect(catalog(demo(), [], DEMO_REGISTRY, "all", "qwen").map((i) => i.key)).toEqual(["acp:qwen-code"]);
+    expect(catalog(demo(), [], DEMO_REGISTRY, "all", "claude cloud").map((i) => i.key)).toEqual(["claudeCloud"]); // searchable under All
   });
   it("drivers this host build lacks show why they cannot be added", () => {
     const unserved = demo().map((e) => (e.instanceId === "muse" ? { ...e, probe: { ...e.probe, status: "disabled" as const, message: "This GOAT build does not include the Muse driver yet." } } : e));
@@ -77,6 +78,7 @@ describe("switched-off instances", () => {
     const off = demo().map((e) => (e.instanceId === "grok" ? { ...e, probe: { ...e.probe, status: "disabled" as const } } : e));
     expect(catalog(off, [], [], "all", "").find((i) => i.key === "grok")).toMatchObject({ badge: "Not checked", installed: false, action: { kind: "enable" } });
     expect(detected(off, []).map((e) => e.instanceId)).not.toContain("grok");
+    expect(unchecked(off, []).map((e) => e.instanceId)).toEqual(["grok"]);
     expect(enableBody({ ...byId(demo(), "codex"), enabled: false })).toEqual({ instanceId: "codex", driver: "codex", enabled: true, displayName: "Personal" });
     expect(enableBody(byId(demo(), "acp-kimi-code"))).toMatchObject({ acpAgentId: "kimi-code", displayName: "Kimi Code" });
   });
