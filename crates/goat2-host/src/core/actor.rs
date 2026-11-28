@@ -187,6 +187,10 @@ struct Actor {
     /// Engine sign-in keys already answered or declined in this session. Each key is answered
     /// at most once: later events naming one are ignored.
     settled_signin_keys: std::collections::HashSet<String>,
+    /// Set when a write to this thread's log fails. A failed write can leave the store refusing
+    /// writes until restart, and an engine request nobody can see must not wait: the fenced
+    /// thread stops its engine session and starts no run until the host restarts.
+    fenced: std::sync::atomic::AtomicBool,
     /// Turns accepted in the current engine session and their runs (newest last, at most
     /// [TURN_RUNS_KEPT] settled ones): items a driver delivers after their turn ended
     /// (background subagents) go to their origin run. A turn with a live subagent is never
@@ -221,15 +225,22 @@ pub(crate) fn spawn(host: Host, card: ThreadCard) -> mpsc::UnboundedSender<Msg> 
         signin_keys: Vec::new(),
         undeclined_signin_keys: Vec::new(),
         settled_signin_keys: std::collections::HashSet::new(),
+        fenced: std::sync::atomic::AtomicBool::new(false),
         turn_runs: std::collections::VecDeque::new(),
         live_subagents: std::collections::HashMap::new(),
         tx: tx.clone(),
     };
     let task = tokio::spawn(async move {
+        actor.close_stale_session_signins();
         while let Some(msg) = rx.recv().await {
             let started = Instant::now();
             let label = format!("{msg:?}");
             actor.handle(msg).await;
+            if actor.is_fenced() && actor.session.is_some() {
+                actor
+                    .stop_session("the thread log could not be written")
+                    .await;
+            }
             actor.sync_runtime();
             let took = started.elapsed();
             if took >= crate::stall::STALL_THRESHOLD {
@@ -271,7 +282,8 @@ impl Actor {
         match self.host.append(&self.id, events) {
             Ok(a) => Some(a),
             Err(err) => {
-                tracing::error!(thread = %self.id, %err, "append failed");
+                tracing::error!(thread = %self.id, %err, "append failed: fencing the thread");
+                self.fenced.store(true, std::sync::atomic::Ordering::SeqCst);
                 None
             }
         }
@@ -566,8 +578,34 @@ impl Actor {
         }
     }
 
+    fn is_fenced(&self) -> bool {
+        self.fenced.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Session-level sign-ins left open by an engine session that no longer exists (a host
+    /// restart, or a fenced write): the engine that asked is gone, so they close.
+    fn close_stale_session_signins(&self) {
+        let Some(fold) = self.host.inner.store.fold(&self.id) else {
+            return;
+        };
+        let stale: Vec<RequestId> = fold
+            .open_requests
+            .iter()
+            .filter(|r| r.run_id.is_none() && r.kind == RequestKind::Signin)
+            .map(|r| r.request_id.clone())
+            .collect();
+        let events = self.close_signins(&stale, "the engine that asked has stopped");
+        if !events.is_empty() {
+            self.append(events);
+        }
+    }
+
     fn maybe_start(&mut self) {
-        if !matches!(self.phase, Phase::Idle) || self.held || self.resend_blocked() {
+        if !matches!(self.phase, Phase::Idle)
+            || self.held
+            || self.resend_blocked()
+            || self.is_fenced()
+        {
             return;
         }
         let pending = self.pending();

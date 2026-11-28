@@ -3260,3 +3260,194 @@ async fn an_engine_closed_key_waiting_for_a_retry_is_never_answered() {
         "a closed key opens no new request"
     );
 }
+
+/// A store whose appends can be made to fail, to check that a failed log write fences the thread.
+struct FlakyStore {
+    inner: LaneAStore,
+    fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl goat2_host::store::ThreadStore for FlakyStore {
+    fn index_epoch(&self) -> goat2_contracts::Epoch {
+        self.inner.index_epoch()
+    }
+    fn create(
+        &self,
+        id: &ThreadId,
+        created: goat2_contracts::ThreadCreated,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        self.inner.create(id, created)
+    }
+    fn append(
+        &self,
+        id: &ThreadId,
+        events: Vec<LogEvent>,
+    ) -> goat2_host::store::StoreResult<goat2_host::store::Appended> {
+        if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(goat2_host::store::StoreError::Io(std::io::Error::other(
+                "injected append failure",
+            )));
+        }
+        self.inner.append(id, events)
+    }
+    fn card(&self, id: &ThreadId) -> Option<goat2_contracts::ThreadCard> {
+        self.inner.card(id)
+    }
+    fn fold(&self, id: &ThreadId) -> Option<goat2_contracts::Fold> {
+        self.inner.fold(id)
+    }
+    fn cards(&self) -> Vec<goat2_contracts::ThreadCard> {
+        self.inner.cards()
+    }
+    fn cards_after(
+        &self,
+        after: Option<&goat2_contracts::CardCursor>,
+    ) -> goat2_host::store::CardsAfter {
+        self.inner.cards_after(after)
+    }
+    fn delete(&self, id: &ThreadId) -> goat2_host::store::StoreResult<()> {
+        self.inner.delete(id)
+    }
+    fn thread_epoch(&self, id: &ThreadId) -> Option<goat2_contracts::Epoch> {
+        self.inner.thread_epoch(id)
+    }
+    fn last_seq(&self, id: &ThreadId) -> Option<u64> {
+        self.inner.last_seq(id)
+    }
+    fn read_after(
+        &self,
+        id: &ThreadId,
+        after: u64,
+    ) -> goat2_host::store::StoreResult<Vec<goat2_contracts::LogLine>> {
+        self.inner.read_after(id, after)
+    }
+    fn read_page(
+        &self,
+        id: &ThreadId,
+        before: u64,
+        limit: usize,
+    ) -> goat2_host::store::StoreResult<(Vec<goat2_contracts::LogLine>, bool)> {
+        self.inner.read_page(id, before, limit)
+    }
+    fn latest_checkpoint_seq(&self, id: &ThreadId) -> goat2_host::store::StoreResult<Option<u64>> {
+        self.inner.latest_checkpoint_seq(id)
+    }
+    fn flush(&self) -> goat2_host::store::StoreResult<()> {
+        self.inner.flush()
+    }
+}
+
+#[tokio::test]
+async fn a_failed_log_write_fences_the_thread() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().to_path_buf();
+    let fake = FakeEngine::new(manual());
+    let (inner, _) = LaneAStore::open(&path).unwrap();
+    let fail = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let store = FlakyStore {
+        inner,
+        fail: fail.clone(),
+    };
+    let stall = StallRecorder::open(&path).unwrap();
+    let host = Host::open(
+        opts(&path, 1),
+        Arc::new(store),
+        Arc::new(fake.clone()),
+        stall,
+    )
+    .unwrap();
+    host.set_mcp_url("http://127.0.0.1:1/mcp".into());
+    host.start(&[]).await.unwrap();
+    let t = T {
+        host,
+        fake,
+        _dir: Some(dir),
+    };
+    let id = start_user_thread(&t, "fenced", Some("go")).await;
+    eventually("running", || running(&t, &id)).await;
+    // The engine asks for approval, but the request cannot be written: nobody could see it,
+    // so the engine must not keep waiting. The thread stops its engine.
+    fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    t.fake.emit(
+        &id,
+        goat2_host::engine::EngineEvent::RequestOpened {
+            turn_id: t.fake.active_turn(&id).unwrap(),
+            key: "key-unrecorded".into(),
+            item_id: None,
+            kind: RequestKind::Approval,
+            summary: "Run the command?".into(),
+            item: None,
+        },
+    );
+    eventually("engine stopped", || shut_down(&t, &id)).await;
+    // Writes work again, but the fenced thread starts no run until the host restarts.
+    fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    let turns = || {
+        t.fake
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, FakeCall::Turn { thread_id, .. } if thread_id == &id))
+            .count()
+    };
+    let before = turns();
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "after-fence".into(),
+            thread_id: id.clone(),
+            text: "more".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(turns(), before, "a fenced thread starts no run");
+}
+
+#[tokio::test]
+async fn a_session_signin_left_by_a_restart_is_closed() {
+    let keep = tempfile::tempdir().unwrap();
+    let path = keep.path().to_path_buf();
+    let id = first_generation(path.clone(), |t| {
+        Box::pin(async move {
+            let id = start_user_thread(&t, "stale-signin", Some("go")).await;
+            eventually("running", || running(&t, &id)).await;
+            t.fake.emit(
+                &id,
+                goat2_host::engine::EngineEvent::AuthRequired {
+                    key: Some("KEY-STALE-9101".into()),
+                    turn_id: None,
+                    url: None,
+                    message: "signin".into(),
+                },
+            );
+            eventually("session signin", || signins(&t, &id).len() == 1).await;
+            id
+        })
+    });
+    let t = open_at(&path, None, FakeEngine::new(manual()), 2).await;
+    // Any message wakes the thread's actor; its start closes the stale sign-in.
+    let _ = t
+        .host
+        .command(ClientFrame::SendInput {
+            req_id: "r".into(),
+            client_request_id: "wake".into(),
+            thread_id: id.clone(),
+            text: "hello again".into(),
+            mode: InputMode::Followup,
+            attachments: None,
+        })
+        .await;
+    eventually("stale sign-in closed", || {
+        !t.host
+            .store()
+            .fold(&id)
+            .unwrap()
+            .open_requests
+            .iter()
+            .any(|r| r.kind == RequestKind::Signin)
+    })
+    .await;
+    drop(keep);
+}
