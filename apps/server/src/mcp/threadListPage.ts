@@ -5,7 +5,7 @@ import type * as ThreadManagementService from "../orchestration-v2/ThreadManagem
 import type { McpPageStatus } from "../orchestration-v2/ProjectionMcpThreadPage.ts";
 import { listedThreadStatus, threadSettlement } from "./threadListView.ts";
 
-const CANDIDATE_PAGE_SIZE = 200;
+const CANDIDATE_PAGE_SIZE = 500;
 
 export const listThreadPage = Effect.fn("OrchestratorMcpService.listThreadPage")(function* (
   threads: ThreadManagementService.ThreadManagementService["Service"],

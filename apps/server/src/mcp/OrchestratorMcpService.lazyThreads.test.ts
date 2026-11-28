@@ -246,7 +246,7 @@ describe("goat_thread_list lineage", () => {
     );
   });
   it.effect("complex filters count and page across SQL-ordered candidate batches", () => {
-    const shells = Array.from({ length: 205 }, (_, index) =>
+    const shells = Array.from({ length: 505 }, (_, index) =>
       finished(ThreadId.make(`thread:batch-${String(index).padStart(3, "0")}`), {
         activityRunStatus: index % 3 === 0 ? "waiting" : null,
       }),
@@ -256,14 +256,14 @@ describe("goat_thread_list lineage", () => {
       const result = yield* service.listThreads(scope, {
         projectId,
         statuses: ["waiting"],
-        cursor: 65,
+        cursor: 165,
         limit: 3,
       });
-      assert.equal(result.total, 69);
-      assert.equal(result.nextCursor, 68);
+      assert.equal(result.total, 169);
+      assert.equal(result.nextCursor, 168);
       assert.deepEqual(
         result.threads.map((thread) => thread.threadId),
-        ["thread:batch-195", "thread:batch-198", "thread:batch-201"],
+        ["thread:batch-495", "thread:batch-498", "thread:batch-501"],
       );
     }).pipe(
       Effect.provide(
