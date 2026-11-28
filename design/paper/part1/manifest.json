@@ -81,30 +81,48 @@
   "shot": true
  },
  {
-  "id": "LXD-0",
+  "id": "1N65-1",
   "page": "p-3-1",
-  "name": "T0 · 스레드 모드 첫 진입 (lazy load)",
+  "name": "T0 · 스레드 모드 첫 진입 (GOAT v1 코드 + Updating)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 59303,
+  "jsxBytes": 64040,
   "shot": true
  },
  {
-  "id": "C2Y-0",
+  "id": "1NEM-1",
   "page": "p-3-1",
-  "name": "T1 · 스레드 Chat (GOAT 렌더러)",
+  "name": "T1 · 스레드 Chat (GOAT v1 코드)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 100936,
+  "jsxBytes": 84115,
   "shot": true
  },
  {
-  "id": "1MFK-1",
+  "id": "1OXX-1",
   "page": "p-3-1",
-  "name": "T4 · 스레드 — 대기 메시지 (Queued)",
+  "name": "T4 · 스레드 — 대기 메시지 (GOAT v1 QueuedRunsControl)",
   "w": 1440,
   "h": 900,
-  "jsxBytes": 110937,
+  "jsxBytes": 92831,
+  "shot": true
+ },
+ {
+  "id": "1NPV-1",
+  "page": "p-3-1",
+  "name": "T2 · 멀티플렉서 2×2 (칸 = GOAT v1 스레드)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 179110,
+  "shot": true
+ },
+ {
+  "id": "1OE0-1",
+  "page": "p-3-1",
+  "name": "T3 · 멀티플렉서 1+2 (칸 = GOAT v1 스레드)",
+  "w": 1440,
+  "h": 900,
+  "jsxBytes": 149454,
   "shot": true
  }
 ]
