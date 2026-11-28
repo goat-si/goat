@@ -1077,3 +1077,29 @@ async fn an_old_frame_held_across_a_reopen_is_dropped() {
     );
     handle.session.shutdown().await;
 }
+
+/// Review round 8 finding 1 (v1 `ClaudeAdapterV2.ts:5237-5256`: a uuid echo is acceptance): the
+/// result echoes the steer before any lifecycle frame for it; the steer is accepted and read.
+#[tokio::test]
+async fn a_steer_echoed_by_the_result_before_its_lifecycle_is_accepted() {
+    let run = Run::new("wire/steer_echoed_before_lifecycle.ndjson");
+    let mut handle = run.start(MODEL, RuntimeMode::FullAccess, None).await;
+    let turn_id = turn(&handle, "Count to three.", MODEL, RuntimeMode::FullAccess).await;
+    let steer = handle
+        .session
+        .steer(&turn_id, input_as("steer-a", "Also say done."))
+        .await;
+    assert_eq!(steer, SteerResult::Accepted);
+    let events = until_finished(&mut handle).await;
+    assert_eq!(finished(&events), TurnOutcome::Done);
+    assert_eq!(
+        steer_updates(&events),
+        vec![(
+            turn_id.clone(),
+            vec!["steer-a".to_string()],
+            SteerStatus::Completed
+        )]
+    );
+    handle.session.shutdown().await;
+    run.assert_replayed(1);
+}
