@@ -88,6 +88,8 @@ struct Shared {
     active_turn: HashMap<ThreadId, String>,
     rss: HashMap<ThreadId, u64>,
     pgids: HashMap<ThreadId, i32>,
+    /// What [EngineFactory::probe] answers; `None` = Unsupported (the trait default).
+    probe: Option<Result<goat2_contracts::ProviderProbeResult, EngineError>>,
 }
 
 /// The fake engine factory. Clone it to keep a control handle.
@@ -151,6 +153,11 @@ impl FakeEngine {
             .expect("fake")
             .rss
             .insert(thread_id.clone(), bytes);
+    }
+
+    /// What the next probes answer.
+    pub fn set_probe(&self, probe: Result<goat2_contracts::ProviderProbeResult, EngineError>) {
+        self.shared.lock().expect("fake").probe = Some(probe);
     }
 
     /// The turn currently running in a thread's fake process.
@@ -272,6 +279,15 @@ impl EngineFactory for FakeEngine {
     /// The fake stands in for Codex, so it reports v1's Codex capabilities.
     fn capabilities(&self) -> goat2_contracts::ProviderCapabilities {
         super::codex::codex_capabilities()
+    }
+
+    async fn probe(&self) -> Result<goat2_contracts::ProviderProbeResult, EngineError> {
+        self.shared
+            .lock()
+            .expect("fake")
+            .probe
+            .clone()
+            .unwrap_or_else(|| Err(EngineError::Unsupported("probe".into())))
     }
 
     async fn start(&self, spec: SessionSpec) -> Result<EngineHandle, EngineError> {
