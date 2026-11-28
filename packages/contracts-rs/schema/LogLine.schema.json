@@ -154,11 +154,13 @@
       "properties": {
         "running": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "total": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         }
@@ -532,7 +534,7 @@
       "type": "object"
     },
     "Fold": {
-      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.",
+      "description": "Fold state beyond the card: what a reader (or the store after a crash) needs to continue\nfolding from a checkpoint without reading earlier lines.\n\nFold rules (lane A store): `input.accepted` queues; `input.delivered` accepted leaves the\nqueue, declined stays queued and leaves `activeRunInputIds`, unknown moves into the active\nrun's hold. At `run.finished`, run inputs still queued are delivered if\n`activeRunReachedEngine`, held if the outcome is `unknown`, else stay queued; an `unknown`\noutcome opens request `resend:<runId>` (kind `resend`) holding them.\n\nSteers: `input.delivered {as: steer, outcome: accepted}` moves the input from\n`queuedInputs` to `steeredInputs`. A later `{as: steer, outcome: declined}` for an input in\n`steeredInputs` (the engine dropped an accepted steer, `EngineEvent::SteerUpdated` Cancelled)\nmoves it back to the END of `queuedInputs` with mode `followup`, same inputId, text, source\nand attachments (v1 re-dispatches through the normal queue). A declined steer still queued is\nunchanged. `steeredInputs` is cleared at the next `run.started`, so a cancel that arrives as\nthe turn ends still requeues.",
       "properties": {
         "activeRunId": {
           "anyOf": [
@@ -595,6 +597,13 @@
           "description": "Children started and not yet reported; `card.children.running` is its length.",
           "items": {
             "$ref": "#/$defs/ThreadId"
+          },
+          "type": "array"
+        },
+        "steeredInputs": {
+          "description": "Steers the engine accepted that are not settled yet (see the steer rules above). Omitted\nwhen empty; checkpoints written before this field read as empty.",
+          "items": {
+            "$ref": "#/$defs/QueuedInput"
           },
           "type": "array"
         }
@@ -746,6 +755,7 @@
         "position": {
           "description": "`reorder_queued`: 0-based index in the queue after the change.",
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -947,6 +957,7 @@
         },
         "ordinal": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -994,6 +1005,14 @@
       "enum": [
         "info",
         "warning"
+      ],
+      "type": "string"
+    },
+    "NotificationSource": {
+      "enum": [
+        "session",
+        "fallback",
+        "fixed"
       ],
       "type": "string"
     },
@@ -1174,11 +1193,13 @@
       "properties": {
         "attempt": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
         "maxAttempts": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": [
             "integer",
@@ -1262,6 +1283,14 @@
     "RequestOpened": {
       "description": "`request.opened`: a person is needed.",
       "properties": {
+        "context": {
+          "description": "What the person needs to know to decide (v1 `DecisionItem.context`), at most\n[crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.",
+          "maxLength": 4000,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "itemId": {
           "anyOf": [
             {
@@ -1587,6 +1616,13 @@
             }
           ]
         },
+        "openAsks": {
+          "description": "Open requests that need a person (`fold.openRequests` except kind `resend`), folded by the\nstore. Omitted when 0.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
         "parent": {
           "anyOf": [
             {
@@ -1614,6 +1650,10 @@
         "title": {
           "description": "At most [CARD_TITLE_MAX_CHARS] characters.",
           "type": "string"
+        },
+        "unread": {
+          "description": "Derived by the host when it serves a card: the thread's last item not from the person is\nnewer than the `lastReadSeq` that `mark_read` keeps in `~/.goat2/ui-state.json`. Read state\nis UI state, not thread history (PRD model.md, storage.md): the store never sets it, so it\nis never written to `card.json` or `goat.jsonl` and is not part of the frozen format.\nOmitted when false.",
+          "type": "boolean"
         },
         "updatedAt": {
           "description": "RFC 3339 UTC timestamp.",
@@ -2040,6 +2080,7 @@
           "properties": {
             "additions": {
               "format": "uint32",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": [
                 "integer",
@@ -2057,6 +2098,7 @@
             },
             "deletions": {
               "format": "uint32",
+              "maximum": 4294967295,
               "minimum": 0,
               "type": [
                 "integer",
@@ -2386,6 +2428,7 @@
         },
         "ordinal": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },
@@ -2565,6 +2608,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RunId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NotificationSource"
             },
             {
               "type": "null"
@@ -2820,6 +2873,7 @@
     "v": {
       "description": "Line format version, [LOG_FORMAT_VERSION] when written by this build.",
       "format": "uint32",
+      "maximum": 4294967295,
       "minimum": 0,
       "type": "integer"
     }

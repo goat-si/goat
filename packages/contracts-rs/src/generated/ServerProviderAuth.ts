@@ -5,11 +5,11 @@ import type { ServerProviderAuthStatus } from "./ServerProviderAuthStatus.ts";
 /**
  * v1 `ServerProviderAuth`.
  */
-export type ServerProviderAuth = { status: ServerProviderAuthStatus, type?: string, label?: string, email?: string, 
+export type ServerProviderAuth = { status: ServerProviderAuthStatus, type?: string, label?: string, email?: string,
 /**
  * Pending ACP registry sign-in (v1 `action`).
  */
-action?: AcpRegistryUrlAuthAction, canLogout?: boolean, subscriptionSharing?: boolean, profileId?: string, workspaceId?: string, 
+action?: AcpRegistryUrlAuthAction, canLogout?: boolean, subscriptionSharing?: boolean, profileId?: string, workspaceId?: string,
 /**
  * Origin of the custom endpoint the instance sends its requests to.
  */

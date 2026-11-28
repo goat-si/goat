@@ -4,7 +4,7 @@ import type { Epoch } from "./Epoch.ts";
 /**
  * Position in one thread's `goat.jsonl`.
  */
-export type ThreadCursor = { epoch: Epoch, 
+export type ThreadCursor = { epoch: Epoch,
 /**
  * At most [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */

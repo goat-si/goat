@@ -326,6 +326,503 @@
   "description": "Frames a client sends: subscriptions, then commands. Every command carries `reqId` (matched by\n`command_result`) and `clientRequestId` (idempotency: the host applies one id once and replays\nits result).",
   "oneOf": [
     {
+      "properties": {
+        "subId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subscribe_providers",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "subId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "botId": {
+          "$ref": "#/$defs/BotId"
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "defaultModelSelection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "face": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BotFace"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "instructions": {
+          "description": "v1 `BotInstructions`: at most 16384 characters (as `BotProfile.instructions`).",
+          "maxLength": 16384,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "purpose": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "update_bot",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "botId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "botId": {
+          "$ref": "#/$defs/BotId"
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "list_bot_notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "botId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "botId": {
+          "$ref": "#/$defs/BotId"
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "expectedRevision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "write_bot_notes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "botId",
+        "text"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Records the person's read position: the host keeps `lastReadSeq` per thread in\n`~/.goat2/ui-state.json` (batched writes), never in the thread log. Cards then derive\n`unread` from it.",
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "mark_read",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "seq"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "itemId": {
+          "$ref": "#/$defs/ItemId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "type": {
+          "const": "get_turn_item",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "threadId",
+        "itemId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInstanceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refreshModels": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "refresh_providers",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "provider_install_start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "operationId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "provider_install_cancel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId",
+        "operationId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "methodId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "provider_auth_start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "flowId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "provider_auth_cancel",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId",
+        "flowId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "provider_auth_logout",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "elicitationId": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "accept_acp_registry_url_auth",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId",
+        "elicitationId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "clientRequestId": {
+          "type": "string"
+        },
+        "limit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "search_acp_registry",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "query"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "prepare_acp_registry_agent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "agentId"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "acpAgentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clientRequestId": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "driver": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reqId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "set_provider_instance",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reqId",
+        "clientRequestId",
+        "instanceId",
+        "driver",
+        "enabled"
+      ],
+      "type": "object"
+    },
+    {
       "description": "Start `subscribeCards`. No cursor means \"from the start\".",
       "properties": {
         "after": {
@@ -410,6 +907,7 @@
         },
         "limit": {
           "format": "uint32",
+          "maximum": 4294967295,
           "minimum": 0,
           "type": "integer"
         },

@@ -8,19 +8,24 @@ import type { RunId } from "./RunId.ts";
 /**
  * `request.opened`: a person is needed.
  */
-export type RequestOpened = { requestId: RequestId, runId: RunId | null, 
+export type RequestOpened = { requestId: RequestId, runId: RunId | null,
 /**
  * The approval/question item, when the request came from the engine.
  */
-itemId: ItemId | null, kind: RequestKind, 
+itemId: ItemId | null, kind: RequestKind,
 /**
  * At most [crate::limits::NEEDS_YOU_SUMMARY_MAX_CHARS] characters.
  */
-summary: string, 
+summary: string,
+/**
+ * What the person needs to know to decide (v1 `DecisionItem.context`), at most
+ * [crate::limits::REQUEST_CONTEXT_MAX_CHARS] characters.
+ */
+context?: string,
 /**
  * Kind `decision`: the choices offered (v1 `goat_decision_request`).
  */
-options?: Array<DecisionOption>, 
+options?: Array<DecisionOption>,
 /**
  * Kind `decision`: the recommended option id. Silence never approves it.
  */

@@ -6,7 +6,7 @@ import type { ThreadCard } from "./ThreadCard.ts";
  * `checkpoint`: card and fold as of this line, written at the end of every run.
  * Replay after a reset starts from the latest checkpoint.
  */
-export type Checkpoint = { 
+export type Checkpoint = {
 /**
  * The card with `appliedSeq` equal to this line's seq.
  */

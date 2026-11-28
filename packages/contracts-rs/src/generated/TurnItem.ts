@@ -29,19 +29,19 @@ import type { JsonValue } from "./serde_json/JsonValue.ts";
 /**
  * A finished item, as `item.completed` stores it and the chat renderer draws it.
  */
-export type TurnItem = { id: ItemId, threadId: ThreadId, runId: RunId | null, providerThreadId: string | null, providerTurnId: string | null, nativeItemRef: NativeItemRef | null, parentItemId: ItemId | null, ordinal: number, status: TurnItemStatus, title: string | null, startedAt: string | null, completedAt: string | null, updatedAt: string, } & ({ "type": "user_message", createdBy: Actor, creationSource: CreationSource, messageId: MessageId, senderThreadId?: ThreadId, inputIntent: UserMessageInputIntent, text: string, attachments: Array<ChatAttachment>, } | { "type": "assistant_message", phase?: AssistantMessagePhase, delivery?: AssistantDelivery, messageId: MessageId, text: string, attachments?: Array<ChatAttachment>, streaming: boolean, } | { "type": "reasoning", text: string, streaming: boolean, } | { "type": "proposed_plan", planId: PlanId, markdown: string, streaming: boolean, } | { "type": "todo_list", planId: PlanId, steps: Array<PlanStep>, explanation?: string, } | { "type": "user_input_request", requestId: RequestId, questions: Array<UserInputQuestion>, } | { "type": "approval_request", requestId: RequestId, requestKind: ProviderRequestKind, prompt?: string, reason?: string, options?: Array<ApprovalOption>, } | { "type": "file_change", fileName: string, additions?: number, deletions?: number, diffStr?: string, 
+export type TurnItem = { id: ItemId, threadId: ThreadId, runId: RunId | null, providerThreadId: string | null, providerTurnId: string | null, nativeItemRef: NativeItemRef | null, parentItemId: ItemId | null, ordinal: number, status: TurnItemStatus, title: string | null, startedAt: string | null, completedAt: string | null, updatedAt: string, } & ({ "type": "user_message", createdBy: Actor, creationSource: CreationSource, messageId: MessageId, senderThreadId?: ThreadId, inputIntent: UserMessageInputIntent, text: string, attachments: Array<ChatAttachment>, } | { "type": "assistant_message", phase?: AssistantMessagePhase, delivery?: AssistantDelivery, messageId: MessageId, text: string, attachments?: Array<ChatAttachment>, streaming: boolean, } | { "type": "reasoning", text: string, streaming: boolean, } | { "type": "proposed_plan", planId: PlanId, markdown: string, streaming: boolean, } | { "type": "todo_list", planId: PlanId, steps: Array<PlanStep>, explanation?: string, } | { "type": "user_input_request", requestId: RequestId, questions: Array<UserInputQuestion>, } | { "type": "approval_request", requestId: RequestId, requestKind: ProviderRequestKind, prompt?: string, reason?: string, options?: Array<ApprovalOption>, } | { "type": "file_change", fileName: string, additions?: number, deletions?: number, diffStr?: string,
 /**
  * This edit alone as a git-style patch. Omitted from the log; read it from the engine.
  */
-patch?: string, patchOmitted?: boolean, changes?: Array<FileChangeDetail>, } | { "type": "command_execution", input: string, commandActions?: Array<CommandAction>, 
+patch?: string, patchOmitted?: boolean, changes?: Array<FileChangeDetail>, } | { "type": "command_execution", input: string, commandActions?: Array<CommandAction>,
 /**
  * Omitted from the log (`outputOmitted: true`); read it from the engine.
  */
-output?: string, outputOmitted?: boolean, outputIndicatesFailure?: boolean, exitCode?: number, } | { "type": "web_search", patterns?: Array<string>, results?: Array<WebSearchResult>, } | { "type": "dynamic_tool", toolName: string | null, input: JsonValue, 
+output?: string, outputOmitted?: boolean, outputIndicatesFailure?: boolean, exitCode?: number, } | { "type": "web_search", patterns?: Array<string>, results?: Array<WebSearchResult>, } | { "type": "dynamic_tool", toolName: string | null, input: JsonValue,
 /**
  * Absent when there is no output; an explicit `null` output is kept as `null`.
  */
-output?: JsonValue, outputOmitted?: boolean, 
+output?: JsonValue, outputOmitted?: boolean,
 /**
  * A muted one-line outcome for the row; display only.
  */

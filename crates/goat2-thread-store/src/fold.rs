@@ -37,6 +37,8 @@ pub fn initial(
         epoch: epoch.clone(),
         applied_seq: seq,
         card_seq: 0,
+        open_asks: 0,
+        unread: false,
     };
     (card, Fold::default())
 }
@@ -65,6 +67,7 @@ fn ensure_resend(fold: &mut Fold, run: &RunId) -> usize {
             ),
             options: None,
             recommended: None,
+            context: None,
         });
     }
     if let Some(i) = fold.held_inputs.iter().position(|h| &h.run_id == run) {
@@ -107,6 +110,7 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
         LogEvent::InputAccepted(e) => {
             fold.counters.inputs += 1;
             let known = fold.queued_inputs.iter().any(|q| q.input_id == e.input_id)
+                || fold.steered_inputs.iter().any(|q| q.input_id == e.input_id)
                 || fold
                     .held_inputs
                     .iter()
@@ -144,13 +148,34 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
         }
         LogEvent::InputDelivered(e) => match e.outcome {
             DeliveryOutcome::Accepted => {
-                take_queued(fold, &e.input_id);
+                let taken = take_queued(fold, &e.input_id);
+                // An accepted steer is kept until the next run.started: the engine can still
+                // cancel it, and then it comes back as a followup (owner decision 2026-11-29).
+                if e.delivered_as == DeliveredAs::Steer
+                    && let Some(input) = taken
+                {
+                    fold.steered_inputs.push(input);
+                }
                 if e.delivered_as == DeliveredAs::Turn && is_active(fold, &e.run_id) {
                     fold.active_run_reached_engine = true;
                 }
             }
             DeliveryOutcome::Declined => {
                 fold.active_run_input_ids.retain(|id| id != &e.input_id);
+                // Declined while still queued: it stays queued. Declined after the engine had
+                // accepted it (a cancelled steer): back to the END of the queue as a followup,
+                // like v1 re-dispatching the same message (Orchestrator.ts:5004-5030).
+                if e.delivered_as == DeliveredAs::Steer
+                    && !fold.queued_inputs.iter().any(|q| q.input_id == e.input_id)
+                    && let Some(pos) = fold
+                        .steered_inputs
+                        .iter()
+                        .position(|q| q.input_id == e.input_id)
+                {
+                    let mut input = fold.steered_inputs.remove(pos);
+                    input.mode = InputMode::Followup;
+                    fold.queued_inputs.push(input);
+                }
             }
             DeliveryOutcome::Refused => {
                 // Fails closed: the input leaves the queue and is never retried.
@@ -169,6 +194,8 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
             fold.active_run_id = Some(e.run_id.clone());
             fold.active_run_input_ids = e.input_ids.clone();
             fold.active_run_reached_engine = false;
+            // Steers of earlier runs can no longer come back.
+            fold.steered_inputs.clear();
             fold.counters.runs += 1;
             if let Some(engine_ref) = &e.engine_ref {
                 card.engine_ref = Some(engine_ref.clone());
@@ -264,6 +291,12 @@ pub fn apply(card: &mut ThreadCard, fold: &mut Fold, line: &LogLine) {
 /// failed; else idle.
 pub fn refresh_status(card: &mut ThreadCard, fold: &Fold) {
     card.children.running = fold.running_child_ids.len() as u32;
+    // Questions that need a person: every open request except the store's own `resend` holds.
+    card.open_asks = fold
+        .open_requests
+        .iter()
+        .filter(|r| r.kind != RequestKind::Resend)
+        .count() as u32;
     if let Some(request) = fold.open_requests.last() {
         card.status = ThreadStatus::NeedsYou;
         card.needs_you = Some(NeedsYou {

@@ -28,7 +28,7 @@ pub const OWNED_DIRS: [&str; 2] = [TS_DIR, SCHEMA_DIR];
 pub type Files = BTreeMap<String, String>;
 
 /// The root types. Each gets a JSON Schema; TypeScript covers them and everything they use.
-pub const ROOTS: [&str; 18] = [
+pub const ROOTS: [&str; 19] = [
     "BotProfile",
     "CardFile",
     "ChannelAttentionEvent",
@@ -44,6 +44,7 @@ pub const ROOTS: [&str; 18] = [
     "LogLine",
     "ProviderCapabilities",
     "ProviderProbeResult",
+    "ServerProviderEntry",
     "ThreadCard",
     "TurnItem",
     "TurnItemBody",
@@ -120,6 +121,7 @@ pub fn render_typescript() -> Result<Files, String> {
         export::<DecisionItem>(&cfg)?;
         export::<DecisionRequestInput>(&cfg)?;
         export::<ProviderProbeResult>(&cfg)?;
+        export::<ServerProviderEntry>(&cfg)?;
         export::<ClientFrame>(&cfg)?;
         export::<Fold>(&cfg)?;
         export::<HostFrame>(&cfg)?;
@@ -145,7 +147,7 @@ pub fn render_typescript() -> Result<Files, String> {
 
     let mut files = Files::new();
     for (rel, text) in types {
-        files.insert(format!("{TS_DIR}/{rel}"), text);
+        files.insert(format!("{TS_DIR}/{rel}"), trim_line_ends(&text));
     }
     files.insert(format!("{TS_DIR}/index.ts"), index);
     files.insert(format!("{TS_DIR}/limits.ts"), render_limits());
@@ -161,6 +163,9 @@ pub fn render_limits() -> String {
         };
     }
     constant!(
+        BOT_INSTRUCTIONS_MAX_CHARS,
+        BOT_INSTRUCTIONS_MAX_BYTES,
+        REQUEST_CONTEXT_MAX_CHARS,
         LOG_FORMAT_VERSION,
         CARD_FILE_FORMAT_VERSION,
         MAX_SAFE_WIRE_INTEGER,
@@ -203,6 +208,9 @@ fn safe_integer(schema: &mut Schema) {
     match obj.get("format").and_then(|f| f.as_str()) {
         Some("uint64") => {
             obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
+        }
+        Some("uint32") => {
+            obj.insert("maximum".into(), u32::MAX.into());
         }
         Some("int64") => {
             obj.insert("maximum".into(), limits::MAX_SAFE_WIRE_INTEGER.into());
@@ -254,6 +262,7 @@ pub fn render_json_schemas() -> Files {
     schema_file::<DecisionItem>(&mut files, "DecisionItem");
     schema_file::<DecisionRequestInput>(&mut files, "DecisionRequestInput");
     schema_file::<ProviderProbeResult>(&mut files, "ProviderProbeResult");
+    schema_file::<ServerProviderEntry>(&mut files, "ServerProviderEntry");
     schema_file::<ClientFrame>(&mut files, "ClientFrame");
     schema_file::<Fold>(&mut files, "Fold");
     schema_file::<HostFrame>(&mut files, "HostFrame");
@@ -305,6 +314,7 @@ pub fn load_fixtures() -> Result<Vec<Fixture>, String> {
         "decision_item",
         "decision_request_input",
         "provider_probe_result",
+        "server_provider_entry",
     ] {
         read_tree(&base, &base.join(root), &mut files)?;
     }
@@ -417,6 +427,20 @@ pub fn render_fixture_module(fixtures: &[Fixture]) -> String {
             serde_json::to_string_pretty(&sorted(fixture.value.clone())).expect("fixture JSON"),
             fixture_type(&fixture.root)
         ));
+    }
+    out
+}
+
+/// ts-rs leaves a space before line breaks it inserts for doc comments; generated files carry no
+/// trailing whitespace (`git diff --check` stays clean).
+fn trim_line_ends(text: &str) -> String {
+    let mut out: String = text
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
     }
     out
 }

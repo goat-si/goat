@@ -231,8 +231,11 @@ install_app() {
   ditto "$src" "$target"
   echo "installed: $target ($stamp)"
   if [[ $was_running == 1 && $OPEN == 1 ]]; then
-    # GOAT threads export ELECTRON_RUN_AS_NODE=1; open passes it on and Electron would start as plain Node.
-    env -u ELECTRON_RUN_AS_NODE open "$target"
+    # open hands the caller's environment to the app. Started from a GOAT thread that would leak its
+    # variables (ELECTRON_RUN_AS_NODE, CODEX_HOME, GOAT v1 MCP credentials, ...) into the host and every
+    # agent; relaunch with the minimal environment the app gets from Finder instead.
+    env -i HOME="$HOME" USER="${USER:-$(id -un)}" LOGNAME="${LOGNAME:-$(id -un)}" SHELL="${SHELL:-/bin/zsh}" \
+      TMPDIR="${TMPDIR:-/tmp/}" PATH="/usr/bin:/bin:/usr/sbin:/sbin" open "$target"
     echo "relaunched $APP_NAME"
   fi
 }

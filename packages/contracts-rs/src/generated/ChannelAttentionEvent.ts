@@ -8,19 +8,19 @@ import type { ThreadId } from "./ThreadId.ts";
 /**
  * v1 `ChannelAttentionEvent`: one attention event for a bot's thread.
  */
-export type ChannelAttentionEvent = { botId: BotId, 
+export type ChannelAttentionEvent = { botId: BotId,
 /**
  * The thread that needs attention (v1 `taskId`).
  */
-threadId: ThreadId, requestId?: RequestId, request?: ChannelAttentionRequest, eventId: string, 
+threadId: ThreadId, requestId?: RequestId, request?: ChannelAttentionRequest, eventId: string,
 /**
  * At most [crate::limits::MAX_SAFE_WIRE_INTEGER].
  */
-sequence: number, kind: ChannelAttentionKind, 
+sequence: number, kind: ChannelAttentionKind,
 /**
  * v1 `Schema.Int`, within the safe wire integer range.
  */
-generation: number, 
+generation: number,
 /**
  * RFC 3339 UTC timestamp.
  */

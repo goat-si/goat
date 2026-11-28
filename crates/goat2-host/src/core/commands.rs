@@ -434,6 +434,26 @@ async fn execute(host: &Host, frame: Command) -> CommandReply {
                 ..Default::default()
             })
         }
+        // Part 2 commands whose host module has not landed yet (providers module: lane E;
+        // bot notes, update_bot, get_turn_item, mark_read: P2-E). Refused plainly until then.
+        Command::RefreshProviders { .. }
+        | Command::ProviderInstallStart { .. }
+        | Command::ProviderInstallCancel { .. }
+        | Command::ProviderAuthStart { .. }
+        | Command::ProviderAuthCancel { .. }
+        | Command::ProviderAuthLogout { .. }
+        | Command::AcceptAcpRegistryUrlAuth { .. }
+        | Command::SearchAcpRegistry { .. }
+        | Command::PrepareAcpRegistryAgent { .. }
+        | Command::SetProviderInstance { .. }
+        | Command::UpdateBot { .. }
+        | Command::ListBotNotes { .. }
+        | Command::WriteBotNotes { .. }
+        | Command::GetTurnItem { .. }
+        | Command::MarkRead { .. } => Err(command_error(
+            Reason::NotAvailable,
+            "this command is not available in this host build yet",
+        )),
         _ => Err(command_error(Reason::InvalidRequest, "not a command frame")),
     }
 }
@@ -517,6 +537,7 @@ fn create_bot(
         role,
         session_thread_id: card.id,
         default_model_selection: model_selection,
+        instructions: None,
     };
     save_bot(host, &profile)?;
     host.inner.bots.lock().expect("bots").push(profile.clone());

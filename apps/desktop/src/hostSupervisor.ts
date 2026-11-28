@@ -11,6 +11,9 @@
 //   record.attempt - 1 as v1 DesktopBackendManager.ts:722).
 //   Exception: a host that exits with code 0 before it ever got ready chose to exit (an empty stub
 //   binary does this); restarting it cannot help, so it is left "exited" until Start Host.
+// - A group that is still alive after SIGKILL (a process stuck in the kernel) stays owned: the
+//   next host is held in phase "stuck" and SIGKILL is retried until the group is empty, so two
+//   hosts never overlap. Quitting does not wait for it.
 // - stdin stays an open pipe the shell never writes. If the shell dies without running stop(),
 //   the host sees EOF and exits (host-side rule, lane E).
 import { spawn, type ChildProcess } from "node:child_process";
@@ -22,7 +25,15 @@ import {
   type RecoveryRecord,
 } from "./backend/DesktopBackendRecoveryPolicy.ts";
 
-export type HostPhase = "starting" | "ready" | "restarting" | "crash-loop" | "exited" | "stopping" | "stopped";
+export type HostPhase =
+  | "starting"
+  | "ready"
+  | "restarting"
+  | "stuck"
+  | "crash-loop"
+  | "exited"
+  | "stopping"
+  | "stopped";
 
 export interface HostState {
   readonly phase: HostPhase;
@@ -33,6 +44,8 @@ export interface HostState {
   readonly lastExit: string | null;
   /** The host's start line for the current process, once printed. */
   readonly announce: HostAnnounce | null;
+  /** Process group of an ended host that is still alive after SIGKILL; no new host starts meanwhile. */
+  readonly stuckGroup: number | null;
 }
 
 /** First JSON line the host prints on stdout (owner contract 2026-11-28). */
@@ -77,6 +90,10 @@ export interface HostSupervisorOptions {
   readonly onState?: (state: HostState) => void;
   readonly stopGraceMs?: number;
   readonly killWaitMs?: number;
+  /** How often a group that survived SIGKILL is signalled again (default 5 s). */
+  readonly stuckRetryMs?: number;
+  /** Overrides killGroup (tests simulate a group that survives SIGKILL). */
+  readonly killGroup?: (pgid: number, graceMs: number, killWaitMs?: number) => Promise<boolean>;
   readonly healthIntervalMs?: number;
   /** Overrides v1's jittered delay (tests). */
   readonly restartDelayMs?: (attempt: number) => number;
@@ -127,10 +144,12 @@ export class HostSupervisor {
   #childExited: Promise<void> = Promise.resolve();
   #restartTimer: ReturnType<typeof setTimeout> | null = null;
   #record: RecoveryRecord = emptyRecoveryRecord();
-  #state: HostState = { phase: "stopped", pid: null, restarts: 0, lastExit: null, announce: null };
+  #state: HostState = { phase: "stopped", pid: null, restarts: 0, lastExit: null, announce: null, stuckGroup: null };
   #stopping = false;
   #stopPromise: Promise<void> | null = null;
   #generation = 0;
+  /** Wakes every stuck-group wait (restart and crash recovery can each hold one). */
+  readonly #stuckWakers = new Set<() => void>();
 
   constructor(options: HostSupervisorOptions) {
     this.#opts = options;
@@ -142,6 +161,12 @@ export class HostSupervisor {
 
   /** Starts the host; also ends a crash-loop pause (the "Start Host" menu item). */
   start(): void {
+    // A manual restart owns the next spawn until the old group is gone (it starts the new host).
+    if (this.#restartInProgress !== null) return;
+    this.#startFresh();
+  }
+
+  #startFresh(): void {
     // While a crashed host's group is still being cleaned, recovery owns the next spawn.
     if (this.#stopping || this.#child !== null || this.#recoveryActive) return;
     if (this.#restartTimer !== null) {
@@ -163,24 +188,98 @@ export class HostSupervisor {
   stop(): Promise<void> {
     if (this.#stopPromise !== null) return this.#stopPromise;
     this.#stopping = true;
+    for (const wake of this.#stuckWakers) wake();
     if (this.#restartTimer !== null) {
       clearTimeout(this.#restartTimer);
       this.#restartTimer = null;
     }
     this.#stopPromise = (async () => {
+      // A restart in progress is ending the old group; it sees #stopping and starts nothing new.
+      if (this.#restartInProgress !== null) await this.#restartInProgress;
       const child = this.#child;
       if (child?.pid !== undefined) {
         this.#set({ phase: "stopping" });
         const pgid = child.pid;
-        const empty = await killGroup(pgid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
-        await this.#childExited;
-        if (!empty) this.#log(`host group ${pgid} still has processes after SIGKILL`);
+        const empty = await (this.#opts.killGroup ?? killGroup)(pgid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
+        if (empty) {
+          await this.#childExited;
+        } else {
+          // Quitting ends the work but must not hang: a host stuck in the kernel may never report its exit.
+          this.#log(`host group ${pgid} still has processes after SIGKILL; quitting without it`);
+          await Promise.race([this.#childExited, sleep(this.#opts.killWaitMs ?? 2_000)]);
+        }
       }
       // A crash cleanup that was already running finishes before we report stopped.
       await this.#recovering;
       this.#set({ phase: "stopped", pid: null });
     })();
     return this.#stopPromise;
+  }
+
+  #restartInProgress: Promise<void> | null = null;
+
+  /**
+   * Ends the running host and its whole group on purpose, then starts a fresh one (menu "Restart
+   * Host…", e.g. to pick up a login-shell PATH that arrived after the host started). Not a crash:
+   * the old host's exit is ignored and the recovery budget is reset as by start().
+   */
+  restart(): Promise<void> {
+    if (this.#stopping) return Promise.resolve();
+    if (this.#restartInProgress !== null) return this.#restartInProgress;
+    this.#restartInProgress = (async () => {
+      if (this.#restartTimer !== null) {
+        clearTimeout(this.#restartTimer);
+        this.#restartTimer = null;
+      }
+      const child = this.#child;
+      // A new generation first, so the old host's exit is not taken for a crash.
+      this.#generation += 1;
+      this.#child = null;
+      this.#log("host restart requested");
+      // A crash cleanup holding a group that survived SIGKILL keeps showing "stuck" until it is gone.
+      this.#set({ phase: this.#state.phase === "stuck" ? "stuck" : "restarting", pid: null, announce: null });
+      if (child?.pid !== undefined) {
+        await this.#endGroup(child.pid);
+      }
+      await this.#recovering;
+      if (this.#stopping) return;
+      this.#startFresh();
+    })().finally(() => {
+      this.#restartInProgress = null;
+    });
+    return this.#restartInProgress;
+  }
+
+  /**
+   * Ends an ended host's group before anything new starts. If it survives SIGKILL it stays owned
+   * (phase "stuck", stuckGroup) and is signalled again every stuckRetryMs until it is empty; stop()
+   * ends the wait. Resolves true once the group is empty.
+   */
+  async #endGroup(pgid: number): Promise<boolean> {
+    const kill = this.#opts.killGroup ?? killGroup;
+    if (await kill(pgid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs)) return true;
+    this.#log(`host group ${pgid} still has processes after SIGKILL; holding the next host until it is gone`);
+    const resume = this.#state.phase;
+    this.#set({ phase: "stuck", stuckGroup: pgid });
+    while (!this.#stopping) {
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          clearTimeout(timer);
+          this.#stuckWakers.delete(wake);
+          resolve();
+        };
+        const timer = setTimeout(wake, this.#opts.stuckRetryMs ?? 5_000);
+        this.#stuckWakers.add(wake);
+      });
+      if (this.#stopping) break;
+      if (await kill(pgid, 0, this.#opts.killWaitMs)) {
+        this.#log(`host group ${pgid} is gone`);
+        this.#set({ phase: resume, stuckGroup: null });
+        return true;
+      }
+    }
+    this.#log(`quitting with host group ${pgid} still alive`);
+    return false;
   }
 
   #recovering: Promise<void> = Promise.resolve();
@@ -296,7 +395,7 @@ export class HostSupervisor {
       this.#log("host exited cleanly before it was ready; not restarting");
       this.#set({ phase: "exited", lastExit: reason, pid: null });
       this.#recoveryActive = true;
-      this.#recovering = (pid === null ? Promise.resolve(true) : killGroup(pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs))
+      this.#recovering = (pid === null ? Promise.resolve(true) : this.#endGroup(pid))
         .then(() => undefined)
         .finally(() => {
           this.#recoveryActive = false;
@@ -313,7 +412,7 @@ export class HostSupervisor {
 
   async #recover(pid: number | null, generation: number): Promise<void> {
     // Agents the dead host started are still in its group; the host ending ends that work.
-    if (pid !== null) await killGroup(pid, this.#opts.stopGraceMs ?? 5_000, this.#opts.killWaitMs);
+    if (pid !== null) await this.#endGroup(pid);
     if (this.#stopping || generation !== this.#generation) return;
     const now = (this.#opts.now ?? Date.now)();
     const previousKey = this.#record.notifiedKey;
