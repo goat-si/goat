@@ -924,7 +924,8 @@ async fn url_elicitation_hands_the_link_over_without_logging_it() {
         })
         .collect();
     assert_eq!(auth.len(), 1);
-    assert!(auth[0].0.is_some());
+    // Session scope: the host keeps the link past the end of this turn.
+    assert_eq!(auth[0].0, None);
     assert_eq!(
         auth[0].1.as_deref(),
         Some("https://example.invalid/sign-in")

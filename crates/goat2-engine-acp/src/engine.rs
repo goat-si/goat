@@ -852,7 +852,23 @@ impl Shared {
                     emit(self, event);
                 }
                 let action = if url.is_some() { "accept" } else { "decline" };
-                self.auth_required(url, Some(message));
+                // Session scope (no turn): the host keeps such a sign-in and its link until the
+                // person resolves it or the engine stops, so a turn the agent ends right after the
+                // hand-off cannot drop the link before the person sees it (final review 2 finding
+                // 1; host test a_sign_in_outside_a_turn_lasts_until_the_engine_stops). Answering
+                // after the person's choice waits for engine-api step 3 (lane C).
+                emit(
+                    self,
+                    EngineEvent::AuthRequired {
+                        turn_id: None,
+                        url,
+                        message: if message.is_empty() {
+                            format!("Sign in to {} to continue.", self.flavor.driver())
+                        } else {
+                            message
+                        },
+                    },
+                );
                 respond(responder, json!({ "action": action }));
                 return;
             }

@@ -172,11 +172,11 @@ pub fn extract(kind: ArchiveKind, archive_path: &Path, destination: &Path) -> io
                     continue;
                 };
                 if entry.is_dir() {
-                    fs::create_dir_all(&target)?;
+                    create_dirs_within(destination, &target)?;
                     continue;
                 }
                 if let Some(parent) = target.parent() {
-                    fs::create_dir_all(parent)?;
+                    create_dirs_within(destination, parent)?;
                 }
                 if !inside(destination, &target)? {
                     return Err(io::Error::new(
@@ -210,6 +210,41 @@ pub fn extract(kind: ArchiveKind, archive_path: &Path, destination: &Path) -> io
     }
 }
 
+/// Create `target` and its missing parents under `destination`, refusing to pass through any
+/// existing component that is a symlink or not a directory. Nothing is created outside
+/// `destination`, even when an earlier archive entry planted a link (final review 2 finding 2;
+/// v1 extracts with `tar`/`unzip` into a fresh directory, AcpRegistrySupport.ts:1402-1416).
+fn create_dirs_within(destination: &Path, target: &Path) -> io::Result<()> {
+    let relative = target.strip_prefix(destination).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "archive entry escapes the destination",
+        )
+    })?;
+    let mut current = destination.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "archive entry escapes the destination",
+            ));
+        };
+        current.push(part);
+        match fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "archive entry escapes the destination",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&current)?,
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -241,7 +276,9 @@ pub(crate) mod tests {
             let options = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated)
                 .unix_permissions(*mode);
-            if mode & 0o170000 == 0o120000 {
+            if name.ends_with('/') {
+                writer.add_directory(*name, options).unwrap();
+            } else if mode & 0o170000 == 0o120000 {
                 writer
                     .add_symlink(*name, std::str::from_utf8(data).unwrap(), options)
                     .unwrap();
@@ -354,5 +391,32 @@ pub(crate) mod tests {
         fs::create_dir(&out).unwrap();
         assert!(extract(ArchiveKind::Zip, &zip, &out).is_err());
         assert!(!outside.join("file").exists());
+    }
+
+    /// Directory entries and the parents of file entries are never created through a planted link
+    /// (final review 2 finding 2).
+    #[test]
+    fn zip_directories_cannot_be_created_through_an_escaping_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let target = outside.to_str().unwrap().to_owned();
+        for entries in [
+            vec![
+                ("out", target.as_bytes(), 0o120777),
+                ("out/new/", &b""[..], 0o755),
+            ],
+            vec![
+                ("out", target.as_bytes(), 0o120777),
+                ("out/deep/file", &b"x"[..], 0o644),
+            ],
+        ] {
+            let zip = dir.path().join("agent.zip");
+            fs::write(&zip, zip_bytes(&entries)).unwrap();
+            let dest = tempfile::tempdir_in(dir.path()).unwrap();
+            assert!(extract(ArchiveKind::Zip, &zip, dest.path()).is_err());
+            assert!(!outside.join("new").exists());
+            assert!(!outside.join("deep").exists());
+        }
     }
 }
