@@ -772,6 +772,7 @@ export const make = Effect.gen(function* () {
           ],
           {
             detached: false,
+            forceKillAfter: "2 seconds",
             env: {
               ...process.env,
               TUNNEL_TOKEN: config.connectorToken,
@@ -884,7 +885,7 @@ export const make = Effect.gen(function* () {
       { pid, tunnelId: active.config.tunnelId, tunnelName: active.config.tunnelName },
     );
     // The supervisor starts the replacement with its usual crash-loop backoff.
-    return yield* active.child.kill().pipe(
+    return yield* active.child.kill({ forceKillAfter: "2 seconds" }).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     );
