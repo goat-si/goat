@@ -20,6 +20,7 @@ import {
   registerDesktopSchemePrivilegesSync,
 } from "./electron/ElectronProtocol.ts";
 import * as DesktopAppSettings from "./settings/DesktopAppSettings.ts";
+import { DesktopShellEnvironment } from "./shell/DesktopShellEnvironment.ts";
 import {
   configureApplicationMenu,
   type MainWindowContentsCommand,
@@ -127,14 +128,26 @@ const desktopLog = createWriteStream(join(logsDir, "desktop.log"), { flags: "a" 
 const hostLog = createWriteStream(join(logsDir, "host.log"), { flags: "a" });
 const log = (line: string) => desktopLog.write(`${new Date().toISOString()} ${line}\n`);
 
+// The host's environment: what the app inherited (launchd's minimal one when opened from Finder) plus
+// the person's login-shell PATH and friends (v1 DesktopShellEnvironment), so the host and the agent
+// CLIs it starts are found. The shell environment rewrites only its own names in this object; every
+// host spawn reads it, so a refresh reaches the next start.
+const hostEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  GOAT2_DATA_DIR: DATA_DIR,
+  GOAT2_HOST_PORT: String(HOST_PORT),
+  GOAT2_HOST_TOKEN: HOST_TOKEN,
+};
+const shellEnvironment = new DesktopShellEnvironment(process.env, {
+  platform: process.platform,
+  homeDirectory: homedir(),
+  cacheFile: join(app.getPath("userData"), "shell-environment-cache.json"),
+  log,
+});
+
 const supervisor = new HostSupervisor({
   command: hostBinary,
-  env: {
-    ...process.env,
-    GOAT2_DATA_DIR: DATA_DIR,
-    GOAT2_HOST_PORT: String(HOST_PORT),
-    GOAT2_HOST_TOKEN: HOST_TOKEN,
-  },
+  env: hostEnv,
   cwd: DATA_DIR,
   healthUrl: (announce) => `http://127.0.0.1:${announce.port ?? HOST_PORT}/health`,
   output: hostLog,
@@ -496,11 +509,21 @@ if (!app.requestSingleInstanceLock()) {
       zoomMain,
       runMainContentsCommand,
     });
-    supervisor.start();
     for (const url of pendingOpenUrls.splice(0)) pendingAppUrl = url;
     for (const value of process.argv) if (isAppUrl(value)) pendingAppUrl = value;
     handleOpenUrl = openAppLink;
     createWindow();
+    // The last login-shell answer starts the host at once; the probe refreshes it for later starts.
+    // Without one (first launch, new shell), the host waits for the probe: started from Finder it
+    // would otherwise not find codex & co.
+    const cached = shellEnvironment.installCached(hostEnv);
+    const refreshed = shellEnvironment
+      .refresh(hostEnv)
+      .then((answered) => log(`shell environment: ${answered ? "login shell answered" : "login shell did not answer; launchctl/inherited PATH"}`))
+      .catch((error: unknown) => log(`shell environment: ${String(error)}`));
+    log(`shell environment: ${cached ? "cached answer applied" : "no cached answer, waiting for the login shell"}`);
+    if (cached) supervisor.start();
+    else void refreshed.then(() => supervisor.start());
   });
 
   app.on("activate", () => {

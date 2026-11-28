@@ -1,0 +1,153 @@
+import assert from "node:assert/strict";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+import {
+  DesktopShellEnvironment,
+  installPosixEnvironment,
+  runCommandOutput,
+  type CommandRunner,
+} from "./DesktopShellEnvironment.ts";
+import { buildEnvironmentCaptureCommand, extractEnvironmentValues } from "./shellEnvironmentCapture.ts";
+
+const HOME = "/Users/me";
+const WELL_KNOWN = ":/Users/me/.local/bin:/Users/me/.bun/bin:/opt/homebrew/bin:/usr/local/bin";
+
+/** A login shell that answers with the given variables (marker output as the real capture prints it). */
+function answering(values: Record<string, string>, calls: string[] = []): CommandRunner {
+  return async (command) => {
+    calls.push(command);
+    if (command === "/bin/launchctl") return "";
+    let out = "";
+    for (const [name, value] of Object.entries(values)) out += `__GOAT_ENV_${name}_START__\n${value}\n__GOAT_ENV_${name}_END__\n`;
+    return out;
+  };
+}
+
+const options = (run: CommandRunner, cacheFile = join(mkdtempSync(join(tmpdir(), "goat2-shellenv-")), "cache.json")) => ({
+  platform: "darwin" as const,
+  homeDirectory: HOME,
+  cacheFile,
+  run,
+  userShell: "/bin/zsh",
+});
+
+describe("installPosixEnvironment (v1 rules)", () => {
+  it("puts the login shell PATH first, then the inherited one, without repeats", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" };
+    const answered = await installPosixEnvironment(env, options(answering({ PATH: "/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin" })));
+    assert.equal(answered, true);
+    assert.equal(env.PATH, "/opt/homebrew/bin:/Users/me/.local/bin:/usr/bin:/bin");
+  });
+
+  it("falls back to launchctl's PATH when no shell answers, and the answer does not count as the person's", async () => {
+    const calls: string[] = [];
+    const run: CommandRunner = async (command) => {
+      calls.push(command);
+      return command === "/bin/launchctl" ? "/launchd/bin:/usr/bin\n" : "";
+    };
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", SHELL: "/bin/zsh" };
+    assert.equal(await installPosixEnvironment(env, options(run)), false);
+    assert.equal(env.PATH, "/launchd/bin:/usr/bin:/bin");
+    assert.deepEqual(calls, ["/bin/zsh", "/bin/launchctl"], "the fallback shell is the same zsh, tried once");
+  });
+
+  it("keeps inherited values, prefers the shell's for preferred names, and hydrates locale together", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", SHELL: "/bin/zsh", SSH_AUTH_SOCK: "/inherited.sock", JAVA_HOME: "/inherited/java" };
+    await installPosixEnvironment(
+      env,
+      options(answering({ PATH: "/usr/bin", SSH_AUTH_SOCK: "/shell.sock", JAVA_HOME: "/shell/java", PNPM_HOME: "/shell/pnpm", __MISE_DIFF: "d", LANG: "ko_KR.UTF-8" })),
+    );
+    assert.equal(env.SSH_AUTH_SOCK, "/inherited.sock");
+    assert.equal(env.JAVA_HOME, "/inherited/java");
+    assert.equal(env.PNPM_HOME, "/shell/pnpm");
+    assert.equal(env.__MISE_DIFF, "d");
+    assert.equal(env.LANG, "ko_KR.UTF-8");
+  });
+
+  it("sets UTF-8 LC_CTYPE when neither launchd nor the shell gives a locale", async () => {
+    const env: NodeJS.ProcessEnv = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    await installPosixEnvironment(env, options(answering({ PATH: "/usr/bin" })));
+    assert.equal(env.LC_CTYPE, "en_US.UTF-8");
+  });
+});
+
+describe("DesktopShellEnvironment", () => {
+  it("fills the host env, caches a good answer, and a later launch starts from the cache", async () => {
+    const inherited = { PATH: "/usr/bin:/bin", SHELL: "/bin/zsh", HOME };
+    const opts = options(answering({ PATH: "/shell/bin:/usr/bin" }));
+    const target: NodeJS.ProcessEnv = { ...inherited, GOAT2_HOST_TOKEN: "t" };
+    const first = new DesktopShellEnvironment(inherited, opts);
+    assert.equal(first.installCached(target), false);
+    assert.equal(target.PATH, "/usr/bin:/bin" + WELL_KNOWN, "no cache: inherited PATH + well-known folders");
+    assert.equal(await first.refresh(target), true);
+    assert.equal(target.PATH, "/shell/bin:/usr/bin:/bin" + WELL_KNOWN);
+    assert.equal(target.GOAT2_HOST_TOKEN, "t", "non-shell names untouched");
+    assert.equal(existsSync(opts.cacheFile), true);
+
+    const next: NodeJS.ProcessEnv = { ...inherited };
+    const second = new DesktopShellEnvironment(inherited, { ...opts, run: answering({}) });
+    assert.equal(second.installCached(next), true);
+    assert.equal(next.PATH, "/shell/bin:/usr/bin:/bin" + WELL_KNOWN);
+  });
+
+  it("ignores a cache made for another shell, and does not cache an answer from no shell", async () => {
+    const opts = options(answering({ PATH: "/shell/bin" }));
+    await new DesktopShellEnvironment({ PATH: "/usr/bin", SHELL: "/bin/zsh" }, opts).refresh({});
+    const other = new DesktopShellEnvironment({ PATH: "/usr/bin", SHELL: "/bin/bash" }, opts);
+    assert.equal(other.installCached({}), false);
+
+    const silent = options(async () => "");
+    const before = existsSync(silent.cacheFile);
+    await new DesktopShellEnvironment({ PATH: "/usr/bin", SHELL: "/bin/zsh" }, silent).refresh({});
+    assert.equal(existsSync(silent.cacheFile), before);
+  });
+
+  it("a refresh drops values the shell no longer sets", async () => {
+    const inherited = { PATH: "/usr/bin", SHELL: "/bin/zsh" };
+    const target: NodeJS.ProcessEnv = { ...inherited };
+    await new DesktopShellEnvironment(inherited, options(answering({ PATH: "/usr/bin", PNPM_HOME: "/p" }))).refresh(target);
+    assert.equal(target.PNPM_HOME, "/p");
+    await new DesktopShellEnvironment(inherited, options(answering({ PATH: "/usr/bin" }))).refresh(target);
+    assert.equal(target.PNPM_HOME, undefined);
+  });
+});
+
+describe("login shell probe, for real", () => {
+  for (const shell of ["/bin/zsh", "/bin/bash"]) {
+    it(`${shell} -ilc answers with its PATH through the v1 capture command`, async () => {
+      const out = await runCommandOutput(shell, ["-ilc", buildEnvironmentCaptureCommand(shell, ["PATH", "HOME"])], {
+        env: { PATH: "/usr/bin:/bin", HOME: process.env.HOME ?? "/" },
+        timeoutMs: 15_000,
+      });
+      const values = extractEnvironmentValues(out, ["PATH", "HOME"]);
+      assert.ok(values.PATH && values.PATH.includes("/usr/bin"), `no PATH from ${shell}`);
+      assert.equal(values.HOME, process.env.HOME);
+    });
+  }
+
+  it("a login shell that hangs is killed with its children at the deadline", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "goat2-hangshell-"));
+    const shell = join(dir, "hang-shell");
+    const pidFile = join(dir, "child.pid");
+    writeFileSync(shell, `#!/bin/sh\nsleep 30 &\necho $! > ${pidFile}\nwait\n`);
+    chmodSync(shell, 0o755);
+    const started = Date.now();
+    const out = await runCommandOutput(shell, ["-ilc", "true"], { env: { PATH: "/usr/bin:/bin" }, timeoutMs: 500 });
+    assert.equal(out, "");
+    assert.ok(Date.now() - started < 3_000);
+    const child = Number(readFileSync(pidFile, "utf8"));
+    // A killed process can linger as a zombie until launchd reaps it; poll instead of one fixed wait.
+    const gone = () => {
+      try {
+        process.kill(child, 0);
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    for (let i = 0; i < 40 && !gone(); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.ok(gone(), "the shell's child outlived the probe");
+  });
+});
