@@ -93,10 +93,21 @@ One model picker (2026-11-28): the runtime/model chip lives only in the composer
 platform. The bar under the chat header is gone, and headers show the bot's job and machine, not
 the model. Versions stay in Overview → Runtime.
 
-Mobile decisions on both platforms: the decision card leaves the transcript and docks above the
-composer (thumb zone). Primary action is the strongest control. iOS stacks it full width with the
-two others below; Android puts pill buttons right-aligned in Text / Outlined / Filled order.
-The overview panel never shows inline on mobile.
+Mobile look (2026-11-28): GOAT Liquid Glass, as on goat-site (`src/styles/glass.css`) and the
+app's liquid-glass preset. Monochrome; a dot field (`#F3F3F4`, 1px dots every 18px) sits behind
+everything; **glass only on floating chrome**: top nav pills, bottom tab / navigation bar,
+composer, filter chips. Recipe: white at 62%, `backdrop-filter: blur(12px) saturate(1.14)`,
+edge `inset 0 0 0 1px` ink at 7%, lift `0 10px 32px` ink at 8%. Content (rows, bubbles, evidence,
+decision card) stays on opaque white cards. Muse: the home starts with a bot strip where the
+avatar ring carries state (red = needs you, dashed ink = working, solid ink = idle / GOAT).
+
+Mobile composer: text, provider chip (`gpt-6.1-sol ▾`, the same SVG chip as desktop) and send.
+Nothing else.
+
+Mobile decisions: the decision card is the last item in the transcript, above the floating
+composer (thumb zone). Two pill buttons only: Merge (filled ink) and Fix first (tint); "Not
+now" is the back gesture. iOS splits them 50/50; Android right-aligns them (Fix first, Merge).
+The overview panel never shows inline on mobile (iOS: (i) button, Android: overflow menu).
 
 One mobile build: if only one mobile app ships, it uses this shared layout and swaps only the
 shell items in the table above at runtime (bars, back, button order). No separate mobile designs.
