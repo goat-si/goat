@@ -122,6 +122,10 @@ export class FakeHost implements Transport {
 
   // ------------------------------------------------------------ commands
   private command(frame: Extract<ClientFrame, { reqId: string; clientRequestId: string }>) {
+    if (frame.type === "provider_auth_respond") {
+      this.emit({ ...this.unavailable("not_available", "unavailable", "provider_auth_respond is not available in the demo host."), reqId: frame.reqId } as CommandResult);
+      return;
+    }
     const { reqId, clientRequestId, ...args } = frame;
     const key = JSON.stringify(args);
     const seen = this.results.get(clientRequestId);
@@ -289,6 +293,7 @@ export class FakeHost implements Transport {
       case "refresh_providers":
       case "provider_install_start":
       case "provider_install_cancel":
+      case "provider_auth_respond":
       case "provider_auth_start":
       case "provider_auth_cancel":
       case "provider_auth_logout":
