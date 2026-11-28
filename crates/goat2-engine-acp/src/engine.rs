@@ -1568,6 +1568,10 @@ impl EngineSession for AcpSession {
                 turn.interrupted = true;
                 let rx = turn.settled_tx.subscribe();
                 shared.cancel_pending(&mut state, &mut out);
+                // v1 cancelPendingRuntimeRequests: MCP calls the agent made over ACP stop too.
+                if let Some(bridge) = shared.mcp_over_acp.get() {
+                    bridge.stop_calls();
+                }
                 rx
             };
             for event in out {

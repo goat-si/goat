@@ -42,6 +42,11 @@ impl AcpFlavor for Mock {
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
 fn fake_mcp_endpoint() -> (String, Seen) {
+    fake_mcp_endpoint_with(None)
+}
+
+/// The fake endpoint; with `hold`, a tools/call is never answered and the sender is told it came.
+fn fake_mcp_endpoint_with(hold: Option<std::sync::mpsc::Sender<()>>) -> (String, Seen) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/mcp", listener.local_addr().unwrap());
     let seen: Seen = Arc::default();
@@ -82,6 +87,14 @@ fn fake_mcp_endpoint() -> (String, Seen) {
             let message: Value = serde_json::from_slice(&body).unwrap();
             let method = message["method"].as_str().unwrap_or_default().to_owned();
             log.lock().unwrap().push((method.clone(), auth, session));
+            if method == "tools/call"
+                && let Some(hold) = &hold
+            {
+                let _ = hold.send(());
+                // Keep the connection open without answering, as a long-running tool would.
+                std::mem::forget(stream);
+                continue;
+            }
             let reply = match method.as_str() {
                 "initialize" => {
                     json!({"jsonrpc": "2.0", "id": message["id"], "result": {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "goat", "version": "0"}}})
@@ -187,4 +200,87 @@ async fn agent_reaches_goat_mcp_over_acp() {
     // The session id from initialize is sent on later requests.
     assert_eq!(seen[1].2, "s-1");
     assert_eq!(seen[2].2, "s-1");
+}
+
+/// v1 stopCalls (mcpOverAcpBridge.ts:158-165, adapter.ts:4459-4466): interrupting the turn fails a
+/// tool call still waiting on GOAT's endpoint instead of leaving it running (review 1 finding 2).
+#[tokio::test]
+async fn interrupt_stops_mcp_calls_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = dir.path().join("call.json");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (url, _seen) = fake_mcp_endpoint_with(Some(held_tx));
+    let factory = AcpEngineFactory::new(Arc::new(Mock(vec![
+        ("GOAT_ACP_MCP_ACP".into(), "1".into()),
+        ("GOAT_ACP_EMIT_MCP_OVER_ACP".into(), "1".into()),
+        (
+            "GOAT_ACP_MCP_CALL_RESULT_PATH".into(),
+            result.to_string_lossy().into_owned(),
+        ),
+    ])))
+    .without_mcp_bridge();
+    let selection = ModelSelection {
+        instance_id: ProviderInstanceId::new("mock"),
+        model: "default".into(),
+        options: None,
+    };
+    let mut handle = factory
+        .start(SessionSpec {
+            thread_id: "t".into(),
+            engine: EngineConfig {
+                provider_instance_id: ProviderInstanceId::new("mock"),
+                model_selection: selection.clone(),
+                runtime_mode: RuntimeMode::FullAccess,
+                cwd: dir.path().to_string_lossy().into_owned(),
+            },
+            resume: None,
+            mcp: McpEndpoint {
+                url,
+                bearer_token: "secret".into(),
+            },
+            host_generation: 1,
+            process_generation: 1,
+            instructions: None,
+            launch: None,
+        })
+        .await
+        .expect("start");
+    let turn_id = match handle
+        .session
+        .start_turn(
+            vec![EngineInput {
+                input_id: InputId::new("i"),
+                text: "go".into(),
+                attachments: vec![],
+            }],
+            &TurnSettings {
+                model_selection: selection,
+                runtime_mode: RuntimeMode::FullAccess,
+            },
+        )
+        .await
+    {
+        goat2_engine_api::TurnStartResult::Accepted { turn_id } => turn_id,
+        other => panic!("{other:?}"),
+    };
+    // The tool call reached the endpoint and is waiting there.
+    tokio::task::spawn_blocking(move || held_rx.recv_timeout(Duration::from_secs(10)).unwrap())
+        .await
+        .unwrap();
+    handle.session.interrupt(&turn_id).await.unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let EngineEvent::TurnFinished { outcome, .. } =
+                handle.events.recv().await.expect("event")
+            {
+                break outcome;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    handle.session.shutdown().await;
+    assert_eq!(outcome, TurnOutcome::Interrupted);
+    let answer = std::fs::read_to_string(&result).expect("the agent got an answer to its call");
+    assert!(answer.contains("The MCP call was stopped."), "{answer}");
 }

@@ -11,6 +11,8 @@
 //! - `GOAT_ACP_MCP_HTTP=1`: advertise `mcpCapabilities.http`.
 //! - `GOAT_ACP_MCP_ACP=1` (GOAT 2): advertise `mcpCapabilities.acp`; with `GOAT_ACP_EMIT_MCP_OVER_ACP=1` a prompt runs
 //!   `mcp/connect`, `initialize`, `tools/list` and `mcp/disconnect` over ACP and prints `mcp tools: <names>`.
+//!   `GOAT_ACP_MCP_CALL_RESULT_PATH=<file>` (GOAT 2) instead makes a `tools/call`, writes what came back to the
+//!   file, then waits for `session/cancel`.
 //! - `GOAT_ACP_AUTH_METHOD_ID=<id>`: advertise an agent auth method; `session/new` answers -32000
 //!   until `authenticate` with it.
 //! - `GOAT_ACP_SYSTEM_PROMPT=1` (GOAT 2): advertise `sessionCapabilities.systemPrompt`.
@@ -332,6 +334,20 @@ fn prompt(agent: Arc<Agent>, id: Value, params: Value) {
         ] {
             agent.update(&session, notice);
         }
+    }
+    if let (true, Some(path)) = (
+        flag("GOAT_ACP_EMIT_MCP_OVER_ACP"),
+        env("GOAT_ACP_MCP_CALL_RESULT_PATH"),
+    ) {
+        let connected = agent.request("mcp/connect", json!({"serverId": "goat"}));
+        let connection = connected["connectionId"].clone();
+        let _ = agent.request("mcp/message", json!({"connectionId": connection, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "mock", "version": "0"}}}));
+        let called = agent.request("mcp/message", json!({"connectionId": connection, "method": "tools/call", "params": {"name": "goat_call", "arguments": {}}}));
+        let _ = std::fs::write(path, called.to_string());
+        let _ = cancel_rx.recv();
+        agent.running.lock().unwrap().remove(&session);
+        agent.respond(&id, json!({"stopReason": "cancelled"}));
+        return;
     }
     if flag("GOAT_ACP_EMIT_MCP_OVER_ACP") {
         let connected = agent.request("mcp/connect", json!({"serverId": "goat"}));

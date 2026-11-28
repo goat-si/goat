@@ -6,7 +6,6 @@
 //! notifications; `mcp/disconnect` {connectionId}). GOAT 2 keeps v1's wire even though the Rust ACP
 //! schema has since moved to a connection-less `mcp/message` (owner rule: lift v1 once). Each connection
 //! is one MCP session on the HTTP endpoint, relayed by `goat2_acp_mcp_bridge::HttpRelay`.
-//! Gap: v1 `stopCalls` (abort in-flight calls on interrupt) is not ported yet.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -35,6 +34,8 @@ pub struct McpOverAcp {
     authorization: String,
     connections: Mutex<HashMap<String, Arc<Connection>>>,
     next_connection: AtomicU64,
+    /// Bumped by [McpOverAcp::stop_calls]; every call in flight races it (v1 `callsStopped`).
+    stop: tokio::sync::watch::Sender<u64>,
 }
 
 fn protocol_version(payload: &Value) -> bool {
@@ -61,7 +62,14 @@ impl McpOverAcp {
             authorization: authorization.into(),
             connections: Mutex::new(HashMap::new()),
             next_connection: AtomicU64::new(0),
+            stop: tokio::sync::watch::channel(0).0,
         }
+    }
+
+    /// v1 `stopCalls` (mcpOverAcpBridge.ts:273-276, called when a turn is interrupted,
+    /// adapter.ts:4459-4466): every call in flight fails now; later calls run normally.
+    pub fn stop_calls(&self) {
+        self.stop.send_modify(|n| *n += 1);
     }
 
     fn connection(&self, params: &Value) -> Result<Arc<Connection>, String> {
@@ -77,7 +85,21 @@ impl McpOverAcp {
             .ok_or_else(|| format!("Unknown MCP-over-ACP connection \"{id}\"."))
     }
 
+    /// v1 `send` (mcpOverAcpBridge.ts:158-165): the call races the stop signal.
     async fn send(&self, connection: &Connection, message: Value) -> Result<Vec<Value>, String> {
+        let mut stopped = self.stop.subscribe();
+        stopped.borrow_and_update();
+        tokio::select! {
+            result = self.send_now(connection, message) => result,
+            _ = stopped.changed() => Err("The MCP call was stopped.".into()),
+        }
+    }
+
+    async fn send_now(
+        &self,
+        connection: &Connection,
+        message: Value,
+    ) -> Result<Vec<Value>, String> {
         let body = message.to_string();
         if body.len() > MAX_MESSAGE_BYTES {
             return Err("MCP-over-ACP message exceeds 8 MiB.".into());
