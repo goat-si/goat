@@ -177,6 +177,12 @@ mic, send. The Muse card hides inside bot chat, thread and panes. Opening a seco
 "Open beside" turns the thread into panes (M1, X1 to X5). Icons are lucide 0.564 (GOAT web) for
 SF Symbol equivalents.
 
+Mobile memory (2026-11-28, boards C1 to C3): Library tab has Files | Memory. Memory is the same
+file viewer as desktop: open-folder path + Change, folders pushed one level at a time, MEMORY.md /
+USER.md / TAXONOMY.md; a file shows rendered Markdown with "4 minutes ago" and a black Edit; edit is
+Cancel / Save with a "changed on another machine · Load theirs" notice. No Notes feature, no bot
+note list, no Ask to change / forget buttons (bot notes are memory/bots/<botId>/MEMORY.md).
+
 Mobile composer: text, one round provider button (the provider's SVG mark only, no model name,
 no chevron; tap opens the runtime picker as a sheet) and send. Nothing else.
 
