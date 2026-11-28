@@ -2,6 +2,20 @@ use goat2_parity::{scenario::Scenario, trace::ObservedTrace};
 use schemars::schema_for;
 use std::{fs, path::PathBuf};
 
+fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
+}
+
 #[test]
 fn schemas_match() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -16,7 +30,12 @@ fn schemas_match() {
         ),
     ] {
         let path = root.join("schema").join(format!("{name}.schema.json"));
-        let expected = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
+        // Sorted: serde_json key order depends on workspace features (agent-client-protocol enables
+        // preserve_order); the committed schema must not.
+        let expected = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&sorted(schema)).unwrap()
+        );
         if std::env::var_os("GOAT2_PARITY_BLESS").as_deref() == Some(std::ffi::OsStr::new("1")) {
             fs::write(&path, &expected).unwrap();
         }
